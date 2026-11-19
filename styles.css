@@ -160,7 +160,7 @@ body {
   width: 20px;
   height: 20px;
   margin: 0;
-  border: 1.5px solid var(--color-done);
+  border: 1.5px solid var(--color-muted);
   border-radius: var(--radius-checkbox);
   background: var(--color-surface) center / 14px 14px no-repeat;
   cursor: pointer;
@@ -262,6 +262,10 @@ body {
 @media (max-width: 639px) {
   body {
     padding: 40px 16px;
+  }
+
+  .app {
+    max-width: none;
   }
 
   .todo-delete {

@@ -6,6 +6,7 @@ function isTodo(value) {
     typeof value === 'object' &&
     typeof value.id === 'string' &&
     typeof value.text === 'string' &&
+    value.text.trim() !== '' &&
     typeof value.completed === 'boolean' &&
     typeof value.createdAt === 'number'
   );
@@ -23,5 +24,9 @@ export function load() {
 }
 
 export function save(todos) {
-  globalThis.localStorage.setItem(KEY, JSON.stringify(todos));
+  try {
+    globalThis.localStorage.setItem(KEY, JSON.stringify(todos));
+  } catch {
+    // Storage full or unavailable: keep working in memory for this session.
+  }
 }

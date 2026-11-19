@@ -38,7 +38,7 @@ test('load returns [] when the stored value is not an array', () => {
 
 test('load drops entries that are not valid todos', () => {
   const valid = { id: 'a', text: 'Keep', completed: false, createdAt: 1 };
-  localStorage.setItem(KEY, JSON.stringify([null, 1, 'x', { id: 'b' }, valid]));
+  localStorage.setItem(KEY, JSON.stringify([null, 1, 'x', { id: 'b' }, { ...valid, id: 'c', text: '  ' }, valid]));
   assert.deepEqual(load(), [valid]);
 });
 
@@ -64,4 +64,13 @@ test('save then load round-trips the todos', () => {
   save(todos);
   assert.equal(localStorage.getItem(KEY), JSON.stringify(todos));
   assert.deepEqual(load(), todos);
+});
+
+test('save does not throw when localStorage throws', () => {
+  globalThis.localStorage = {
+    setItem() {
+      throw new Error('QuotaExceededError');
+    },
+  };
+  assert.doesNotThrow(() => save([{ id: 'a', text: 'First', completed: false, createdAt: 1 }]));
 });
