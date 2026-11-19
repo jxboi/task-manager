@@ -11,13 +11,26 @@
   <body>
     <main class="app">
       <h1 class="title">Tasks</h1>
-      <p class="summary" id="summary" aria-live="polite"></p>
+      <div class="summary-row">
+        <p class="summary" id="summary" aria-live="polite"></p>
+        <button class="clear-filters" id="clear-filters" type="button" aria-label="Clear filters" hidden>
+          <span class="clear-long">Clear filters</span><span class="clear-short">Clear</span>
+        </button>
+      </div>
 
       <form class="add-form" id="add-form">
         <label class="visually-hidden" for="new-todo">New task</label>
-        <input class="add-input" id="new-todo" type="text" placeholder="Add a task…" autocomplete="off">
+        <input class="add-input" id="new-todo" type="text" placeholder="Add a task…" autocomplete="off" aria-describedby="add-hint">
         <button class="add-button" id="add-button" type="submit" disabled>Add</button>
       </form>
+      <p class="hint" id="add-hint">
+        <span id="hint-default">Add tags with <code>#</code>, like <code>Pay rent #home</code></span>
+        <span id="hint-auto" hidden></span>
+      </p>
+
+      <div class="filter-wrap" id="filter-wrap" hidden>
+        <div class="filter-bar" id="filter-bar" role="group" aria-label="Filter by tag"></div>
+      </div>
 
       <ul class="todo-list" id="todo-list" hidden></ul>
 
@@ -38,6 +51,12 @@
     <template id="trash-icon">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
         <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/>
+      </svg>
+    </template>
+
+    <template id="x-icon">
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true" focusable="false">
+        <path d="M6 6l12 12M18 6L6 18"/>
       </svg>
     </template>
   </body>

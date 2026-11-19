@@ -39,7 +39,7 @@ test('load returns [] when the stored value is not an array', () => {
 test('load drops entries that are not valid todos', () => {
   const valid = { id: 'a', text: 'Keep', completed: false, createdAt: 1 };
   localStorage.setItem(KEY, JSON.stringify([null, 1, 'x', { id: 'b' }, { ...valid, id: 'c', text: '  ' }, valid]));
-  assert.deepEqual(load(), [valid]);
+  assert.deepEqual(load(), [{ ...valid, tags: [] }]);
 });
 
 test('load returns [] when localStorage is unavailable', () => {
@@ -56,10 +56,44 @@ test('load returns [] when localStorage throws', () => {
   assert.deepEqual(load(), []);
 });
 
+test('todos saved before tags existed load unchanged, with no tags', () => {
+  // The exact shape the app stored before tags.
+  const legacy = [
+    { id: 'a', text: 'fix #42 and C# build #work', completed: false, createdAt: 1700000000000 },
+    { id: 'b', text: 'Done thing', completed: true, createdAt: 1700000000001 },
+  ];
+  localStorage.setItem(KEY, JSON.stringify(legacy));
+  assert.deepEqual(
+    load(),
+    legacy.map((todo) => ({ ...todo, tags: [] })),
+  );
+});
+
+test('load treats non-array tags as no tags', () => {
+  const base = { id: 'a', text: 'Keep', completed: false, createdAt: 1 };
+  for (const tags of [null, 'work', 42, { 0: 'work' }, true]) {
+    localStorage.setItem(KEY, JSON.stringify([{ ...base, tags }]));
+    assert.deepEqual(load(), [{ ...base, tags: [] }], JSON.stringify(tags));
+  }
+});
+
+test('load normalizes tags: junk dropped, case folded, duplicates removed, first 10 kept', () => {
+  const base = { id: 'a', text: 'Keep', completed: false, createdAt: 1 };
+  const stored = [
+    null, 7, {}, '', '   ', 'x'.repeat(25),
+    'Work', '#work', ' WORK ', 'due today',
+    ...Array.from({ length: 12 }, (_, i) => `t${i}`),
+  ];
+  localStorage.setItem(KEY, JSON.stringify([{ ...base, tags: stored }]));
+  assert.deepEqual(load(), [
+    { ...base, tags: ['work', 'due-today', 't0', 't1', 't2', 't3', 't4', 't5', 't6', 't7'] },
+  ]);
+});
+
 test('save then load round-trips the todos', () => {
   const todos = [
-    { id: 'a', text: 'First', completed: false, createdAt: 1 },
-    { id: 'b', text: '<img src=x onerror=alert(1)>', completed: true, createdAt: 2 },
+    { id: 'a', text: 'First', completed: false, createdAt: 1, tags: ['work', 'due-today'] },
+    { id: 'b', text: '<img src=x onerror=alert(1)>', completed: true, createdAt: 2, tags: [] },
   ];
   save(todos);
   assert.equal(localStorage.getItem(KEY), JSON.stringify(todos));
