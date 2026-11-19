@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Tasks</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="styles.css">
+    <script type="module" src="src/app.js"></script>
+  </head>
+  <body>
+    <main class="app">
+      <h1 class="title">Tasks</h1>
+      <p class="summary" id="summary" aria-live="polite"></p>
+
+      <form class="add-form" id="add-form">
+        <label class="visually-hidden" for="new-todo">New task</label>
+        <input class="add-input" id="new-todo" type="text" placeholder="Add a task…" autocomplete="off">
+        <button class="add-button" id="add-button" type="submit" disabled>Add</button>
+      </form>
+
+      <ul class="todo-list" id="todo-list" hidden></ul>
+
+      <div class="empty-state" id="empty-state" hidden>
+        <div class="empty-icon" aria-hidden="true">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 11l3 3 8-8"/>
+            <path d="M20 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+          </svg>
+        </div>
+        <h2 class="empty-title">No tasks yet</h2>
+        <p class="empty-body">Add your first task above to get started.</p>
+      </div>
+
+      <p class="footer" id="footer" hidden></p>
+    </main>
+
+    <template id="trash-icon">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+        <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/>
+      </svg>
+    </template>
+  </body>
+</html>

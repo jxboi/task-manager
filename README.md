@@ -1,3 +1,36 @@
 # task-manager
 
-A small todo list app that keeps your tasks in the browser.
+A small todo list app that keeps your tasks in the browser. Add a task, tick it off, delete it.
+Tasks are saved to `localStorage`, so they survive a page reload.
+
+Plain HTML, CSS and JavaScript (ES modules). No framework, no build step, no dependencies.
+
+## Run
+
+The app uses ES modules, which browsers won't load from a `file://` URL, so serve the folder over HTTP:
+
+```sh
+python3 -m http.server 8000
+# or: npx serve .
+```
+
+Then open http://localhost:8000 (if you used `npx serve`, open the URL it prints).
+
+## Test
+
+Needs Node.js 20 or newer. The tests use Node's built-in test runner, so there is nothing to install:
+
+```sh
+npm test
+```
+
+## Layout
+
+```
+index.html          markup
+styles.css          styles
+src/todos.js        pure logic: addTodo, toggleTodo, removeTodo
+src/storage.js      load()/save() against localStorage key "task-manager.todos.v1"
+src/app.js          DOM wiring and rendering
+test/               node:test unit tests
+```
