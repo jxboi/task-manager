@@ -61,9 +61,33 @@ body {
   font-weight: 600;
 }
 
-.summary {
+.summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 8px;
   margin: 0 0 24px;
+}
+
+.summary {
+  margin: 0;
   color: var(--color-muted);
+}
+
+.clear-filters {
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--color-accent-hover);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.clear-short {
+  display: none;
 }
 
 /* Add form */
@@ -71,7 +95,6 @@ body {
 .add-form {
   display: flex;
   gap: 8px;
-  margin-bottom: 24px;
 }
 
 .add-input {
@@ -115,6 +138,112 @@ body {
   cursor: not-allowed;
 }
 
+.hint {
+  margin: 6px 2px 20px;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.hint code {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: #f4f4f5;
+  color: #3f3f46;
+  font: inherit;
+}
+
+/* Tag palette: tags.js hashes each tag into one of these slots (PALETTE_SIZE).
+   Every pair passes AA, and so does white on --tag-fg (selected filter chip). */
+
+[data-color="0"] { --tag-bg: #fee2e2; --tag-fg: #991b1b; }
+[data-color="1"] { --tag-bg: #ffedd5; --tag-fg: #9a3412; }
+[data-color="2"] { --tag-bg: #fef3c7; --tag-fg: #92400e; }
+[data-color="3"] { --tag-bg: #dcfce7; --tag-fg: #166534; }
+[data-color="4"] { --tag-bg: #ccfbf1; --tag-fg: #115e59; }
+[data-color="5"] { --tag-bg: #e0f2fe; --tag-fg: #075985; }
+[data-color="6"] { --tag-bg: #ede9fe; --tag-fg: #5b21b6; }
+[data-color="7"] { --tag-bg: #fce7f3; --tag-fg: #9d174d; }
+
+/* Filter bar */
+
+.filter-wrap {
+  position: relative;
+  margin-bottom: 12px;
+}
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.filter-chip:hover {
+  border-color: #d4d4d8;
+}
+
+.filter-count {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+/* Unselected tag: a dot in the tag color (decorative). */
+.filter-chip[data-color]::before {
+  content: "";
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--tag-fg);
+}
+
+/* Selected: solid fill plus a checkmark, so the state never relies on color alone. */
+.filter-chip[aria-pressed="true"] {
+  border-color: var(--tag-fg);
+  background: var(--tag-fg);
+  color: #fff;
+  font-weight: 600;
+}
+
+.filter-all[aria-pressed="true"] {
+  border-color: #3f3f46;
+  background: #3f3f46;
+}
+
+.filter-chip[aria-pressed="true"] .filter-count {
+  color: #fff;
+  font-weight: 400;
+}
+
+.filter-chip[aria-pressed="true"]::before {
+  content: "";
+  flex: none;
+  width: 5px;
+  height: 9px;
+  margin: 0 1px 0 2px;
+  border: solid currentColor;
+  border-width: 0 2px 2px 0;
+  border-radius: 0;
+  background: none;
+  transform: translateY(-1px) rotate(45deg);
+}
+
 /* List */
 
 .todo-list {
@@ -128,10 +257,10 @@ body {
 
 .todo {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
   min-height: 52px;
-  padding: 8px 12px 8px 16px;
+  padding: 14px 12px 14px 16px;
 }
 
 .todo + .todo {
@@ -172,9 +301,13 @@ body {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12l5 5 9-10'/%3E%3C/svg%3E");
 }
 
-.todo-text {
+.todo-body {
   flex: 1;
   min-width: 0;
+}
+
+.todo-text {
+  display: block;
   overflow-wrap: anywhere;
   cursor: pointer;
 }
@@ -190,6 +323,7 @@ body {
   place-items: center;
   width: 32px;
   height: 32px;
+  margin: -6px 0;
   padding: 0;
   border: 0;
   border-radius: var(--radius-icon-button);
@@ -208,6 +342,118 @@ body {
 .todo-delete:focus-visible {
   background: #fef2f2;
   color: var(--color-danger);
+}
+
+/* Tags on a todo */
+
+.todo-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--tag-bg);
+  color: var(--tag-fg);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.todo.is-done .tag {
+  opacity: 0.6;
+}
+
+/* Tag matches an active filter: bold plus a ring in its own color. */
+.tag.is-match {
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px var(--tag-fg);
+}
+
+/* A long tag shrinks with an ellipsis so the chip and its × stay inside the row. */
+.tag-label {
+  min-width: 0;
+  height: 100%;
+  padding: 0 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.tag-remove {
+  position: relative;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  margin: 0 2px 0 -4px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  opacity: 0.75;
+  cursor: pointer;
+}
+
+/* 24x24 hit area around the 16px button. With the -4px margin it stops where the label's
+   text ends, so clicking the name never removes the tag. */
+.tag-remove::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+}
+
+.tag-remove:hover {
+  opacity: 1;
+}
+
+.tag-add {
+  height: 22px;
+  padding: 0 8px;
+  border: 1px dashed #d4d4d8;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-muted);
+  font: inherit;
+  font-size: 12px;
+  line-height: 20px;
+  cursor: pointer;
+}
+
+.tag-add:hover {
+  border-color: var(--color-muted);
+  color: var(--color-text);
+}
+
+.tag-field {
+  width: 120px;
+  height: 22px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  outline: 2px solid var(--color-accent);
+  outline-offset: 0;
+}
+
+.tag-field[aria-invalid="true"] {
+  outline-color: var(--color-danger);
 }
 
 .footer {
@@ -251,6 +497,25 @@ body {
   color: var(--color-muted);
 }
 
+/* Mouse on a wide screen: tag × and "+ tag" appear on row hover or focus. Hidden this way
+   (not display: none) so they stay focusable and focus can be moved onto them. */
+
+@media (hover: hover) and (min-width: 640px) {
+  .todo:not(:hover, :focus-within) :is(.tag-remove, .tag-add) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .todo:not(:hover, :focus-within) .todo-tags.is-empty {
+    margin-top: 0;
+  }
+}
+
 /* Touch devices and small screens: delete is always visible */
 
 @media (hover: none) {
@@ -270,5 +535,39 @@ body {
 
   .todo-delete {
     opacity: 1;
+  }
+
+  .clear-long {
+    display: none;
+  }
+
+  .clear-short {
+    display: inline;
+  }
+
+  /* Filter chips scroll sideways; the right edge fades out. The 3px inset keeps focus
+     rings from being clipped by the scroller; the right padding lets the last chip
+     scroll clear of the fade. */
+  .filter-bar {
+    flex-wrap: nowrap;
+    margin: -3px;
+    padding: 3px 36px 3px 3px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .filter-bar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .filter-wrap::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 36px;
+    background: linear-gradient(to right, rgb(247 247 248 / 0), var(--color-bg));
+    pointer-events: none;
   }
 }

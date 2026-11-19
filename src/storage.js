@@ -1,3 +1,5 @@
+import { normalizeTags } from './tags.js';
+
 const KEY = 'task-manager.todos.v1';
 
 function isTodo(value) {
@@ -12,12 +14,17 @@ function isTodo(value) {
   );
 }
 
+// Todos saved before tags existed have no `tags`; their text is left as is, never re-parsed.
+function withTags(todo) {
+  return { ...todo, tags: Array.isArray(todo.tags) ? normalizeTags(todo.tags) : [] };
+}
+
 export function load() {
   try {
     const raw = globalThis.localStorage.getItem(KEY);
     if (raw === null) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter(isTodo) : [];
+    return Array.isArray(parsed) ? parsed.filter(isTodo).map(withTags) : [];
   } catch {
     return [];
   }
