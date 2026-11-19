@@ -27,6 +27,7 @@ let editingId = null; // todo whose "+ tag" field is open
 
 let rendering = false;
 let renderPending = false;
+let pendingFocus; // focus keys for the deferred render
 let pressing = false;
 
 render();
@@ -213,8 +214,10 @@ function render(focusKeys) {
 
   rendering = true;
   renderPending = false;
+  pendingFocus = undefined;
 
   summary.textContent = summaryText(visible);
+  syncAddButton();
   clearFilters.hidden = !filtering;
   hintDefault.hidden = filtering;
   hintAuto.hidden = !filtering;
@@ -249,21 +252,27 @@ function render(focusKeys) {
 // Pressing a control blurs an open "+ tag" field before that control gets its click.
 // Rendering in between would replace the pressed control and swallow the click, so a
 // render requested during a press waits until the button is released (click comes first).
-document.addEventListener('mousedown', () => {
-  pressing = true;
+// A press can end without mouseup (a drag, or the window losing focus), so those release it too.
+document.addEventListener('mousedown', (event) => {
+  if (event.button === 0) pressing = true;
 }, true);
-document.addEventListener('mouseup', () => {
+document.addEventListener('mouseup', release, true);
+document.addEventListener('dragend', release, true);
+window.addEventListener('blur', release);
+
+function release() {
   pressing = false;
   setTimeout(flushRender);
-}, true);
+}
 
-function renderSoon() {
+function renderSoon(focusKeys) {
   renderPending = true;
+  pendingFocus = focusKeys;
   if (!pressing) setTimeout(flushRender);
 }
 
 function flushRender() {
-  if (renderPending) render();
+  if (renderPending) render(pendingFocus);
 }
 
 // Neighbouring rows in the current view, for when the acted-on row leaves it.
@@ -276,23 +285,32 @@ function rowFallbackKeys(id) {
 }
 
 // Focus goes back to "+ tag", or to the last chip when the todo is at the cap.
-function closeTagField(id) {
+function tagControlKeys(id) {
   const lastTag = state.find((todo) => todo.id === id).tags.at(-1);
-  editingId = null;
-  render([key('add-tag', id), lastTag && key('tag', id, lastTag), key('checkbox', id)]);
+  return [key('add-tag', id), lastTag && key('tag', id, lastTag), key('checkbox', id)];
 }
 
+function closeTagField(id) {
+  editingId = null;
+  render(tagControlKeys(id));
+}
+
+// Clears the rejected text after the flash, unless the user has typed something new since.
 function rejectTag(field) {
+  const rejected = field.value;
   field.setAttribute('aria-invalid', 'true');
   setTimeout(() => {
     field.removeAttribute('aria-invalid');
-    field.value = '';
+    if (field.value === rejected) field.value = '';
   }, INVALID_FLASH_MS);
 }
 
-input.addEventListener('input', () => {
-  addButton.disabled = parseTodoInput(input.value).text === '';
-});
+// Same parse as submit: with the active filter tags, which can push a #tag back into the title.
+function syncAddButton() {
+  addButton.disabled = parseTodoInput(input.value, activeTags).text === '';
+}
+
+input.addEventListener('input', syncAddButton);
 
 form.addEventListener('submit', (event) => {
   event.preventDefault();
@@ -358,8 +376,14 @@ list.addEventListener('keydown', (event) => {
     event.preventDefault();
     if (field.value.trim() === '') return;
     const next = addTag(state, id, field.value);
-    if (next === state) rejectTag(field);
-    else update(next, [key('tag-field', id)]);
+    if (next === state) {
+      rejectTag(field);
+    } else if (next.find((todo) => todo.id === id).tags.length >= MAX_TAGS) {
+      commit(next);
+      closeTagField(id);
+    } else {
+      update(next, [key('tag-field', id)]);
+    }
   }
 });
 
@@ -371,5 +395,6 @@ list.addEventListener('focusout', (event) => {
   if (editingId !== id) return;
   if (field.value.trim() !== '') commit(addTag(state, id, field.value));
   editingId = null;
-  renderSoon();
+  // Focus moving to another control stays there; focus moving nowhere goes back to "+ tag".
+  renderSoon(event.relatedTarget ? undefined : tagControlKeys(id));
 });

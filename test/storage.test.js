@@ -1,6 +1,7 @@
 import { test, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { load, save } from '../src/storage.js';
+import { normalizeTag } from '../src/tags.js';
 
 const KEY = 'task-manager.todos.v1';
 
@@ -88,6 +89,20 @@ test('load normalizes tags: junk dropped, case folded, duplicates removed, first
   assert.deepEqual(load(), [
     { ...base, tags: ['work', 'due-today', 't0', 't1', 't2', 't3', 't4', 't5', 't6', 't7'] },
   ]);
+});
+
+test('load is idempotent: saving what load returned and loading again changes nothing', () => {
+  const base = { id: 'a', text: 'fix #42', completed: false, createdAt: 1 };
+  const stored = [
+    { ...base, tags: ['Work', '#work', '##work', '# #home', ' Due  Today ', 'c#', '#a#b', 'İstanbul', 'x'.repeat(25)] },
+    { ...base, id: 'b', tags: Array.from({ length: 12 }, (_, i) => `#T${i}`) },
+    { ...base, id: 'c' },
+  ];
+  localStorage.setItem(KEY, JSON.stringify(stored));
+  const first = load();
+  assert.deepEqual(first[0].tags, ['work', 'due-today', 'c#', 'a#b', normalizeTag('İstanbul')]);
+  save(first);
+  assert.deepEqual(load(), first);
 });
 
 test('save then load round-trips the todos', () => {

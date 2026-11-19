@@ -8,11 +8,13 @@ export const PALETTE_SIZE = 8;
 // "#tag" at the start of the input or after whitespace, so "C#" and "email#1" are not tags.
 const TOKEN = /(^|\s)#([^\s#]+)/g;
 
+// Idempotent: normalizing a normalized tag gives it back, so load() never changes saved tags.
+// A tag can't start with "#" once one is stripped ("##work" is invalid, not "#work").
 export function normalizeTag(raw) {
   if (typeof raw !== 'string') return null;
   const tag = raw.trim().replace(/^#/, '').trim().toLowerCase().replace(/\s+/g, '-');
   const length = [...tag].length;
-  return length === 0 || length > MAX_TAG_LENGTH ? null : tag;
+  return length === 0 || length > MAX_TAG_LENGTH || tag.startsWith('#') ? null : tag;
 }
 
 // Normalizes a list of tags: invalid ones and duplicates dropped, first MAX_TAGS kept.

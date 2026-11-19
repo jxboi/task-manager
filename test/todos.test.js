@@ -159,7 +159,7 @@ test('addTag treats Work, #work and " work " as the same tag', () => {
 
 test('addTag ignores duplicates, invalid input, the 11th tag and unknown ids', () => {
   const todos = makeTagged();
-  for (const raw of ['work', 'WORK', '#Work', '', '   ', '#', 'x'.repeat(25)]) {
+  for (const raw of ['work', 'WORK', '#Work', '', '   ', '#', '##work', 'x'.repeat(25)]) {
     assert.equal(addTag(todos, 'a', raw), todos, JSON.stringify(raw));
   }
   assert.equal(addTag(todos, 'missing', 'new'), todos);

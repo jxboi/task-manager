@@ -18,6 +18,25 @@ test('normalizeTag rejects empty, whitespace-only and over-long tags', () => {
   }
 });
 
+test('normalizeTag strips only one #: a tag that still starts with # is invalid', () => {
+  for (const raw of ['##work', ' ## work', '# #work', '#\t#work']) {
+    assert.equal(normalizeTag(raw), null, JSON.stringify(raw));
+  }
+  assert.equal(normalizeTag('c#'), 'c#');
+  assert.equal(normalizeTag('#a#b'), 'a#b');
+});
+
+test('normalizeTag is idempotent: a normalized tag normalizes to itself', () => {
+  const samples = [
+    '  Work ', '#work', 'WORK', 'due today', ' # Due  Today ', 'c#', '#a#b', 'ÉTÉ', 'İstanbul',
+    'Straße', 'ΟΔΟΣ', '日本語', '😀 party', 'x'.repeat(24), `#${'Y'.repeat(24)}`, '##work', '#',
+  ];
+  for (const raw of samples) {
+    const once = normalizeTag(raw);
+    if (once !== null) assert.equal(normalizeTag(once), once, JSON.stringify(raw));
+  }
+});
+
 test('normalizeTag accepts 1 and 24 characters', () => {
   assert.equal(normalizeTag('a'), 'a');
   assert.equal(normalizeTag('a'.repeat(24)), 'a'.repeat(24));
