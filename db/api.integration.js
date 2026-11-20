@@ -191,8 +191,14 @@ test('auth and todo API against PostgreSQL', {
     assert.equal(claims.find(({ status }) => status === 200).data.todo.notified, current.due);
     assert.equal((await patch(a, aId, { action: 'markNotified', revision: 4, due: current.due })).status, 409);
     const due = current.due + 86400000;
-    const rolled = await patch(a, aId, { action: 'complete', revision: 4, completed: false, due });
+    assert.equal((await patch(a, aId, {
+      action: 'complete', revision: 4, completed: true, due, completedUntil: due + 1,
+    })).status, 400);
+    const completedUntil = new Date(due).setHours(0, 0, 0, 0);
+    const rolled = await patch(a, aId, { action: 'complete', revision: 4, completed: true, due, completedUntil });
     assert.equal(rolled.status, 200);
+    assert.equal(rolled.data.todo.completed, true);
+    assert.equal(rolled.data.todo.completedUntil, completedUntil);
     assert.equal(rolled.data.todo.due, due);
     assert.equal(rolled.data.todo.notified, null);
     assert.equal(rolled.data.todo.repeat, 'daily');

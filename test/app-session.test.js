@@ -344,13 +344,17 @@ test('task view against the server API', async (t) => {
     // Another tab claims the occurrence, then completes it: the reminder moves to tomorrow.
     const next = Date.now() + 86_400_000;
     servers.a.rows = servers.a.rows.map((item) => (item.id === target.id
-      ? { ...item, due: next, notified: null, revision: item.revision + 2 } : item));
+      ? {
+        ...item, completed: true, completedUntil: new Date(next).setHours(0, 0, 0, 0),
+        due: next, notified: null, revision: item.revision + 2,
+      } : item));
     const patches = () => servers.a.requests.filter((r) => r.method === 'PATCH' && r.path.endsWith(target.id)).length;
     const sent = patches();
     byId('sync-retry').click();
     await settle();
     assert.equal(patches(), sent, 'nothing re-sent');
     const after = servers.a.rows.find((item) => item.id === target.id);
+    assert.equal(rowOf('Unrelated').querySelector('.todo-checkbox').checked, true);
     assert.equal(after.due, next, 'the advanced occurrence is kept');
     assert.equal(after.notified, null);
     assert.equal(byId('announcer').textContent, announced, 'the old occurrence is not alerted again');

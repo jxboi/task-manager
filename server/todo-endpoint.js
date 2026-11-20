@@ -1,11 +1,12 @@
 import { checkMutation, endpoint, invalid, json, readObject, RequestError, requireSession } from './http.js';
 import { createInput, patchTodo, readId, readRevision } from './todo-input.js';
 
-const columns = 'id, text, completed, created_at AS "createdAt", tags, due, repeat, notified, revision';
+const columns = 'id, text, completed, completed_until AS "completedUntil", created_at AS "createdAt", tags, due, repeat, notified, revision';
 
 function toTodo(row) {
   return {
     ...row,
+    completedUntil: row.completedUntil === null ? null : Number(row.completedUntil),
     createdAt: Number(row.createdAt),
     due: row.due === null ? null : Number(row.due),
     notified: row.notified === null ? null : Number(row.notified),
@@ -48,11 +49,13 @@ async function updateTodo(pool, userId, id, body) {
   if (changed === todo) return json({ todo });
 
   const { rows: [row] } = await pool.query(
-    `UPDATE todos SET completed = $4, tags = $5, due = $6, repeat = $7, notified = $8, text = $9,
+    `UPDATE todos SET completed = $4, tags = $5, due = $6, repeat = $7, notified = $8,
+       text = $9, completed_until = $10,
        revision = revision + 1
      WHERE user_id = $1 AND id = $2 AND revision = $3
      RETURNING ${columns}`,
-    [userId, id, revision, changed.completed, changed.tags, changed.due, changed.repeat, changed.notified, changed.text],
+    [userId, id, revision, changed.completed, changed.tags, changed.due, changed.repeat,
+      changed.notified, changed.text, changed.completedUntil],
   );
   if (!row) {
     await findTodo(pool, userId, id);

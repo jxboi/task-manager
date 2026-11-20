@@ -190,8 +190,9 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
     toggle(id, now, before) {
       return patch(id, (todos) => toggleTodo(todos, id, now), 'complete', (row) => {
         const after = toggleTodo([row], id, now)[0];
-        return { completed: after.completed, due: after.due };
-      }, before && ((row) => row.completed === before.completed && row.due === before.due));
+        return { completed: after.completed, due: after.due, completedUntil: after.completedUntil ?? undefined };
+      }, before && ((row) => row.completed === before.completed && row.due === before.due &&
+        (row.completedUntil ?? null) === (before.completedUntil ?? null)));
     },
 
     remove(id) {

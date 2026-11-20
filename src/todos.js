@@ -1,5 +1,5 @@
 import { MAX_TAGS, normalizeTag, normalizeTags } from './tags.js';
-import { isOverdue, nextOccurrence, normalizeReminder } from './reminders.js';
+import { isCompleted, isOverdue, nextReminderAfterToday, normalizeReminder } from './reminders.js';
 
 // The title rule the server enforces too: 1 to 2,000 characters once trimmed, and no NUL.
 export const MAX_TEXT_LENGTH = 2000;
@@ -28,13 +28,19 @@ export function addTodo(todos, text, tags = []) {
   ];
 }
 
-// Completing a repeating todo moves it to its next occurrence and leaves it uncompleted; `notified`
-// stays, so the new `due` differs from it and will alert. A completed repeating todo just unchecks.
 export function toggleTodo(todos, id, now = Date.now()) {
   return todos.map((todo) => {
     if (todo.id !== id) return todo;
-    const next = todo.completed ? null : nextOccurrence(todo.due, todo.repeat, now);
-    return next === null ? { ...todo, completed: !todo.completed } : { ...todo, due: next };
+    const completed = !isCompleted(todo, now);
+    const due = completed ? nextReminderAfterToday(todo.due, todo.repeat, now) : null;
+    if (due === null) {
+      const changed = { ...todo, completed };
+      if (todo.completedUntil != null) changed.completedUntil = null;
+      return changed;
+    }
+    const startOfDay = new Date(due).setHours(0, 0, 0, 0);
+    const completedUntil = startOfDay > now ? startOfDay : due;
+    return { ...todo, completed, completedUntil, due, notified: due === todo.due ? todo.notified : null };
   });
 }
 
@@ -86,7 +92,8 @@ export function setReminder(todos, id, due, repeat) {
 
 // Replaces the text, tags and reminder in one change (the edit form). `due` null means no
 // reminder (then `repeat` must be 'none'). The reminder re-arms only if its time changes (a repeat
-// change alone keeps the claim on the same occurrence), so it doesn't alert again. Completion is never touched.
+// change alone keeps the claim on the same occurrence), so it doesn't alert again. Today's tick
+// keeps its original expiration even if the next date or repeat changes or the reminder is removed.
 // Returns `todos` itself for an unknown id, invalid fields, or when nothing changes.
 export function editTodo(todos, id, { text, tags, due, repeat } = {}) {
   const todo = todos.find((item) => item.id === id);
@@ -129,12 +136,14 @@ export function dueReminders(todos, now) {
   );
 }
 
-// When the next alert is due: the earliest future `due` of an incomplete, un-alerted todo.
+// When to recheck the list: a timed completion expiring or an un-alerted reminder coming due.
 export function nextFireTime(todos, now) {
   let next = null;
   for (const todo of todos) {
-    if (todo.completed || typeof todo.due !== 'number' || todo.notified === todo.due || todo.due <= now) continue;
-    if (next === null || todo.due < next) next = todo.due;
+    const time = isCompleted(todo, now)
+      ? todo.completedUntil
+      : todo.notified === todo.due ? null : todo.due;
+    if (typeof time === 'number' && time > now && (next === null || time < next)) next = time;
   }
   return next;
 }
