@@ -10,8 +10,11 @@ export function readTaskInput(raw, baseTags = []) {
   return { text, tags, error };
 }
 
-// The edit field's starting value: the title, then its tags as "#tag" words, so reading it back
-// with readTaskInput gives the same task.
-export function formatTaskInput({ text, tags }) {
-  return [text, ...tags.map((tag) => `#${tag}`)].join(' ');
+// What the edit form saves. The title field holds only the title, and the task's tags are kept as
+// data (`draftTags`), never re-read from text, so any tag value survives. An untouched title is
+// kept as it is (a saved "Review #42" is not turned into a tag); an edited one is read like the add
+// field, so a typed "#tag" is added after the existing ones.
+export function readTaskEdit(raw, openedText, draftTags) {
+  if (raw === openedText) return { text: openedText, tags: draftTags, error: validText(openedText) ? null : 'invalid' };
+  return readTaskInput(raw, draftTags);
 }

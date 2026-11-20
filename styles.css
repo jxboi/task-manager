@@ -1457,3 +1457,14 @@ select.reminder-control {
   .auth-card { padding: 20px; }
   .auth-primary { height: 48px; }
 }
+
+/* The edit form's tags, under the title field. */
+.edit-tags {
+  margin-top: 8px;
+}
+
+.edit-tags .tag-label {
+  display: flex;
+  align-items: center;
+  cursor: default;
+}

@@ -77,9 +77,10 @@ test('edit form', async (t) => {
     byId('reminder-cancel').click();
   });
 
-  await t.test('tags show in the field as #words, the way the add field takes them', () => {
+  await t.test('the title field holds the title; the tags are chips', () => {
     open('rent');
-    assert.equal(text.value, 'Pay rent #home');
+    assert.equal(text.value, 'Pay rent');
+    assert.deepEqual(byId('edit-tags').querySelectorAll('.tag-label').map((chip) => chip.textContent), ['#home']);
     assert.equal(when.value, '');
     assert.equal(repeat.value, 'none');
     byId('reminder-cancel').click();
@@ -95,7 +96,7 @@ test('edit form', async (t) => {
     assert.equal(patches().length, 0);
     assert.equal(focusKey(), JSON.stringify(['edit', ids.rent]));
     open('rent');
-    assert.equal(text.value, 'Pay rent #home', 'reopening starts from the saved task');
+    assert.equal(text.value, 'Pay rent', 'reopening starts from the saved task');
     byId('reminder-cancel').click();
   });
 
@@ -157,7 +158,7 @@ test('edit form', async (t) => {
 
   await t.test('Save updates text, tags, date and repeat at once with one PATCH, then confirms', async () => {
     open('rent');
-    type(text, 'Pay rent early #home #bills');
+    type(text, 'Pay rent early #bills'); // the title's #tag is added after the home chip
     type(when, '2099-01-01T12:00');
     repeat.value = 'daily';
     repeat.dispatchEvent(new Event('change'));
@@ -187,7 +188,7 @@ test('edit form', async (t) => {
     await settle();
     assert.equal(patches().length, before);
     open('rent');
-    type(text, 'Pay rent early #bills');
+    byId('edit-tags').querySelector('.tag-remove').click(); // × on #home
     key(text, 'Enter');
     await settle();
     assert.deepEqual(serverRow('rent').tags, ['bills']);
@@ -229,7 +230,7 @@ test('edit form', async (t) => {
     window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: server.session } }));
     await settle();
     const before = patches().length;
-    type(text, 'Pay rent today #home'); // a title-only edit of the stale prefilled values
+    type(text, 'Pay rent today'); // a title-only edit of the stale prefilled values
     save.click();
     await settle();
     assert.equal(patches().length, before, 'nothing is sent');
@@ -240,8 +241,8 @@ test('edit form', async (t) => {
     byId('sync-dismiss').click();
     // Opened again, the form has the refreshed values and saves.
     open('rent');
-    assert.equal(text.value, 'Pay rent early #home #bills');
-    type(text, 'Pay rent today #home #bills');
+    assert.equal(text.value, 'Pay rent early');
+    type(text, 'Pay rent today');
     save.click();
     await settle();
     assert.deepEqual([serverRow('rent').text, serverRow('rent').due, serverRow('rent').tags], ['Pay rent today', reminder, ['home', 'bills']]);
@@ -249,6 +250,68 @@ test('edit form', async (t) => {
     server.rows = server.rows.map((item) => (item.id === ids.rent ? { ...original, revision: item.revision + 1 } : item));
     window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: server.session } }));
     await settle();
+  });
+
+  await t.test('a tag with # in it survives an untouched edit, and removing a chip removes only it', async () => {
+    const original = { ...serverRow('rent') };
+    server.rows = server.rows.map((item) => (item.id === ids.rent
+      ? { ...item, text: 'Review #42', tags: ['ref#42', 'c#'], revision: item.revision + 1 } : item));
+    window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: server.session } }));
+    await settle();
+    const before = patches().length;
+    open('rent');
+    assert.equal(text.value, 'Review #42');
+    save.click();
+    await settle();
+    assert.equal(patches().length, before, 'untouched: nothing to send');
+    open('rent');
+    type(text, 'Review today');
+    save.click();
+    await settle();
+    assert.deepEqual([serverRow('rent').text, serverRow('rent').tags], ['Review today', ['ref#42', 'c#']]);
+    open('rent');
+    byId('edit-tags').querySelector('.tag-remove').click();
+    save.click();
+    await settle();
+    assert.deepEqual(serverRow('rent').tags, ['c#']);
+    server.rows = server.rows.map((item) => (item.id === ids.rent ? { ...original, revision: item.revision + 1 } : item));
+    window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: server.session } }));
+    await settle();
+  });
+
+  await t.test('a reminder claim while the form is open keeps the draft; an edit of a field does not', async () => {
+    const original = { ...serverRow('rent') };
+    const refresh = async () => {
+      window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: server.session } }));
+      await settle();
+    };
+    open('rent');
+    type(text, 'Pay rent (mine)');
+    // This tab (or another) claims a reminder: only `notified` and the revision change.
+    server.rows = server.rows.map((item) => (item.id === ids.rent
+      ? { ...item, notified: Date.now(), revision: item.revision + 1 } : item));
+    await refresh();
+    const before = patches().length;
+    save.click();
+    await settle();
+    assert.equal(syncNote.hidden, true, 'no conflict note');
+    assert.equal(patches().length, before + 1);
+    assert.equal(serverRow('rent').text, 'Pay rent (mine)');
+    // Now a real change to an editable field (due) from another tab.
+    open('rent');
+    type(text, 'Pay rent (stale)');
+    server.rows = server.rows.map((item) => (item.id === ids.rent
+      ? { ...item, due: Date.parse('2099-07-08T10:00:00'), revision: item.revision + 1 } : item));
+    await refresh();
+    const sent = patches().length;
+    save.click();
+    await settle();
+    assert.equal(patches().length, sent);
+    assert.equal(syncNote.hidden, false);
+    assert.equal(syncText.textContent, changedElsewhere);
+    byId('sync-dismiss').click();
+    server.rows = server.rows.map((item) => (item.id === ids.rent ? { ...original, revision: item.revision + 1 } : item));
+    await refresh();
   });
 
   await t.test('Esc during IME composition keeps the draft', () => {

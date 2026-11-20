@@ -13,7 +13,7 @@ import { MAX_TAGS, normalizeTag, parseTodoInput, tagColor } from './tags.js';
 import { isOverdue, parseLocalInput, toLocalInput } from './reminders.js';
 import * as api from './storage.js';
 import { createSync } from './sync.js';
-import { formatTaskInput, readTaskInput } from './task-input.js';
+import { readTaskEdit, readTaskInput } from './task-input.js';
 import { popoverTop } from './popover.js';
 
 const app = document.querySelector('.app');
@@ -44,6 +44,7 @@ const editorFor = document.getElementById('reminder-for');
 const editorTitle = document.getElementById('reminder-title');
 const textField = document.getElementById('edit-text-field');
 const textInput = document.getElementById('edit-text');
+const editTags = document.getElementById('edit-tags');
 const whenLabel = document.getElementById('reminder-when-label');
 const whenInput = document.getElementById('reminder-when');
 const repeatSelect = document.getElementById('reminder-repeat');
@@ -128,7 +129,8 @@ const openNotifications = new Set(); // closed when the session ends
 let activeTags = []; // A to Z
 let editingId = null; // todo whose "+ tag" field is open
 let reminderId = null; // todo whose editor is open
-let draftRevision = null; // revision of that todo when the edit form opened
+let draft = null; // the edit form's starting point: { text, tags, due, repeat } of that todo
+let draftTags = []; // the tags the edit form will save (a copy of the todo's, edited by its chips)
 // 'reminder': the reminder editor (date and repeat). 'task': the edit form, the same editor with
 // the task's title and tags field above, where an empty date means no reminder.
 let editorMode = 'reminder';
@@ -769,13 +771,15 @@ function openEditor(id, mode = 'reminder') {
   reminderId = id;
   editorMode = mode;
   reminderTouched = false;
-  draftRevision = todo.revision;
+  draft = { text: todo.text, tags: [...todo.tags], due: todo.due, repeat: todo.repeat };
+  draftTags = [...todo.tags];
   editorTitle.textContent = task ? 'Edit task' : 'Reminder';
   editorFor.textContent = todo.text;
   editorFor.hidden = task; // the Task field shows it
   editor.setAttribute('aria-label', task ? `Edit “${todo.text}”` : `Reminder for “${todo.text}”`);
   textField.hidden = !task;
-  textInput.value = task ? formatTaskInput(todo) : '';
+  textInput.value = task ? todo.text : '';
+  renderDraftTags();
   whenLabel.textContent = task ? 'Reminder' : 'Date and time';
   whenInput.value = todo.due === null ? '' : toLocalInput(todo.due);
   repeatSelect.value = todo.repeat;
@@ -838,10 +842,36 @@ function saveEditor() {
   render(openerKeys(id));
 }
 
+function editedElsewhere(todo, opened) {
+  return todo.text !== opened.text || todo.due !== opened.due || todo.repeat !== opened.repeat ||
+    todo.tags.length !== opened.tags.length || todo.tags.some((tag, index) => tag !== opened.tags[index]);
+}
+
+// The edit form's tags: the same chips as on the row, each with its ×, for the draft's tags.
+function renderDraftTags() {
+  editTags.replaceChildren(...draftTags.map((tag) => {
+    const chip = document.createElement('span');
+    chip.className = 'tag';
+    chip.dataset.color = tagColor(tag);
+    const label = document.createElement('span');
+    label.className = 'tag-label';
+    label.textContent = `#${tag}`;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'tag-remove';
+    remove.dataset.tag = tag;
+    remove.setAttribute('aria-label', `Remove tag ${tag}`);
+    remove.append(icon(xIcon));
+    chip.append(label, remove);
+    return chip;
+  }));
+  editTags.hidden = draftTags.length === 0;
+}
+
 // The edit form's Save: one write with the title, tags and reminder, shown at once and rolled back
 // if the server refuses it (a 409 reloads and says the task changed in another tab).
 function saveTaskEditor() {
-  const { text, tags, error } = readTaskInput(textInput.value);
+  const { text, tags, error } = readTaskEdit(textInput.value, draft.text, draftTags);
   const due = editorDue();
   if (error !== null || due === undefined) {
     reminderTouched = true;
@@ -851,9 +881,10 @@ function saveTaskEditor() {
   }
   const id = reminderId;
   const todo = findTodo(id);
-  if (!todo || todo.revision !== draftRevision) {
-    // The task changed (another tab, or a refresh) after the form opened: its prefilled values are
-    // stale, and saving them would overwrite that change. Show the conflict instead.
+  if (!todo || editedElsewhere(todo, draft)) {
+    // An editable field changed (another tab, or a refresh) after the form opened: its prefilled
+    // values are stale, and saving them would overwrite that change. Show the conflict instead.
+    // A reminder firing here (`notified`, the revision) touches none of them, so it keeps the draft.
     closeEditor();
     showSync(CHANGED_ELSEWHERE);
     render(todo ? openerKeys(id, 'task') : undefined);
@@ -941,7 +972,8 @@ function placeEditor() {
 }
 
 function editorFocusables() {
-  return [textInput, whenInput, repeatSelect, ...actions.children].filter(
+  const removes = textField.hidden ? [] : editTags.querySelectorAll('.tag-remove');
+  return [textInput, ...removes, whenInput, repeatSelect, ...actions.children].filter(
     (element) => !element.hidden && !(element === textInput && textField.hidden),
   );
 }
@@ -981,7 +1013,7 @@ function syncEditor() {
   const invalid = task ? rawDue === undefined : rawDue === null;
   const due = invalid ? null : rawDue;
   const showError = invalid && reminderTouched;
-  const titleError = task ? readTaskInput(textInput.value).error : null;
+  const titleError = task ? readTaskEdit(textInput.value, draft.text, draftTags).error : null;
   const showTitleError = titleError !== null && reminderTouched;
 
   saveButton.setAttribute('aria-disabled', String(invalid || titleError !== null));
@@ -1234,6 +1266,14 @@ for (const field of [textInput, whenInput]) {
   });
 }
 repeatSelect.addEventListener('change', syncEditor);
+editTags.addEventListener('click', (event) => {
+  const button = event.target.closest?.('.tag-remove');
+  if (!button) return;
+  draftTags = draftTags.filter((tag) => tag !== button.dataset.tag);
+  renderDraftTags();
+  syncEditor();
+  (editTags.querySelector('.tag-remove') ?? textInput).focus();
+});
 saveButton.addEventListener('click', saveEditor);
 cancelButton.addEventListener('click', cancelEditor);
 removeButton.addEventListener('click', removeReminder);

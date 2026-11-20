@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import * as api from '../src/storage.js';
 import { createSync } from '../src/sync.js';
 import { addTodo, editTodo, validText } from '../src/todos.js';
-import { formatTaskInput, readTaskInput } from '../src/task-input.js';
+import { readTaskEdit, readTaskInput } from '../src/task-input.js';
 import { patchTodo } from '../server/todo-input.js';
 import { createFakeApi } from './fake-api.js';
 
@@ -81,14 +81,12 @@ test('readTaskInput parses #tags like the add form and reports why a title is in
   assert.equal(validText(5), false);
 });
 
-test('formatTaskInput gives back a value that reads as the same task', () => {
-  const todo = { text: 'Pay rent', tags: ['home', 'bills'] };
-  assert.equal(formatTaskInput(todo), 'Pay rent #home #bills');
-  assert.deepEqual(readTaskInput(formatTaskInput(todo)), { ...todo, error: null });
-  assert.equal(formatTaskInput({ text: 'No tags', tags: [] }), 'No tags');
+test('an untouched edit keeps the title and tags as they are, whatever they contain', () => {
+  const todo = { text: 'Review #42 and C#', tags: ['ref#42', 'c#', 'a#b#c', '##x'] };
+  assert.deepEqual(readTaskEdit(todo.text, todo.text, todo.tags), { ...todo, error: null });
+  assert.deepEqual(readTaskEdit('Review now #new', todo.text, ['ref#42']), { text: 'Review now', tags: ['ref#42', 'new'], error: null });
+  assert.equal(readTaskEdit('', 'Pay', []).error, 'empty');
 });
-
-// --- The server's edit action ----------------------------------------------------------------
 
 test('the edit action applies the whole edit and rejects invalid fields', () => {
   const todo = base();
@@ -180,10 +178,4 @@ test('an edit against a row another tab changed gets 409, rolls back and reloads
   assert.equal(outcome.reloaded, true);
   assert.equal(sync.todos[0].text, 'Changed elsewhere');
   assert.equal(server.rows[0].text, 'Changed elsewhere');
-});
-
-test('tags that contain # survive the edit field round trip', () => {
-  const todo = { text: 'Review PR', tags: ['ref#42', 'c#', 'a#b#c'] };
-  assert.equal(formatTaskInput(todo), 'Review PR #ref#42 #c# #a#b#c');
-  assert.deepEqual(readTaskInput(formatTaskInput(todo)), { ...todo, error: null });
 });

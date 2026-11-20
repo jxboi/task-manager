@@ -140,7 +140,8 @@ test('PALETTE_SIZE matches the data-color rules in styles.css', () => {
   );
 });
 
-test('parseTodoInput takes a "#" inside a tag but not one that starts it', () => {
-  assert.deepEqual(parseTodoInput('Fix #ref#42'), { text: 'Fix', tags: ['ref#42'] });
+test('parseTodoInput keeps the original "#" rules: a tag stops at the next "#"', () => {
+  assert.deepEqual(parseTodoInput('#ref#42'), { text: '#42', tags: ['ref'] });
+  assert.deepEqual(parseTodoInput('Review #ref#42'), { text: 'Review #42', tags: ['ref'] });
   assert.deepEqual(parseTodoInput('Fix ##work'), { text: 'Fix ##work', tags: [] });
 });
