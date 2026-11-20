@@ -1,0 +1,6 @@
+{
+  "framework": null,
+  "buildCommand": "mkdir -p dist && cp index.html styles.css dist/ && cp -R src dist/",
+  "outputDirectory": "dist",
+  "regions": ["sin1"]
+}
