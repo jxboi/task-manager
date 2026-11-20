@@ -21,10 +21,24 @@ export function validateConnectionString(raw) {
   return connectionString;
 }
 
-async function listFiles(directory) {
-  return (await readdir(directory))
-    .filter((name) => /^\d{4}_[\w-]+\.sql$/.test(name))
-    .sort();
+/** A failure with a message that is safe to log: stage, optional filename, optional SQLSTATE. */
+export class MigrationError extends Error {
+  constructor(stage, { filename, cause, detail } = {}) {
+    const code = /^[0-9A-Z]{5}$/.test(cause?.code ?? '') ? cause.code : undefined;
+    super(`Migration ${stage} failed${filename ? ` (${filename})` : ''}${code ? ` [SQLSTATE ${code}]` : ''}.${detail ? ` ${detail}` : ''}`);
+    this.name = 'MigrationError';
+    this.stage = stage;
+    this.filename = filename;
+    this.sqlstate = code;
+  }
+}
+
+/** Lists migration files, rejecting any .sql file that does not match NNNN_name.sql. */
+export async function listMigrationFiles(directory = defaultDirectory) {
+  const names = (await readdir(directory)).filter((name) => name.toLowerCase().endsWith('.sql'));
+  const bad = names.filter((name) => !/^\d{4}_[\w-]+\.sql$/.test(name));
+  if (bad.length) throw new MigrationError('filename check', { filename: bad.sort().join(', ') });
+  return names.sort();
 }
 
 /**
@@ -38,47 +52,67 @@ export async function runMigrations({
   apply = true,
   log = console.log,
 } = {}) {
-  const connectionString = validateConnectionString(raw);
-  const files = await listFiles(directory);
-  const client = new pg.Client({ connectionString, connectionTimeoutMillis: 15_000 });
+  let connectionString;
   try {
-    await client.connect();
+    connectionString = validateConnectionString(raw);
+  } catch (error) {
+    // The URL itself may be malformed; report only that it is unusable, never its text.
+    throw new MigrationError('configuration check');
+  }
+  const files = await listMigrationFiles(directory);
+  const client = new pg.Client({ connectionString, connectionTimeoutMillis: 15_000 });
+  // Never surface pg's own error messages: connection errors can echo connection options.
+  const step = async (stage, fn, filename) => {
+    try {
+      return await fn();
+    } catch (error) {
+      throw error instanceof MigrationError ? error : new MigrationError(stage, { filename, cause: error });
+    }
+  };
+  try {
+    await step('connect', () => client.connect());
     if (!apply) {
-      const exists = (await client.query("SELECT to_regclass('schema_migrations') AS t")).rows[0].t;
-      const applied = new Set(exists
-        ? (await client.query('SELECT filename FROM schema_migrations')).rows.map((r) => r.filename)
-        : []);
-      return files.filter((filename) => !applied.has(filename));
+      return await step('check', async () => {
+        const exists = (await client.query("SELECT to_regclass('schema_migrations') AS t")).rows[0].t;
+        const applied = new Set(exists
+          ? (await client.query('SELECT filename FROM schema_migrations')).rows.map((r) => r.filename)
+          : []);
+        return files.filter((filename) => !applied.has(filename));
+      });
     }
 
     // The lock spans all file transactions. Closing this connection releases it.
-    await client.query(LOCK_SQL);
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS schema_migrations (
-        filename text PRIMARY KEY,
-        applied_at timestamptz NOT NULL DEFAULT now()
-      )
-    `);
-    const { rows } = await client.query('SELECT filename FROM schema_migrations');
-    const applied = new Set(rows.map(({ filename }) => filename));
-    const pending = files.filter((filename) => !applied.has(filename));
+    const pending = await step('lock and ledger', async () => {
+      await client.query(LOCK_SQL);
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+          filename text PRIMARY KEY,
+          applied_at timestamptz NOT NULL DEFAULT now()
+        )
+      `);
+      const { rows } = await client.query('SELECT filename FROM schema_migrations');
+      const applied = new Set(rows.map(({ filename }) => filename));
+      return files.filter((filename) => !applied.has(filename));
+    });
 
     for (const filename of pending) {
-      const sql = await readFile(new URL(filename, directory), 'utf8');
-      await client.query('BEGIN');
-      try {
-        await client.query(sql);
-        await client.query('INSERT INTO schema_migrations (filename) VALUES ($1)', [filename]);
-        await client.query('COMMIT');
-      } catch (error) {
-        await client.query('ROLLBACK');
-        throw new Error(`${filename}: ${error.message}`);
-      }
+      const sql = await step('read', () => readFile(new URL(filename, directory), 'utf8'), filename);
+      await step('apply', async () => {
+        await client.query('BEGIN');
+        try {
+          await client.query(sql);
+          await client.query('INSERT INTO schema_migrations (filename) VALUES ($1)', [filename]);
+          await client.query('COMMIT');
+        } catch (error) {
+          await client.query('ROLLBACK').catch(() => {});
+          throw error;
+        }
+      }, filename);
       log(`Applied ${filename}`);
     }
     if (pending.length === 0) log('No pending migrations.');
     return pending;
   } finally {
-    await client.end();
+    await client.end().catch(() => {});
   }
 }

@@ -15,8 +15,15 @@ const harness = (result) => {
 test('modeFor branches on VERCEL_ENV', () => {
   assert.equal(modeFor({ VERCEL_ENV: 'production' }), 'apply');
   assert.equal(modeFor({ VERCEL_ENV: 'preview' }), 'check');
-  assert.equal(modeFor({ VERCEL_ENV: 'development' }), 'skip');
   assert.equal(modeFor({}), 'skip');
+});
+
+test('hosted builds fail closed on a missing or unknown VERCEL_ENV', () => {
+  for (const env of [{ VERCEL: '1' }, { CI: 'true' }, { VERCEL: '1', VERCEL_ENV: 'development' },
+    { VERCEL: '1', VERCEL_ENV: 'Production' }, { VERCEL_ENV: 'staging' }, { CI: '1', VERCEL_ENV: '' }]) {
+    assert.throws(() => modeFor(env), /VERCEL_ENV/, JSON.stringify(env));
+  }
+  assert.equal(modeFor({ VERCEL: '1', VERCEL_ENV: 'production' }), 'apply');
 });
 
 test('local or unset VERCEL_ENV never touches the database', async () => {
@@ -45,5 +52,6 @@ test('preview only checks, warns on pending, and never throws', async () => {
   assert.match(h.warns[0], /0004_x\.sql/);
   const failing = harness(new Error('connect refused'));
   await buildMigrate(failing.opts({ VERCEL_ENV: 'preview' }));
-  assert.match(failing.warns[0], /connect refused/);
+  assert.match(failing.warns[0], /could not check/);
+  assert.doesNotMatch(failing.warns[0], /connect refused/, 'raw error text must not be logged');
 });

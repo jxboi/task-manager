@@ -11,6 +11,7 @@ import signOut from '../api/auth/sign-out.js';
 import session from '../api/session.js';
 import todos from '../api/todos.js';
 import { getServices } from '../server/auth.js';
+import { resetSchemaGuard } from '../server/schema-guard.js';
 
 const testUrl = process.env.TEST_DATABASE_URL;
 const appOrigin = 'https://task-manager.test';
@@ -318,5 +319,26 @@ test('auth and todo API against PostgreSQL', {
     assert.match(throttled.data.message, /Too many requests/i);
     const limited = await admin.query('SELECT 1 FROM "rateLimit" WHERE count >= 3');
     assert.ok(limited.rowCount > 0);
+  });
+
+  await t.test('returns 503 naming missing migrations, and recovers once applied', async () => {
+    // Earlier subtests may have signed `a` out, so use a fresh sign-in.
+    const fresh = await authenticated(await post(signinPath, alice, { ip: '192.0.2.99' }), alice.name, alice.email);
+    const [{ filename }] = (await admin.query(
+      'DELETE FROM schema_migrations WHERE filename = (SELECT max(filename) FROM schema_migrations) RETURNING filename',
+    )).rows;
+    resetSchemaGuard();
+    for (const path of ['/api/todos', '/api/session']) {
+      const response = await request(path, { account: fresh });
+      assert.equal(response.status, 503);
+      assert.equal(response.data.error.code, 'SCHEMA_OUT_OF_DATE');
+      assert.ok(response.data.error.message.includes(filename));
+    }
+    await admin.query('INSERT INTO schema_migrations (filename) VALUES ($1)', [filename]);
+    assert.equal((await request('/api/todos', { account: fresh })).status, 200);
+    // Verified once: later requests do not query the ledger again.
+    await admin.query('DELETE FROM schema_migrations WHERE filename = $1', [filename]);
+    assert.equal((await request('/api/todos', { account: fresh })).status, 200);
+    await admin.query('INSERT INTO schema_migrations (filename) VALUES ($1)', [filename]);
   });
 });
