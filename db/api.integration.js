@@ -250,6 +250,28 @@ test('auth and todo API against PostgreSQL', {
     assert.equal((await remove(a, id, 3)).status, 204);
   });
 
+  await t.test('persists today’s recurring tick through an edit and rejects a client-supplied tick', async () => {
+    const id = randomUUID();
+    const now = new Date();
+    const today = now.setHours(0, 0, 0, 0);
+    const completedUntil = now.setHours(24, 0, 0, 0);
+    const tomorrowDue = completedUntil + 3_600_000;
+    const edit = { action: 'edit', revision: 1, text: 'Edited routine', tags: ['weekly'], due: null, repeat: 'none' };
+    assert.equal((await create(a, id, 'Routine')).status, 201);
+    assert.equal((await patch(a, id, { ...edit, completedUntil })).status, 400);
+    assert.equal((await patch(a, id, { action: 'setReminder', revision: 1, due: today, repeat: 'daily' })).status, 200);
+    const ticked = await patch(a, id, { action: 'complete', revision: 2, completed: true, due: tomorrowDue, completedUntil });
+    assert.equal(ticked.status, 200);
+    assert.equal(ticked.data.todo.completedUntil, completedUntil);
+
+    const due = today + 3_600_000;
+    const edited = await patch(a, id, { ...edit, revision: 3, due, repeat: 'weekly' });
+    assert.equal(edited.status, 200);
+    const expected = { ...ticked.data.todo, text: edit.text, tags: edit.tags, due, repeat: 'weekly', revision: 4 };
+    assert.deepEqual(edited.data.todo, expected);
+    assert.deepEqual((await request(`/api/todos?id=${id}`, { account: a })).data.todo, expected);
+  });
+
   await t.test('revokes sign-out sessions and rejects stale and expired sessions', async () => {
     const signedOut = await post(signoutPath, {}, { account: a });
     assert.equal(signedOut.status, 200);

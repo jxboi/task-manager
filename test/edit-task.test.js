@@ -3,6 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as api from '../src/storage.js';
+import { isCompleted } from '../src/reminders.js';
 import { createSync } from '../src/sync.js';
 import { addTodo, editTodo, validText } from '../src/todos.js';
 import { readTaskEdit, readTaskInput } from '../src/task-input.js';
@@ -104,6 +105,7 @@ test('the edit action applies the whole edit and rejects invalid fields', () => 
     [{ due: null, repeat: 'daily' }, /repeat/],
     [{ due, repeat: 'hourly' }, /repeat/],
     [{ completed: true }, /Unexpected/],
+    [{ completedUntil: due }, /Unexpected/],
   ];
   for (const [overrides, message] of rejected) {
     assert.throws(() => patchTodo(todo, body(overrides)), (error) => error.status === 400 && message.test(error.message));
@@ -132,6 +134,28 @@ test('an edit shows at once, sends one PATCH at the seen revision, and is replac
   const patches = server.requests.filter((r) => r.method === 'PATCH');
   assert.equal(patches.length, 1);
   assert.deepEqual(JSON.parse(patches[0].body), { ...edit, revision: 1, action: 'edit' });
+});
+
+test('an edit keeps the recurring tick through the optimistic update and server response', async () => {
+  const { server, sync } = setup();
+  const now = Date.now();
+  const completedUntil = new Date(now).setHours(24, 0, 0, 0);
+  const todo = base({ completed: true, completedUntil, due: completedUntil + HOUR, repeat: 'daily' });
+  server.rows = [todo];
+  await sync.load();
+
+  const edit = fields({ text: 'Pay rent early', tags: ['bills'], due: todo.due + HOUR, repeat: 'weekly' });
+  const result = sync.edit(todo.id, edit);
+  assert.equal(sync.todos[0].completedUntil, completedUntil);
+  assert.equal(isCompleted(sync.todos[0], now), true);
+  assert.equal((await result).ok, true);
+  assert.deepEqual(sync.todos[0], { ...todo, ...edit, revision: 2 });
+  assert.equal(isCompleted(sync.todos[0], completedUntil), false);
+
+  assert.equal((await sync.edit(todo.id, { ...edit, due: null, repeat: 'none' })).ok, true);
+  assert.equal(sync.todos[0].completedUntil, completedUntil);
+  assert.equal(isCompleted(sync.todos[0], now), true);
+  assert.equal(isCompleted(sync.todos[0], completedUntil), false);
 });
 
 test('a failed edit rolls back to the confirmed row (server error and network failure)', async () => {
