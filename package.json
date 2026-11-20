@@ -5,7 +5,8 @@
   "scripts": {
     "test": "node --test",
     "test:db": "node --test db/*.integration.js",
-    "db:migrate": "node db/migrate.js"
+    "db:migrate": "node db/migrate.js",
+    "dev": "node server/dev.js"
   },
   "dependencies": {
     "better-auth": "1.7.26",

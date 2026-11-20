@@ -11,14 +11,14 @@ Plain HTML, CSS and JavaScript (ES modules). The browser build needs no framewor
 
 ## Run
 
-The app uses ES modules, which browsers won't load from a `file://` URL, so serve the folder over HTTP:
+The local Node server serves the site and the same API handlers used by Vercel. Install dependencies with `npm ci`, configure the Development database and auth values below, then run the migrations and start the server:
 
 ```sh
-python3 -m http.server 8000
-# or: npx serve .
+node --env-file=/path/outside/the/site/.env.local db/migrate.js
+node --env-file=/path/outside/the/site/.env.local server/dev.js
 ```
 
-Then open http://localhost:8000 (if you used `npx serve`, open the URL it prints).
+With the environment variables already exported, use `npm run db:migrate` and `npm run dev`. Open `http://localhost:3000` or the localhost origin set in `BETTER_AUTH_URL`. After sign-in, tasks are still read from and written to this browser’s localStorage.
 
 ## Test
 
@@ -90,5 +90,5 @@ db/migrations/      numbered PostgreSQL schema migrations
 db/migrate.js       migration runner
 db/*.integration.js PostgreSQL migration and API tests
 api/                Vercel Function entry points
-server/             Better Auth configuration and server-side API logic
+server/             Better Auth configuration, API logic and local HTTP server
 ```
