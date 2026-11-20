@@ -73,6 +73,7 @@ export function installDom(t, { fetch }) {
   const elements = new Map(Array.from(markup.matchAll(/<(\w+)\b[^>]*\bid="([^"]+)"[^>]*>/g), ([html, tag, id]) => {
     const element = new Element();
     element.tagName = tag;
+    element.id = id;
     element.hidden = /\shidden\b/.test(html);
     if (tag === 'template') element.content = { firstElementChild: new Element() };
     return [id, element];

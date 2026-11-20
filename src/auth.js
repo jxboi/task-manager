@@ -181,17 +181,57 @@ async function loadSession({ focus = false } = {}) {
   }
 }
 
-// `force`: re-read even in a background tab, and once more after a check already running (it may
-// have started before the session changed).
-let refreshAgain = false;
-async function refreshSession(force = false) {
-  if (checking && force) refreshAgain = true;
-  if (!currentSession || busy || checking || (!force && document.visibilityState !== 'visible')) return;
+// Bumped whenever another tab reports a session change. A session read that was in flight when
+// it happened may describe the session before that change, so its result is discarded.
+let invalidations = 0;
+let following = false;
+
+// Re-reads the session after another tab changed it (or a request was refused), until a read
+// completes with no newer change behind it, then shows that session. This runs whatever the
+// earlier reads returned: a sign-out read that arrives late can't strand the tab at sign-in
+// when another account has signed in since.
+async function followSession() {
+  if (following) return;
+  following = true;
+  try {
+    let active;
+    let seen;
+    do {
+      seen = invalidations;
+      try {
+        active = await readSession();
+      } catch {
+        active = undefined;
+      }
+    } while (seen !== invalidations);
+    if (busy) return; // this tab is signing in or out itself and shows the result
+    if (active === undefined) {
+      // Unknown session: show nothing of the old one, offer Try again.
+      if (currentSession) {
+        currentSession = null;
+        setToken(null);
+        announceSession(null);
+        for (const element of [accountName, signOut, taskView, signOutNote]) element.hidden = true;
+      }
+      showRetry();
+    } else if (active.user) {
+      showSignedIn(active);
+    } else if (currentSession) {
+      showSignedOut({ focus: true, expired: true });
+    }
+  } finally {
+    following = false;
+  }
+}
+
+async function refreshSession() {
+  if (!currentSession || busy || checking || following || document.visibilityState !== 'visible') return;
   const previous = currentSession;
+  const seen = invalidations;
   checking = true;
   try {
     const active = await readSession();
-    if (busy || currentSession !== previous) return;
+    if (busy || currentSession !== previous || seen !== invalidations || following) return;
     if (active.user) {
       // The task view reloads (same session) or resets for the account now signed in.
       setAccount(active);
@@ -203,10 +243,6 @@ async function refreshSession(force = false) {
     // Keep the current view during temporary connectivity failures.
   } finally {
     checking = false;
-    if (refreshAgain) {
-      refreshAgain = false;
-      refreshSession(true);
-    }
   }
 }
 
@@ -224,9 +260,12 @@ function broadcastAuthChange() {
 }
 
 authChannel?.addEventListener('message', () => {
-  if (!currentSession) return;
+  invalidations++;
+  // A tab already on the sign-in form stays there; one showing tasks (or still following an
+  // earlier change) hides them and follows the session.
+  if (!currentSession && !following) return;
   window.dispatchEvent(new CustomEvent('tasks:invalidate'));
-  refreshSession(true);
+  followSession();
 });
 
 function handleAuthError(response, code) {
@@ -354,7 +393,7 @@ signOut.addEventListener('click', async () => {
 window.addEventListener('tasks:expired', () => {
   if (currentSession) showSignedOut({ focus: true, expired: true });
 });
-window.addEventListener('tasks:revalidate', () => refreshSession(true));
+window.addEventListener('tasks:revalidate', () => followSession());
 
 document.addEventListener('visibilitychange', () => refreshSession());
 window.addEventListener('focus', () => refreshSession());

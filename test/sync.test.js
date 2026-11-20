@@ -279,3 +279,63 @@ test('item 3: a queued completion whose row changed under it (after a reload) is
   assert.equal(server.rows[0].completed, true);
   assert.equal(server.requests.filter((r) => r.method === 'PATCH').length, 0);
 });
+
+// Holds GET /api/todos (a reload) until released.
+function holdReloads(server) {
+  const held = [];
+  const real = server.fetch;
+  globalThis.fetch = async (path, init = {}) => {
+    if ((init.method ?? 'GET') === 'GET') await new Promise((resolve) => held.push(resolve));
+    return real(path, init);
+  };
+  return {
+    release: async () => {
+      for (let i = 0; i < 20 && held.length === 0; i++) await settle(1);
+      held.shift()();
+      await settle();
+    },
+    stop: () => { globalThis.fetch = real; },
+  };
+}
+
+test('item 2: a delete clicked while a conflict reload is on its way is cancelled, not applied to the new revision', async () => {
+  const { server, sync } = setup();
+  const todo = newTodo('Shared');
+  await sync.create(todo);
+  // Another tab adds a tag: revision 2, which this tab hasn't seen.
+  server.rows = [{ ...server.rows[0], tags: ['theirs'], revision: 2 }];
+  const hold = holdReloads(server);
+  const tag = sync.addTag(todo.id, 'mine'); // 409, then a reload that is held
+  await settle();
+  assert.equal(sync.todos[0].revision, 1, 'the user still sees revision 1');
+  const remove = sync.remove(todo.id); // clicked on the revision-1 row
+  await hold.release();
+  hold.stop();
+  assert.equal((await tag).error.status, 409);
+  assert.deepEqual(await remove, { ok: false, cancelled: true });
+  assert.equal(server.rows.length, 1, 'the other tab\'s revision was not deleted');
+  assert.deepEqual(server.rows[0].tags, ['theirs']);
+  assert.equal(server.requests.filter((r) => r.method === 'DELETE').length, 0);
+  // Once the refreshed row is what the user sees, edits go through.
+  assert.equal((await sync.remove(todo.id)).ok, true);
+  assert.deepEqual(server.rows, []);
+});
+
+test('item 2: an edit made before the refreshed row is on screen is cancelled; after, it goes through', async () => {
+  const server = createFakeApi();
+  globalThis.fetch = server.fetch;
+  api.setToken(server.session.csrfToken);
+  const shown = new Map(); // what the page has rendered
+  const sync = createSync(api, { seenRevision: (id) => shown.get(id) });
+  const todo = newTodo('Shared');
+  await sync.create(todo);
+  shown.set(todo.id, 1);
+  server.rows = [{ ...server.rows[0], completed: true, revision: 2 }];
+  assert.equal((await sync.addTag(todo.id, 'mine')).error.status, 409);
+  assert.equal(sync.todos[0].revision, 2); // reloaded, but not rendered yet
+  assert.deepEqual(await sync.addTag(todo.id, 'early'), { ok: false, cancelled: true });
+  shown.set(todo.id, 2); // rendered
+  assert.equal((await sync.addTag(todo.id, 'late')).ok, true);
+  assert.deepEqual(server.rows[0].tags, ['late']);
+  assert.equal(server.rows[0].completed, true);
+});

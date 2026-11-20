@@ -88,7 +88,10 @@ const MESSAGES = {
 
 // The signed-in user's todos as shown: the server's rows plus changes still being saved.
 // Nothing about tasks is kept in browser storage.
-const sync = createSync(api, { onChange: syncChanged });
+const sync = createSync(api, { onChange: syncChanged, seenRevision: (id) => displayed.get(id) });
+// The revision of each row as it is on screen. A change is made against what the user sees, and
+// sync.js cancels a change made against a row that a conflict reload has since replaced.
+const displayed = new Map();
 let state = [];
 let phase = 'signed-out'; // 'loading' | 'ready' | 'error' once signed in
 let sessionToken = null; // the CSRF token of the session this view belongs to
@@ -96,9 +99,12 @@ let sessionEmail = null;
 let revalidating = false; // a CSRF rejection asked the auth module to re-read the session
 let resuming = false;
 let viewSignature = '[]';
-// Creates that may or may not have reached the server: draft text -> their IDs, oldest first.
-// Adding the same text again reuses one of those IDs, so a create that did land can't be doubled.
+// Creates that may or may not have reached the server: the parsed task (text and every tag it
+// gets, active filter included) -> their IDs, oldest first. Adding exactly the same task again
+// reuses one of those IDs, so a create that did land can't be doubled. A different task (other
+// text, or the same text under another filter) never takes an ID that isn't its own.
 const createDrafts = new Map();
+const draftKey = (text, tags) => JSON.stringify([text, tags]);
 let retryAction = null;
 const claiming = new Set(); // "id:due" occurrences being claimed by this tab
 const claimBackoff = new Map(); // "id:due" -> time before which it isn't claimed again
@@ -133,7 +139,15 @@ function syncChanged() {
   if (signature !== viewSignature) {
     viewSignature = signature;
     renderSoon(renderPending ? pendingFocus : undefined);
+  } else if (!renderPending) {
+    // Nothing visible changed, so the screen already shows these rows.
+    noteDisplayed();
   }
+}
+
+function noteDisplayed() {
+  displayed.clear();
+  for (const todo of state) displayed.set(todo.id, todo.revision);
 }
 
 function findTodo(id) {
@@ -422,6 +436,7 @@ function render(focusKeys) {
   const tagDraft = { id: openField?.closest('.todo').dataset.id, value: openField?.value };
 
   rendering = true;
+  noteDisplayed();
   renderPending = false;
   pendingFocus = undefined;
 
@@ -765,7 +780,7 @@ function saveEditor() {
 
 function saveReminder(id, due, repeat) {
   // A time already past alerts right away (once saved); otherwise this re-arms the timer.
-  saved(sync.setReminder(id, due, repeat), () => {
+  saved(id, sync.setReminder(id, due, repeat), () => {
     const todo = findTodo(id);
     if (todo && (todo.due !== due || todo.repeat !== repeat)) saveReminder(id, due, repeat);
   });
@@ -781,7 +796,7 @@ function removeReminder() {
 }
 
 function clearSavedReminder(id) {
-  saved(sync.clearReminder(id), () => findTodo(id)?.due != null && clearSavedReminder(id));
+  saved(id, sync.clearReminder(id), () => findTodo(id)?.due != null && clearSavedReminder(id));
   check();
 }
 
@@ -892,10 +907,11 @@ form.addEventListener('submit', async (event) => {
   if (text === '' || phase !== 'ready') return;
   const [todo] = addTodo([], text, tags);
   // Re-adding a draft whose save was uncertain sends the same ID: a 409 then means it was saved.
-  const retryIds = createDrafts.get(raw);
+  const draft = draftKey(todo.text, todo.tags);
+  const retryIds = createDrafts.get(draft);
   if (retryIds) {
     todo.id = retryIds.shift();
-    if (retryIds.length === 0) createDrafts.delete(raw);
+    if (retryIds.length === 0) createDrafts.delete(draft);
   }
   hideSync();
   const result = sync.create(todo);
@@ -913,7 +929,7 @@ form.addEventListener('submit', async (event) => {
   // A duplicate ID whose reload failed is uncertain too: keep the ID for the next try.
   const { status, code } = outcome.error ?? {};
   const uncertain = !outcome.error || status === 0 || status >= 500 || code === 'DUPLICATE_ID';
-  if (uncertain) createDrafts.set(raw, [...(createDrafts.get(raw) ?? []), todo.id]);
+  if (uncertain) createDrafts.set(draft, [...(createDrafts.get(draft) ?? []), todo.id]);
   if (handleSessionError(outcome.error)) return;
   showSync(uncertain
     ? `Couldn't add “${text}”. Check your connection, then press Add to try again.`
@@ -944,7 +960,7 @@ function toggle(id) {
   const now = Date.now();
   const [after] = toggleTodo([before], id, now);
   fired.delete(id);
-  saved(sync.toggle(id, now, before), () => {
+  saved(id, sync.toggle(id, now, before), () => {
     const current = findTodo(id);
     if (current?.completed === before.completed && current.due === before.due) toggle(id);
   });
@@ -956,16 +972,16 @@ function toggle(id) {
 }
 
 function removeRow(id) {
-  saved(sync.remove(id), () => findTodo(id) && removeRow(id));
+  saved(id, sync.remove(id), () => findTodo(id) && removeRow(id));
   check();
 }
 
 function addSavedTag(id, tag) {
-  saved(sync.addTag(id, tag), () => findTodo(id) && !findTodo(id).tags.includes(tag) && addSavedTag(id, tag));
+  saved(id, sync.addTag(id, tag), () => findTodo(id) && !findTodo(id).tags.includes(tag) && addSavedTag(id, tag));
 }
 
 function removeSavedTag(id, tag) {
-  saved(sync.removeTag(id, tag), () => findTodo(id)?.tags.includes(tag) && removeSavedTag(id, tag));
+  saved(id, sync.removeTag(id, tag), () => findTodo(id)?.tags.includes(tag) && removeSavedTag(id, tag));
 }
 
 // Tries a tag from the "+ tag" field. Returns the todo's tags after it, or null if rejected
@@ -1176,7 +1192,7 @@ function handleSessionError(error) {
 
 // Reports a failed save. The change has already dropped out of the list (and a conflict has
 // reloaded it); `retry` repeats the same change if it still applies.
-async function saved(result, retry) {
+async function saved(id, result, retry) {
   const outcome = await result;
   if (outcome.stale) return;
   if (outcome.ok) {
@@ -1185,8 +1201,12 @@ async function saved(result, retry) {
   }
   // The change rolled back (a deleted row came back, say): recheck reminders and re-arm the timer.
   check();
-  // Skipped (row gone) or cancelled behind a conflict that has already been reported.
-  if (outcome.skipped || outcome.cancelled) return;
+  if (outcome.skipped) return; // the row is gone
+  if (outcome.cancelled) {
+    // Made against a row a conflict reload has replaced: the user hasn't seen the current version.
+    showSync('This task changed in another tab or device. The list is up to date now, so try again.');
+    return;
+  }
   const { error } = outcome;
   if (handleSessionError(error)) return;
   if (error.status === 409 || error.status === 404) {
@@ -1198,22 +1218,29 @@ async function saved(result, retry) {
   } else if (error.status === 400) {
     showSync("Couldn't save that change.");
   } else {
-    showSync("Couldn't save your change. Check your connection and try again.", () => reconcileThen(retry));
+    const retryNow = () => reconcileThen(id, outcome.revision, retry);
+    showSync("Couldn't save your change. Check your connection and try again.", retryNow);
   }
 }
 
 // After an uncertain failure the change may have been saved anyway (only the answer was lost),
-// and another tab may have acted on it since. Reload first; `retry` re-sends only what is missing.
-async function reconcileThen(retry) {
+// and another tab may have acted on it since. Reload first. Re-send only if the row is still at
+// `revision`, the one the change was sent against: then neither it nor anything else landed.
+// Any other revision means the row moved on (this change, or a later edit elsewhere, such as a
+// recurring reminder that was claimed and advanced). The server's row is kept and shown, and
+// nothing is re-sent or re-alerted.
+async function reconcileThen(id, revision, retry) {
   const result = await sync.load();
   if (result.stale) return;
   if (!result.ok) {
     if (!handleSessionError(result.error)) {
-      showSync("Couldn't save your change. Check your connection and try again.", () => reconcileThen(retry));
+      showSync("Couldn't save your change. Check your connection and try again.", () => reconcileThen(id, revision, retry));
     }
     return;
   }
-  retry?.();
+  const row = findTodo(id);
+  if (row && row.revision === revision) retry?.();
+  else if (row) showSync('This task was updated, possibly by your change. The list is up to date now. Check it and try again if needed.');
   check();
 }
 

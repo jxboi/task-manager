@@ -282,6 +282,62 @@ test('task view against the server API', async (t) => {
     assert.equal(input.value, '');
   });
 
+  await t.test('item 3: a retry ID only goes to exactly the same task (text and every tag, filter included)', async () => {
+    const chip = (tag) => byId('filter-bar').children.find((item) => item.dataset.tag === tag);
+    await add('Seed #home');
+    await add('Seed #work');
+    chip('home').click();
+    servers.a.failNext = (method) => (method === 'POST' ? { afterWrite: true } : undefined);
+    await add('Check supplies'); // saved as #home, answer lost
+    assert.equal(input.value, 'Check supplies');
+    byId('clear-filters').click();
+    chip('work').click();
+    await add('Unrelated'); // under #work
+    await add('Check supplies'); // a different task: #work, not the #home one
+    const rows = servers.a.rows.filter((item) => item.text === 'Check supplies');
+    assert.deepEqual(rows.map((item) => item.tags).sort(), [['home'], ['work']]);
+    assert.equal(new Set(rows.map((item) => item.id)).size, 2);
+    byId('clear-filters').click();
+    // The #home draft still reconciles to its own row when re-added under #home.
+    chip('home').click();
+    await add('Check supplies');
+    assert.equal(servers.a.rows.filter((item) => item.text === 'Check supplies').length, 2);
+    byId('clear-filters').click();
+    assert.equal(texts().filter((text) => text === 'Check supplies').length, 2);
+  });
+
+  await t.test('item 4: Try again keeps a recurring reminder that another tab claimed and advanced', async () => {
+    const target = servers.a.rows.find((item) => item.text === 'Unrelated');
+    rowOf('Unrelated').querySelector('.reminder-add').click();
+    const when = byId('reminder-when');
+    when.value = '2000-01-01T12:00';
+    when.dispatchEvent(new Event('input'));
+    byId('reminder-repeat').value = 'daily';
+    byId('reminder-repeat').dispatchEvent(new Event('change'));
+    servers.a.failNext = (method) => (method === 'PATCH' ? { afterWrite: true } : undefined);
+    const announced = byId('announcer').textContent;
+    byId('reminder-save').click();
+    await settle();
+    const saved = servers.a.rows.find((item) => item.id === target.id);
+    assert.equal(saved.repeat, 'daily', 'the save reached the server');
+    // Another tab claims the occurrence, then completes it: the reminder moves to tomorrow.
+    const next = Date.now() + 86_400_000;
+    servers.a.rows = servers.a.rows.map((item) => (item.id === target.id
+      ? { ...item, due: next, notified: null, revision: item.revision + 2 } : item));
+    const patches = () => servers.a.requests.filter((r) => r.method === 'PATCH' && r.path.endsWith(target.id)).length;
+    const sent = patches();
+    byId('sync-retry').click();
+    await settle();
+    assert.equal(patches(), sent, 'nothing re-sent');
+    const after = servers.a.rows.find((item) => item.id === target.id);
+    assert.equal(after.due, next, 'the advanced occurrence is kept');
+    assert.equal(after.notified, null);
+    assert.equal(byId('announcer').textContent, announced, 'the old occurrence is not alerted again');
+    assert.doesNotMatch(rowOf('Unrelated').className, /is-overdue/);
+    assert.match(byId('sync-text').textContent, /up to date/);
+    byId('sync-dismiss').click();
+  });
+
   await t.test('nit: a conflict whose reload failed does not claim the list is up to date', async () => {
     servers.a.rows = servers.a.rows.map((item) => (item.text === 'Alpha' ? { ...item, revision: item.revision + 1 } : item));
     servers.a.failNext = (method) => (method === 'GET' ? new Response('{}', { status: 500 }) : undefined);

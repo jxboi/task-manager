@@ -221,6 +221,33 @@ test('browser storage modules against PostgreSQL', {
     assert.equal((await tabA.remove(todo.id)).ok, true);
   });
 
+  await t.test('a delete clicked during conflict recovery does not remove a revision the user never saw', async () => {
+    const todo = newTodo('Recovering');
+    await tabA.create(todo);
+    const tabB = createSync(api);
+    await tabB.load();
+    assert.equal((await tabB.addTag(todo.id, 'from-b')).ok, true); // revision 2
+    // Hold tabA's conflict reload so the delete is clicked on the revision-1 row.
+    const real = globalThis.fetch;
+    let release;
+    globalThis.fetch = async (path, init = {}) => {
+      if ((init.method ?? 'GET') === 'GET' && String(path) === '/api/todos') {
+        await new Promise((resolve) => { release = resolve; });
+      }
+      return real(path, init);
+    };
+    const tag = tabA.addTag(todo.id, 'from-a');
+    for (let i = 0; i < 50 && !release; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    const remove = tabA.remove(todo.id);
+    globalThis.fetch = real;
+    release();
+    assert.equal((await tag).error.status, 409);
+    assert.deepEqual(await remove, { ok: false, cancelled: true });
+    const { rows } = await admin.query('SELECT tags, revision FROM todos WHERE id = $1', [todo.id]);
+    assert.deepEqual(rows, [{ tags: ['from-b'], revision: 2 }]);
+    assert.equal((await tabA.remove(todo.id)).ok, true);
+  });
+
   await t.test('an uncertain create retried with the same UUID is saved once', async () => {
     const todo = newTodo('Once only');
     const real = globalThis.fetch;
