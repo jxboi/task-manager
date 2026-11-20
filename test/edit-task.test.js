@@ -136,7 +136,7 @@ test('an edit shows at once, sends one PATCH at the seen revision, and is replac
   assert.deepEqual(JSON.parse(patches[0].body), { ...edit, revision: 1, action: 'edit' });
 });
 
-test('an edit keeps the recurring tick through the optimistic update and server response', async () => {
+test('an edit keeps the tick timed while repeating and makes it permanent when repetition stops', async () => {
   const { server, sync } = setup();
   const now = Date.now();
   const completedUntil = new Date(now).setHours(24, 0, 0, 0);
@@ -152,10 +152,13 @@ test('an edit keeps the recurring tick through the optimistic update and server 
   assert.deepEqual(sync.todos[0], { ...todo, ...edit, revision: 2 });
   assert.equal(isCompleted(sync.todos[0], completedUntil), false);
 
-  assert.equal((await sync.edit(todo.id, { ...edit, due: null, repeat: 'none' })).ok, true);
-  assert.equal(sync.todos[0].completedUntil, completedUntil);
-  assert.equal(isCompleted(sync.todos[0], now), true);
-  assert.equal(isCompleted(sync.todos[0], completedUntil), false);
+  const stopRepeating = { ...edit, due: null, repeat: 'none' };
+  const stopped = sync.edit(todo.id, stopRepeating);
+  assert.equal(sync.todos[0].completedUntil, null);
+  assert.equal(isCompleted(sync.todos[0], completedUntil), true);
+  assert.equal((await stopped).ok, true);
+  assert.deepEqual(sync.todos[0], { ...todo, ...stopRepeating, completedUntil: null, revision: 3 });
+  assert.equal(isCompleted(sync.todos[0], completedUntil), true);
 });
 
 test('a failed edit rolls back to the confirmed row (server error and network failure)', async () => {
