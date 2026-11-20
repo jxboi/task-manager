@@ -935,6 +935,20 @@ select.reminder-control {
   font-size: 16px;
 }
 
+/* iOS sizes native date inputs as content-box and centers their value. */
+.is-sheet input.reminder-control {
+  -webkit-appearance: none;
+  appearance: none;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  text-align: left;
+}
+
+.is-sheet input.reminder-control::-webkit-date-and-time-value {
+  text-align: left;
+}
+
 .is-sheet .reminder-message {
   font-size: 13px;
   line-height: 18px;
