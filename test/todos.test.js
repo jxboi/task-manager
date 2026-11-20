@@ -15,7 +15,7 @@ import {
   nextFireTime,
   sortByUrgency,
 } from '../src/todos.js';
-import { nextOccurrence } from '../src/reminders.js';
+import { isCompleted, nextOccurrence } from '../src/reminders.js';
 
 function deepFreeze(todos) {
   for (const todo of todos) {
@@ -387,25 +387,45 @@ test('sortByUrgency after filterByTags keeps only the filtered todos, overdue fi
   assert.deepEqual(ids(sortByUrgency(filterByTags(todos, ['home']), NOW)), ['daily', 'newer', 'none']);
 });
 
-test('toggleTodo completing a daily todo advances due and leaves it uncompleted', () => {
+test('toggleTodo keeps a daily todo checked while scheduling tomorrow', () => {
   const todos = makeReminders();
   const result = toggleTodo(todos, 'daily', NOW);
   const todo = result[5];
-  assert.equal(todo.completed, false);
+  assert.equal(todo.completed, true);
   assert.equal(todo.due, nextOccurrence(todos[5].due, 'daily', NOW));
   assert.ok(todo.due > NOW);
   assert.equal(todo.text, 'Water the plants');
   assert.deepEqual(todo.tags, ['home']);
   assert.equal(todo.repeat, 'daily');
-  assert.equal(todo.notified, todos[5].notified);
-  assert.notEqual(todo.notified, todo.due);
+  assert.equal(todo.notified, null);
   for (const index of [0, 1, 2, 3, 4, 6]) assert.equal(result[index], todos[index]);
+});
+
+test('a daily check skips an overdue cycle and reopens at midnight before the new alert', () => {
+  const now = new Date(2026, 10, 20, 10).getTime();
+  const due = new Date(2026, 10, 19, 16).getTime();
+  const nextDay = new Date(2026, 10, 21).getTime();
+  const nextDue = new Date(2026, 10, 21, 16).getTime();
+  const [todo] = toggleTodo([{ id: 'daily', completed: false, due, repeat: 'daily', notified: due }], 'daily', now);
+
+  assert.equal(todo.due, nextDue);
+  assert.equal(todo.completedUntil, nextDay);
+  assert.equal(isCompleted(todo, nextDay - 1), true);
+  assert.equal(isCompleted(todo, nextDay), false);
+  assert.equal(nextFireTime([todo], now), nextDay);
+  assert.equal(nextFireTime([todo], nextDay), nextDue);
+  assert.deepEqual(dueReminders([todo], nextDue), [todo]);
+
+  const [unchecked] = toggleTodo([todo], 'daily', now);
+  assert.equal(unchecked.completed, false);
+  assert.equal(unchecked.due, nextDue);
+  assert.deepEqual(toggleTodo([unchecked], 'daily', now), [todo]);
 });
 
 test('toggleTodo completing a weekly todo early moves it a week on', () => {
   const todos = makeReminders();
   const todo = toggleTodo(todos, 'soon', NOW)[6];
-  assert.equal(todo.completed, false);
+  assert.equal(todo.completed, true);
   assert.equal(todo.due, NOW + MINUTE + 7 * DAY);
   assert.equal(todo.due, nextOccurrence(NOW + MINUTE, 'weekly', NOW));
 });
@@ -439,5 +459,5 @@ test('toggleTodo defaults now to the current time', () => {
   const before = Date.now();
   const [todo] = toggleTodo(todos, 'r');
   assert.ok(todo.due > before);
-  assert.equal(todo.completed, false);
+  assert.equal(todo.completed, true);
 });

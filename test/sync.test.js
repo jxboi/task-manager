@@ -64,7 +64,7 @@ test('writes are serialized and each uses the revision the previous one returned
   assert.deepEqual(revisions, [1, 2, 3, 4]);
 });
 
-test('toggle sends the browser-computed rollover for a repeating todo', async () => {
+test('toggle sends the browser-computed completion cutoff and next repeating reminder', async () => {
   const { server, sync } = setup();
   const due = Date.now() - HOUR;
   server.rows = [{ ...newTodo('Water plants'), due, repeat: 'daily', notified: null, revision: 1 }];
@@ -73,17 +73,21 @@ test('toggle sends the browser-computed rollover for a repeating todo', async ()
   const result = await sync.toggle(server.rows[0].id, now);
   assert.equal(result.ok, true);
   const [row] = server.rows;
-  assert.equal(row.completed, false);
+  assert.equal(row.completed, true);
   assert.ok(row.due > now);
   assert.equal(row.repeat, 'daily');
   const body = JSON.parse(server.requests.at(-1).body);
-  assert.deepEqual(body, { completed: false, due: row.due, revision: 1, action: 'complete' });
-  // A plain toggle completes and keeps the due time.
+  assert.deepEqual(body, {
+    completed: true, due: row.due, completedUntil: new Date(row.due).setHours(0, 0, 0, 0),
+    revision: 1, action: 'complete',
+  });
+  // Clearing the reminder keeps the check until the user unticks it or the cutoff passes.
   await sync.clearReminder(row.id);
-  await sync.toggle(row.id, Date.now());
   assert.equal(server.rows[0].completed, true);
   await sync.toggle(row.id, Date.now());
   assert.equal(server.rows[0].completed, false);
+  await sync.toggle(row.id, Date.now());
+  assert.equal(server.rows[0].completed, true);
 });
 
 test('remove deletes at the current revision', async () => {

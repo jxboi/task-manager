@@ -165,18 +165,38 @@ test('browser storage modules against PostgreSQL', {
     ]);
   });
 
-  await t.test('a repeating todo completed in the browser rolls forward on the server', async () => {
+  await t.test('a daily todo stays checked after tomorrow is scheduled and the list reloads', async () => {
     shared.use();
     api.setToken((await api.readSession()).csrfToken);
-    const due = Date.now() - 60_000;
-    await tabA.setReminder(anaTodo.id, due, 'daily');
+    const todo = newTodo('Daily chore');
     const now = Date.now();
-    assert.equal((await tabA.toggle(anaTodo.id, now)).ok, true);
-    const row = tabA.todos.find((todo) => todo.id === anaTodo.id);
-    assert.equal(row.completed, false);
-    assert.equal(row.repeat, 'daily');
-    assert.ok(row.due > now && row.due <= now + 86_400_000);
-    assert.equal(new Date(row.due).getMinutes(), new Date(due).getMinutes());
+    const due = new Date(now);
+    due.setHours(23, 59, 59, 999);
+    const tomorrow = new Date(due);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const nextDay = new Date(tomorrow).setHours(0, 0, 0, 0);
+
+    assert.equal((await tabA.create(todo)).ok, true);
+    assert.equal((await tabA.setReminder(todo.id, due.getTime(), 'daily')).ok, true);
+    assert.equal((await tabA.toggle(todo.id, now)).ok, true);
+    const reloaded = createSync(api);
+    assert.equal((await reloaded.load()).ok, true);
+    for (const sync of [tabA, reloaded]) {
+      const row = sync.todos.find((item) => item.id === todo.id);
+      assert.equal(row.completed, true);
+      assert.equal(row.completedUntil, nextDay);
+      assert.equal(row.repeat, 'daily');
+      assert.equal(row.due, tomorrow.getTime());
+    }
+    // Put the saved next occurrence in the past to exercise the server after the cutoff.
+    const overdue = Date.now() - 1000;
+    await admin.query('UPDATE todos SET completed_until = $2, due = $3 WHERE id = $1', [
+      todo.id, overdue - 1000, overdue,
+    ]);
+    await tabA.load();
+    assert.equal((await tabA.claim([{ id: todo.id, due: overdue }])).claimed.length, 1);
+    assert.equal((await tabA.toggle(todo.id, Date.now())).todo.completed, true);
+    assert.equal((await tabA.remove(todo.id)).ok, true);
   });
 
   await t.test('two tabs claim an overdue reminder once', async () => {

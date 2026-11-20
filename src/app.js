@@ -9,7 +9,7 @@ import {
   sortByUrgency,
 } from './todos.js';
 import { MAX_TAGS, normalizeTag, parseTodoInput, tagColor } from './tags.js';
-import { isOverdue, parseLocalInput, toLocalInput } from './reminders.js';
+import { isCompleted, isOverdue, parseLocalInput, toLocalInput } from './reminders.js';
 import * as api from './storage.js';
 import { createSync } from './sync.js';
 import { popoverTop } from './popover.js';
@@ -199,15 +199,15 @@ function filterPhrase() {
   return activeTags.length >= 3 ? plural(activeTags.length, 'tag') : hashtags(activeTags, 'or');
 }
 
-function summaryText(todos) {
+function summaryText(todos, now) {
   if (todos.length === 0) return 'Nothing to do yet';
-  const remaining = todos.filter((todo) => !todo.completed).length;
+  const remaining = todos.filter((todo) => !isCompleted(todo, now)).length;
   const text = remaining === 0 ? 'All done' : `${remaining} to do`;
   return activeTags.length === 0 ? text : `${text} in ${filterPhrase()}`;
 }
 
-function footerText(todos) {
-  const completed = todos.filter((todo) => todo.completed).length;
+function footerText(todos, now) {
+  const completed = todos.filter((todo) => isCompleted(todo, now)).length;
   const text = `${completed} of ${todos.length} completed`;
   return activeTags.length === 0 ? text : `${text} in ${filterPhrase()}`;
 }
@@ -370,9 +370,10 @@ function renderReminderChip(todo, overdue, now) {
 }
 
 function renderTodo(todo, now, tagDraft) {
+  const completed = isCompleted(todo, now);
   const overdue = isOverdue(todo, now);
   const item = document.createElement('li');
-  item.className = todo.completed ? 'todo is-done' : 'todo';
+  item.className = completed ? 'todo is-done' : 'todo';
   item.classList.toggle('is-overdue', overdue);
   item.classList.toggle('is-editing', reminderId === todo.id);
   item.dataset.id = todo.id;
@@ -386,7 +387,7 @@ function renderTodo(todo, now, tagDraft) {
   checkbox.type = 'checkbox';
   checkbox.className = 'todo-checkbox';
   checkbox.id = `todo-${todo.id}`;
-  checkbox.checked = todo.completed;
+  checkbox.checked = completed;
 
   const label = document.createElement('label');
   label.className = 'todo-text';
@@ -454,7 +455,7 @@ function render(focusKeys) {
   const ready = phase === 'ready';
   if (phase === 'loading') summary.textContent = 'Loading your tasks…';
   else if (phase === 'error') summary.textContent = "Couldn't load your tasks";
-  else summary.textContent = summaryText(visible);
+  else summary.textContent = summaryText(visible, now);
   summary.setAttribute('aria-busy', String(phase === 'loading'));
   syncAddButton();
   clearFilters.hidden = !filtering;
@@ -476,7 +477,7 @@ function render(focusKeys) {
   list.hidden = visible.length === 0;
   emptyState.hidden = !ready || visible.length > 0;
   footer.hidden = visible.length === 0;
-  footer.textContent = footerText(visible);
+  footer.textContent = footerText(visible, now);
 
   const controls = new Map(
     [...app.querySelectorAll('[data-focus-key]')].map((element) => [element.dataset.focusKey, element]),
@@ -617,7 +618,7 @@ async function claim(ready) {
   check();
 }
 
-// One timer, to the next due time; no polling.
+// One timer for reminder due times and completion cutoffs.
 function rearm(now) {
   clearTimeout(timer);
   if (phase !== 'ready') return;
@@ -877,7 +878,7 @@ function syncEditor() {
   let next = null;
   if (showError) next = MESSAGES.invalid;
   else if (!invalid && due <= Date.now()) next = MESSAGES.past;
-  else if (!invalid && todo.completed) next = MESSAGES.done;
+  else if (!invalid && todo.completedUntil == null && todo.completed) next = MESSAGES.done;
   else if (typeof Notification !== 'undefined' && Notification.permission === 'default') next = MESSAGES.ask;
   else if (!invalid && notificationsBlocked()) next = MESSAGES.blocked;
 
@@ -962,10 +963,11 @@ function toggle(id) {
   fired.delete(id);
   saved(id, sync.toggle(id, now, before), () => {
     const current = findTodo(id);
-    if (current?.completed === before.completed && current.due === before.due) toggle(id);
+    if (current && current.due === before.due &&
+        (current.completedUntil ?? null) === (before.completedUntil ?? null) &&
+        isCompleted(current, Date.now()) === isCompleted(before, now)) toggle(id);
   });
-  // A repeating todo moved to its next time and stays unchecked: say so.
-  if (!after.completed && after.due !== before.due) {
+  if (after.due !== before.due) {
     showBanner('info', `Done for now. “${after.text}” is next due ${formatDue(after.due, now)}.`, ROLLOVER_MS);
   }
   check();
