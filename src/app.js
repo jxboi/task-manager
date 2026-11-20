@@ -1,5 +1,20 @@
-import { addTodo, toggleTodo, removeTodo, addTag, removeTag, allTags, filterByTags } from './todos.js';
+import {
+  addTodo,
+  toggleTodo,
+  removeTodo,
+  addTag,
+  removeTag,
+  allTags,
+  filterByTags,
+  setReminder,
+  clearReminder,
+  markNotified,
+  dueReminders,
+  nextFireTime,
+  sortByUrgency,
+} from './todos.js';
 import { MAX_TAGS, parseTodoInput, tagColor } from './tags.js';
+import { isOverdue, parseLocalInput, toLocalInput } from './reminders.js';
 import { load, save } from './storage.js';
 
 const app = document.querySelector('.app');
@@ -15,22 +30,67 @@ const hintAuto = document.getElementById('hint-auto');
 const filterWrap = document.getElementById('filter-wrap');
 const filterBar = document.getElementById('filter-bar');
 const footer = document.getElementById('footer');
+const banner = document.getElementById('banner');
+const bannerIcon = document.getElementById('banner-icon');
+const bannerText = document.getElementById('banner-text');
+const bannerDismiss = document.getElementById('banner-dismiss');
+const announcer = document.getElementById('announcer');
+const layer = document.getElementById('reminder-layer');
+const scrim = document.getElementById('reminder-scrim');
+const editor = document.getElementById('reminder-editor');
+const editorFor = document.getElementById('reminder-for');
+const whenInput = document.getElementById('reminder-when');
+const repeatSelect = document.getElementById('reminder-repeat');
+const repeatHelp = document.getElementById('reminder-repeat-help');
+const message = document.getElementById('reminder-message');
+const messageIcon = document.getElementById('reminder-message-icon');
+const messageText = document.getElementById('reminder-message-text');
+const actions = document.getElementById('reminder-actions');
+const editorStart = document.getElementById('reminder-start');
+const editorEnd = document.getElementById('reminder-end');
+const removeButton = document.getElementById('reminder-remove');
+const cancelButton = document.getElementById('reminder-cancel');
+const saveButton = document.getElementById('reminder-save');
 const trashIcon = document.getElementById('trash-icon');
 const xIcon = document.getElementById('x-icon');
+const bellIcon = document.getElementById('bell-icon');
+const repeatIcon = document.getElementById('repeat-icon');
+const alertIcon = document.getElementById('alert-icon');
+const infoIcon = document.getElementById('info-icon');
 
 const INVALID_FLASH_MS = 400;
+const ROLLOVER_MS = 6000;
+const MAX_DELAY = 2 ** 31 - 1; // setTimeout's limit (about 24.8 days); check() re-arms when it fires
+const sheetQuery = window.matchMedia('(max-width: 639px)');
+
+const BLOCKED_TEXT = 'Notifications are blocked or unavailable. Due tasks will be highlighted on this page.';
+const MESSAGES = {
+  invalid: { kind: 'error', icon: alertIcon, text: 'Enter a valid date and time.' },
+  done: { kind: 'warn', icon: infoIcon, text: 'This task is done, so its reminder won’t alert. Uncheck it to turn alerts back on.' },
+  past: { kind: 'warn', icon: infoIcon, text: 'That time has passed. Saving will mark this task overdue and alert right away.' },
+  blocked: { kind: 'warn', icon: infoIcon, text: BLOCKED_TEXT },
+  ask: {
+    kind: 'info',
+    icon: bellIcon,
+    text: 'When you save, your browser will ask to allow notifications. If you say no, due tasks are still highlighted on this page.',
+  },
+};
 
 let state = load();
 // View state: never saved, never in the URL.
 let activeTags = []; // A to Z
 let editingId = null; // todo whose "+ tag" field is open
+let reminderId = null; // todo whose reminder editor is open
+let reminderTouched = false; // the date field was changed, or Save tried: show its error
+let sheetMode = null; // editor layout last applied: true = bottom sheet, false = popover
+const fired = new Map(); // todo id -> when its "just fired" highlight started (performance.now())
 
 let rendering = false;
 let renderPending = false;
 let pendingFocus; // focus keys for the deferred render
 let pressing = false;
-
-render();
+let timer; // the one reminder timeout
+let bannerTimer;
 
 function update(next, focusKeys) {
   commit(next);
@@ -45,6 +105,16 @@ function commit(next) {
   // A filter tag drops out once no todo uses it; with none left the view is back to All.
   const inUse = new Set(state.flatMap((todo) => todo.tags));
   activeTags = activeTags.filter((tag) => inUse.has(tag));
+}
+
+function findTodo(id) {
+  return state.find((todo) => todo.id === id);
+}
+
+// The list as shown: the tag filter, then overdue todos on top. Used by the list, the footer and
+// fallback focus, so they always agree.
+function visibleTodos(now) {
+  return sortByUrgency(filterByTags(state, activeTags), now);
 }
 
 function setFilter(tags, focusKeys) {
@@ -67,6 +137,10 @@ function key(...parts) {
 function withKey(element, ...parts) {
   element.dataset.focusKey = key(...parts);
   return element;
+}
+
+function icon(template) {
+  return template.content.firstElementChild.cloneNode(true);
 }
 
 function plural(count, word) {
@@ -94,6 +168,33 @@ function footerText(todos) {
   const text = `${completed} of ${todos.length} completed`;
   return activeTags.length === 0 ? text : `${text} in ${filterPhrase()}`;
 }
+
+// Due text in the browser's locale and zone: "Today 5:30 PM", "Tomorrow 9:00 AM", "Mon 7:00 PM"
+// (within 6 days either side), "Dec 4, 9:00 AM", "Jan 8, 2027, 9:00 AM" (another year).
+const timeFormat = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
+const weekdayFormat = new Intl.DateTimeFormat(undefined, { weekday: 'short' });
+const longWeekdayFormat = new Intl.DateTimeFormat(undefined, { weekday: 'long' });
+const dateFormat = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
+const yearDateFormat = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+const RELATIVE_DAYS = new Map([[-1, 'Yesterday'], [0, 'Today'], [1, 'Tomorrow']]);
+
+// Local calendar day number, so a day difference ignores the time of day and DST.
+function dayNumber(date) {
+  return Math.round(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / 86_400_000);
+}
+
+function formatDue(ms, now) {
+  const date = new Date(ms);
+  const today = new Date(now);
+  const days = dayNumber(date) - dayNumber(today);
+  const time = timeFormat.format(date);
+  if (RELATIVE_DAYS.has(days)) return `${RELATIVE_DAYS.get(days)} ${time}`;
+  if (Math.abs(days) <= 6) return `${weekdayFormat.format(date)} ${time}`;
+  const day = date.getFullYear() === today.getFullYear() ? dateFormat : yearDateFormat;
+  return `${day.format(date)}, ${time}`;
+}
+
+const REPEAT_LABELS = { daily: 'Daily', weekly: 'Weekly' };
 
 function renderFilterChip(tag, count) {
   const button = document.createElement('button');
@@ -142,19 +243,21 @@ function renderTagChip(todo, tag) {
   remove.className = 'tag-remove';
   remove.dataset.tag = tag;
   remove.setAttribute('aria-label', `Remove tag ${tag} from “${todo.text}”`);
-  remove.append(xIcon.content.cloneNode(true));
+  remove.append(icon(xIcon));
 
   chip.append(label, remove);
   return chip;
 }
 
-function renderTagControl(todo) {
+function renderTagControl(todo, tagDraft) {
   if (editingId === todo.id) {
     const field = withKey(document.createElement('input'), 'tag-field', todo.id);
     field.type = 'text';
     field.className = 'tag-field';
     field.autocomplete = 'off';
     field.setAttribute('aria-label', 'New tag');
+    // A render the user didn't ask for (a reminder firing) keeps what they were typing.
+    if (tagDraft.id === todo.id) field.value = tagDraft.value;
     return field;
   }
   if (todo.tags.length >= MAX_TAGS) return null;
@@ -166,10 +269,74 @@ function renderTagControl(todo) {
   return button;
 }
 
-function renderTodo(todo) {
+function renderReminderAdd(todo) {
+  const button = withKey(document.createElement('button'), 'add-reminder', todo.id);
+  button.type = 'button';
+  button.className = 'reminder-add';
+  button.setAttribute('aria-label', `Add reminder to “${todo.text}”`);
+  button.setAttribute('aria-haspopup', 'dialog');
+  button.setAttribute('aria-expanded', String(reminderId === todo.id));
+  button.append(icon(bellIcon), '+ reminder');
+  return button;
+}
+
+// The due chip. Overdue is said in words (the "Overdue" flag and the name), not only by color.
+function renderReminderChip(todo, overdue, now) {
+  const when = formatDue(todo.due, now);
+  const repeats = todo.repeat === 'none' ? '' : `, repeats ${todo.repeat}`;
+  const button = withKey(document.createElement('button'), 'reminder', todo.id);
+  button.type = 'button';
+  button.className = overdue ? 'reminder-chip is-overdue' : 'reminder-chip';
+  button.setAttribute('aria-haspopup', 'dialog');
+  button.setAttribute('aria-expanded', String(reminderId === todo.id));
+  button.setAttribute(
+    'aria-label',
+    `${overdue ? `Overdue, was due ${when}` : `Reminder ${when}`}${repeats}. Edit reminder for “${todo.text}”`,
+  );
+
+  if (overdue) {
+    const flag = document.createElement('span');
+    flag.className = 'reminder-flag';
+    flag.append(icon(alertIcon), 'Overdue');
+    button.append(flag);
+  } else {
+    button.append(icon(bellIcon));
+  }
+  const text = document.createElement('span');
+  text.className = 'reminder-when';
+  text.textContent = when;
+  button.append(text);
+
+  if (todo.repeat !== 'none') {
+    const repeat = document.createElement('span');
+    repeat.className = 'reminder-repeat';
+    repeat.append(icon(repeatIcon), REPEAT_LABELS[todo.repeat]);
+    button.append(repeat);
+  }
+  return button;
+}
+
+function renderGotIt(todo) {
+  const button = withKey(document.createElement('button'), 'got-it', todo.id);
+  button.type = 'button';
+  button.className = 'reminder-got-it';
+  button.setAttribute('aria-label', `Got it, dismiss highlight for “${todo.text}”`);
+  button.textContent = 'Got it';
+  return button;
+}
+
+function renderTodo(todo, now, tagDraft) {
+  const overdue = isOverdue(todo, now);
   const item = document.createElement('li');
   item.className = todo.completed ? 'todo is-done' : 'todo';
+  item.classList.toggle('is-overdue', overdue);
+  item.classList.toggle('is-editing', reminderId === todo.id);
   item.dataset.id = todo.id;
+  if (fired.has(todo.id)) {
+    item.classList.add('is-fired');
+    // Re-renders continue the pulse where it was instead of restarting it.
+    item.style.animationDelay = `${Math.round(fired.get(todo.id) - performance.now())}ms`;
+  }
 
   const checkbox = withKey(document.createElement('input'), 'checkbox', todo.id);
   checkbox.type = 'checkbox';
@@ -182,23 +349,33 @@ function renderTodo(todo) {
   label.htmlFor = checkbox.id;
   label.textContent = todo.text;
 
+  const body = document.createElement('div');
+  body.className = 'todo-body';
+  body.append(label);
+
+  if (todo.due !== null) {
+    const meta = document.createElement('div');
+    meta.className = 'todo-meta';
+    meta.append(renderReminderChip(todo, overdue, now));
+    if (fired.has(todo.id)) meta.append(renderGotIt(todo));
+    body.append(meta);
+  }
+
   const tags = document.createElement('div');
   tags.className = 'todo-tags';
   tags.append(...todo.tags.map((tag) => renderTagChip(todo, tag)));
-  const control = renderTagControl(todo);
+  const control = renderTagControl(todo, tagDraft);
   if (control) tags.append(control);
-  // Untagged rows only show the chip row when "+ tag" is revealed.
+  if (todo.due === null) tags.append(renderReminderAdd(todo));
+  // Untagged rows only show the chip row when "+ tag" / "+ reminder" are revealed.
   if (todo.tags.length === 0 && editingId !== todo.id) tags.classList.add('is-empty');
-
-  const body = document.createElement('div');
-  body.className = 'todo-body';
-  body.append(label, tags);
+  body.append(tags);
 
   const deleteButton = withKey(document.createElement('button'), 'delete', todo.id);
   deleteButton.type = 'button';
   deleteButton.className = 'todo-delete';
   deleteButton.setAttribute('aria-label', `Delete “${todo.text}”`);
-  deleteButton.append(trashIcon.content.cloneNode(true));
+  deleteButton.append(icon(trashIcon));
 
   item.append(checkbox, body, deleteButton);
   return item;
@@ -208,13 +385,24 @@ function renderTodo(todo) {
 // new-task input. Without it, whatever had focus keeps it.
 function render(focusKeys) {
   const keys = focusKeys ?? [document.activeElement?.dataset?.focusKey];
+  const now = Date.now(); // one instant for the whole render: overdue marks, order and due text agree
   const tags = allTags(state);
-  const visible = filterByTags(state, activeTags);
+  const visible = visibleTodos(now);
   const filtering = activeTags.length > 0;
+  const openField = list.querySelector('.tag-field');
+  const tagDraft = { id: openField?.closest('.todo').dataset.id, value: openField?.value };
 
   rendering = true;
   renderPending = false;
   pendingFocus = undefined;
+
+  // A highlight ends once its todo is no longer overdue (completed, rolled over, changed, deleted).
+  for (const id of fired.keys()) {
+    const todo = findTodo(id);
+    if (!todo || !isOverdue(todo, now)) fired.delete(id);
+  }
+  // The todo being edited was deleted: close its editor.
+  if (reminderId !== null && !findTodo(reminderId)) closeEditor();
 
   summary.textContent = summaryText(visible);
   syncAddButton();
@@ -233,13 +421,11 @@ function render(focusKeys) {
   );
   filterBar.scrollLeft = scroll;
 
-  list.replaceChildren(...visible.map(renderTodo));
+  list.replaceChildren(...visible.map((todo) => renderTodo(todo, now, tagDraft)));
   list.hidden = visible.length === 0;
   emptyState.hidden = visible.length > 0;
   footer.hidden = visible.length === 0;
   footer.textContent = footerText(visible);
-
-  rendering = false;
 
   const controls = new Map(
     [...app.querySelectorAll('[data-focus-key]')].map((element) => [element.dataset.focusKey, element]),
@@ -247,14 +433,22 @@ function render(focusKeys) {
   const target = keys.map((focusKey) => controls.get(focusKey)).find(Boolean);
   if (target) target.focus();
   else if (focusKeys) input.focus();
+  // Focus moved by the render itself is not the user's: focus handlers ignore it.
+  rendering = false;
+
+  if (reminderId !== null) placeEditor();
 }
 
-// Pressing a control blurs an open "+ tag" field before that control gets its click.
-// Rendering in between would replace the pressed control and swallow the click, so a
-// render requested during a press waits until the button is released (click comes first).
+// Pressing a control blurs an open "+ tag" field (or closes the reminder editor) before that
+// control gets its click. Rendering in between would replace the pressed control and swallow the
+// click, so a render requested during a press waits until the button is released (click comes first).
 // A press can end without mouseup (a drag, or the window losing focus), so those release it too.
+// The row losing focus keeps its revealed controls until the press ends: collapsing it on mousedown
+// would shift the pressed control (in a row below) out from under the pointer and lose the click.
 document.addEventListener('mousedown', (event) => {
-  if (event.button === 0) pressing = true;
+  if (event.button !== 0) return;
+  pressing = true;
+  document.activeElement?.closest('.todo')?.classList.add('is-held');
 }, true);
 document.addEventListener('mouseup', release, true);
 document.addEventListener('dragend', release, true);
@@ -262,6 +456,7 @@ window.addEventListener('blur', release);
 
 function release() {
   pressing = false;
+  for (const row of list.querySelectorAll('.is-held')) row.classList.remove('is-held');
   setTimeout(flushRender);
 }
 
@@ -277,7 +472,7 @@ function flushRender() {
 
 // Neighbouring rows in the current view, for when the acted-on row leaves it.
 function rowFallbackKeys(id) {
-  const visible = filterByTags(state, activeTags);
+  const visible = visibleTodos(Date.now());
   const index = visible.findIndex((todo) => todo.id === id);
   return [visible[index + 1], visible[index - 1]]
     .filter(Boolean)
@@ -286,7 +481,7 @@ function rowFallbackKeys(id) {
 
 // Focus goes back to "+ tag", or to the last chip when the todo is at the cap.
 function tagControlKeys(id) {
-  const lastTag = state.find((todo) => todo.id === id).tags.at(-1);
+  const lastTag = findTodo(id).tags.at(-1);
   return [key('add-tag', id), lastTag && key('tag', id, lastTag), key('checkbox', id)];
 }
 
@@ -309,6 +504,238 @@ function rejectTag(field) {
 function syncAddButton() {
   addButton.disabled = parseTodoInput(input.value, activeTags).text === '';
 }
+
+// --- Reminders: alerting -------------------------------------------------------------------
+
+// Alerts every overdue, un-alerted todo once, then arms the timer for the next one. Never trusts
+// the timer: it compares against the clock, so an early, late or stale wake-up is harmless.
+function check() {
+  const now = Date.now();
+  const ready = dueReminders(state, now);
+  if (ready.length > 0) {
+    notify(ready);
+    const started = performance.now();
+    for (const todo of ready) fired.set(todo.id, started);
+    commit(markNotified(state, ready.map((todo) => todo.id)));
+  }
+  // Overdue marks and order depend on the time, so re-render even when nothing fired.
+  renderSoon(renderPending ? pendingFocus : undefined);
+  rearm(now);
+}
+
+// One timer, to the next due time; no polling.
+function rearm(now) {
+  clearTimeout(timer);
+  const next = nextFireTime(state, now);
+  timer = next === null ? undefined : setTimeout(check, Math.min(next - now, MAX_DELAY));
+}
+
+function notificationsBlocked() {
+  return typeof Notification === 'undefined' || Notification.permission === 'denied';
+}
+
+// One due todo: its own notification. Several (typical after a while away): one grouped one.
+function notify(ready) {
+  const [first] = ready;
+  const count = ready.length;
+  announce(count === 1 ? `Reminder due: ${first.text}` : `${count} reminders due`);
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+  try {
+    const notification =
+      count === 1
+        ? new Notification(first.text, { body: 'Reminder', tag: first.id })
+        : new Notification(`${count} reminders due`, { body: `${first.text} and ${count - 1} more` });
+    notification.onclick = () => {
+      window.focus();
+      notification.close();
+    };
+  } catch {
+    // Some mobile browsers only allow notifications from a service worker: in-app alerting only.
+  }
+}
+
+// Only ever from the Save click (a user gesture); not awaited, the reminder saves either way.
+function requestPermission() {
+  if (typeof Notification === 'undefined' || Notification.permission !== 'default') return;
+  try {
+    Promise.resolve(Notification.requestPermission()).catch(() => {});
+  } catch {
+    // An old callback-only API or a refusal to ask: treated like a dismissed prompt.
+  }
+}
+
+function announce(text) {
+  announcer.textContent = text;
+}
+
+function showBanner(kind, text, clearAfter) {
+  clearTimeout(bannerTimer);
+  banner.className = `banner is-${kind}`;
+  bannerIcon.replaceChildren(icon(kind === 'warn' ? infoIcon : repeatIcon));
+  bannerText.textContent = text;
+  bannerDismiss.hidden = kind !== 'warn';
+  banner.hidden = false;
+  if (clearAfter) bannerTimer = setTimeout(hideBanner, clearAfter);
+}
+
+function hideBanner() {
+  clearTimeout(bannerTimer);
+  banner.hidden = true;
+  bannerText.textContent = '';
+}
+
+function dismissFired(id) {
+  if (fired.delete(id)) renderSoon();
+}
+
+// --- Reminders: editor ---------------------------------------------------------------------
+
+function openEditor(id) {
+  const todo = findTodo(id);
+  reminderId = id;
+  reminderTouched = false;
+  editorFor.textContent = todo.text;
+  editor.setAttribute('aria-label', `Reminder for “${todo.text}”`);
+  whenInput.value = todo.due === null ? '' : toLocalInput(todo.due);
+  repeatSelect.value = todo.repeat;
+  removeButton.hidden = todo.due === null;
+  layer.hidden = false;
+  render(); // the opener shows aria-expanded; render places the editor
+  syncEditor();
+  whenInput.focus();
+}
+
+// Hides the editor without rendering; callers render (or renderSoon) with their focus.
+function closeEditor() {
+  reminderId = null;
+  layer.hidden = true;
+  app.inert = false;
+  hideMessage();
+}
+
+function openerKeys(id) {
+  const todo = findTodo(id);
+  return todo && todo.due !== null ? [key('reminder', id)] : [key('add-reminder', id), key('checkbox', id)];
+}
+
+function cancelEditor() {
+  const id = reminderId;
+  closeEditor();
+  render(openerKeys(id));
+}
+
+function saveEditor() {
+  const due = parseLocalInput(whenInput.value);
+  if (due === null) {
+    // Save is aria-disabled: a no-op that shows why.
+    reminderTouched = true;
+    syncEditor();
+    return;
+  }
+  const id = reminderId;
+  requestPermission();
+  if (notificationsBlocked()) showBanner('warn', BLOCKED_TEXT);
+  else if (!banner.hidden && banner.classList.contains('is-warn')) hideBanner();
+  closeEditor();
+  fired.delete(id);
+  commit(setReminder(state, id, due, repeatSelect.value));
+  check(); // a time already past alerts right away; otherwise this re-arms the timer
+  render(openerKeys(id));
+}
+
+function removeReminder() {
+  const id = reminderId;
+  closeEditor();
+  fired.delete(id);
+  commit(clearReminder(state, id));
+  check();
+  render(openerKeys(id));
+}
+
+// The bottom sheet under 640px is modal (the page behind is inert); the popover is not.
+function placeEditor() {
+  const sheet = sheetQuery.matches;
+  if (sheet !== sheetMode) {
+    sheetMode = sheet;
+    layer.classList.toggle('is-sheet', sheet);
+    if (sheet) editor.setAttribute('aria-modal', 'true');
+    else editor.removeAttribute('aria-modal');
+    // DOM order is focus order: the sheet stacks Save first, then Cancel and Remove.
+    const focused = document.activeElement;
+    actions.replaceChildren(...(sheet ? [saveButton, cancelButton, removeButton] : [removeButton, cancelButton, saveButton]));
+    if (actions.contains(focused)) focused.focus();
+  }
+  app.inert = sheet;
+  if (sheet) {
+    editor.style.left = '';
+    editor.style.top = '';
+    return;
+  }
+  const row = [...list.children].find((item) => item.dataset.id === reminderId);
+  if (!row) return;
+  const opener = row.querySelector('.reminder-chip, .reminder-add') ?? row;
+  const rect = opener.getBoundingClientRect();
+  const viewport = document.documentElement.clientWidth;
+  const left = Math.max(8, Math.min(rect.left, viewport - editor.offsetWidth - 8));
+  editor.style.left = `${left + window.scrollX}px`;
+  editor.style.top = `${rect.bottom + window.scrollY + 6}px`;
+}
+
+function editorFocusables() {
+  return [whenInput, repeatSelect, ...actions.children].filter((element) => !element.hidden);
+}
+
+function hideMessage() {
+  message.hidden = true;
+  message.removeAttribute('role');
+  messageText.textContent = '';
+}
+
+// Save state, field validity, the repeat helper and the one message, from the current inputs.
+function syncEditor() {
+  const todo = findTodo(reminderId);
+  const due = parseLocalInput(whenInput.value);
+  const invalid = due === null;
+  const showError = invalid && reminderTouched;
+
+  saveButton.setAttribute('aria-disabled', String(invalid));
+  if (showError) {
+    whenInput.setAttribute('aria-invalid', 'true');
+    whenInput.setAttribute('aria-describedby', 'reminder-message');
+  } else {
+    whenInput.removeAttribute('aria-invalid');
+    whenInput.removeAttribute('aria-describedby');
+  }
+
+  const repeat = repeatSelect.value;
+  repeatHelp.hidden = invalid || repeat === 'none';
+  if (!repeatHelp.hidden) {
+    const date = new Date(due);
+    const day = repeat === 'daily' ? 'day' : longWeekdayFormat.format(date);
+    repeatHelp.textContent = `Repeats every ${day} at ${timeFormat.format(date)}`;
+  }
+
+  let next = null;
+  if (showError) next = MESSAGES.invalid;
+  else if (todo.completed) next = MESSAGES.done;
+  else if (!invalid && due <= Date.now()) next = MESSAGES.past;
+  else if (notificationsBlocked()) next = MESSAGES.blocked;
+  else if (Notification.permission === 'default') next = MESSAGES.ask;
+
+  if (next === null) {
+    hideMessage();
+  } else if (messageText.textContent !== next.text || message.hidden) {
+    // Only touch the live region when the message changes, so it isn't re-announced per keystroke.
+    message.className = `reminder-message is-${next.kind}`;
+    if (next === MESSAGES.invalid) message.setAttribute('role', 'alert');
+    else message.removeAttribute('role');
+    messageIcon.replaceChildren(icon(next.icon));
+    messageText.textContent = next.text;
+    message.hidden = false;
+  }
+}
+
+// --- Events --------------------------------------------------------------------------------
 
 input.addEventListener('input', syncAddButton);
 
@@ -336,22 +763,40 @@ filterBar.addEventListener('click', (event) => {
 list.addEventListener('change', (event) => {
   if (!event.target.matches('.todo-checkbox')) return;
   const { id } = event.target.closest('.todo').dataset;
-  update(toggleTodo(state, id), [key('checkbox', id)]);
+  const before = findTodo(id);
+  const next = toggleTodo(state, id, Date.now());
+  const after = next.find((todo) => todo.id === id);
+  fired.delete(id);
+  commit(next);
+  // A repeating todo moved to its next time and stays unchecked: say so.
+  if (!after.completed && after.due !== before.due) {
+    showBanner('info', `Done for now. “${after.text}” is next due ${formatDue(after.due, Date.now())}.`, ROLLOVER_MS);
+  }
+  check();
+  render([key('checkbox', id)]);
 });
 
 list.addEventListener('click', (event) => {
+  const row = event.target.closest('.todo');
+  if (!row) return;
+  const { id } = row.dataset;
+  // Any click on a just-fired row ends its highlight.
+  dismissFired(id);
+
   const button = event.target.closest('button');
   if (!button) return;
-  const { id } = button.closest('.todo').dataset;
   const { tag } = button.dataset;
 
   if (button.matches('.todo-delete')) {
-    update(removeTodo(state, id), rowFallbackKeys(id));
+    const keys = rowFallbackKeys(id);
+    commit(removeTodo(state, id));
+    check();
+    render(keys);
   } else if (button.matches('.tag-label')) {
     // If the row leaves the view, keep focus on the same tag in the filter bar.
     toggleFilter(tag, [key('tag', id, tag), key('filter', tag)]);
   } else if (button.matches('.tag-remove')) {
-    const tags = state.find((todo) => todo.id === id).tags;
+    const tags = findTodo(id).tags;
     const nextTag = tags[tags.indexOf(tag) + 1];
     update(removeTag(state, id, tag), [
       nextTag && key('tag', id, nextTag),
@@ -361,6 +806,11 @@ list.addEventListener('click', (event) => {
   } else if (button.matches('.tag-add')) {
     editingId = id;
     render([key('tag-field', id)]);
+  } else if (button.matches('.reminder-chip, .reminder-add')) {
+    if (reminderId === id) cancelEditor();
+    else openEditor(id);
+  } else if (button.matches('.reminder-got-it')) {
+    render([key('reminder', id)]);
   }
 });
 
@@ -382,6 +832,7 @@ list.addEventListener('keydown', (event) => {
       commit(next);
       closeTagField(id);
     } else {
+      field.value = ''; // added: the re-rendered field starts empty
       update(next, [key('tag-field', id)]);
     }
   }
@@ -398,3 +849,69 @@ list.addEventListener('focusout', (event) => {
   // Focus moving to another control stays there; focus moving nowhere goes back to "+ tag".
   renderSoon(event.relatedTarget ? undefined : tagControlKeys(id));
 });
+
+// Focus landing on a just-fired row (by Tab or click) ends its highlight.
+list.addEventListener('focusin', (event) => {
+  if (!rendering) dismissFired(event.target.closest('.todo')?.dataset.id);
+});
+
+// Esc ends every highlight (fields and the editor handle their own Esc first).
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || event.defaultPrevented || reminderId !== null || fired.size === 0) return;
+  fired.clear();
+  renderSoon();
+});
+
+bannerDismiss.addEventListener('click', () => {
+  hideBanner();
+  input.focus();
+});
+
+whenInput.addEventListener('input', () => {
+  reminderTouched = true;
+  syncEditor();
+});
+repeatSelect.addEventListener('change', syncEditor);
+saveButton.addEventListener('click', saveEditor);
+cancelButton.addEventListener('click', cancelEditor);
+removeButton.addEventListener('click', removeReminder);
+scrim.addEventListener('click', cancelEditor);
+
+editor.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    cancelEditor();
+  } else if (event.key === 'Enter' && event.target === whenInput) {
+    event.preventDefault();
+    saveEditor();
+  }
+});
+
+// Tab stays inside the editor and wraps: focus reaching an edge guard goes round to the other end.
+// Guards rather than a Tab key handler, because Tab also moves between the date field's parts.
+editorStart.addEventListener('focus', () => editorFocusables().at(-1).focus());
+editorEnd.addEventListener('focus', () => editorFocusables()[0].focus());
+
+// A press outside the popover cancels it (no blur-commit). The press itself goes on as usual, so
+// the render waits for the click (see `pressing`). Pressing the control that opened it toggles it shut.
+document.addEventListener('mousedown', (event) => {
+  if (reminderId === null || layer.contains(event.target)) return;
+  const opener = event.target.closest?.('.reminder-chip, .reminder-add');
+  if (opener && opener.closest('.todo').dataset.id === reminderId) return;
+  closeEditor();
+  renderSoon();
+}, true);
+
+window.addEventListener('resize', () => {
+  if (reminderId !== null) placeEditor();
+});
+
+// Catch up after the tab was hidden, the machine slept or the timer was throttled.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') check();
+});
+window.addEventListener('focus', check);
+
+// Start: missed reminders alert once, then the first render.
+check();
+render();

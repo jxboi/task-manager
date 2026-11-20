@@ -1,6 +1,21 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { addTodo, toggleTodo, removeTodo, addTag, removeTag, allTags, filterByTags } from '../src/todos.js';
+import {
+  addTodo,
+  toggleTodo,
+  removeTodo,
+  addTag,
+  removeTag,
+  allTags,
+  filterByTags,
+  setReminder,
+  clearReminder,
+  markNotified,
+  dueReminders,
+  nextFireTime,
+  sortByUrgency,
+} from '../src/todos.js';
+import { nextOccurrence } from '../src/reminders.js';
 
 function deepFreeze(todos) {
   for (const todo of todos) {
@@ -132,6 +147,25 @@ test('functions return new arrays and never mutate their input', () => {
   assert.notEqual(addedTag[2], tagged[2]);
   assert.notEqual(removedTag[0].tags, tagged[0].tags);
   assert.deepEqual(tagged, taggedSnapshot);
+
+  const reminders = makeReminders();
+  const remindersSnapshot = structuredClone(reminders);
+
+  const set = setReminder(reminders, 'none', NOW + HOUR, 'weekly');
+  const cleared = clearReminder(reminders, 'later');
+  const marked = markNotified(reminders, ['old', 'newer']);
+  const due = dueReminders(reminders, NOW);
+  nextFireTime(reminders, NOW);
+  const sorted = sortByUrgency(reminders, NOW);
+  const rolled = toggleTodo(reminders, 'daily', NOW);
+  const completed = toggleTodo(reminders, 'old', NOW);
+
+  for (const result of [set, cleared, marked, due, sorted, rolled, completed]) assert.notEqual(result, reminders);
+  assert.notEqual(set[1], reminders[1]);
+  assert.notEqual(cleared[0], reminders[0]);
+  assert.notEqual(marked[2], reminders[2]);
+  assert.notEqual(rolled[5], reminders[5]);
+  assert.deepEqual(reminders, remindersSnapshot);
 });
 
 test('ids are stable across toggle and remove', () => {
@@ -210,4 +244,200 @@ test('filterByTags with one tag returns the todos carrying it', () => {
 test('filterByTags with two tags returns todos with either (OR), each once, in order', () => {
   assert.deepEqual(ids(filterByTags(makeTagged(), ['home', 'work'])), ['a', 'b', 'c']);
   assert.deepEqual(ids(filterByTags(makeTagged(), ['blocked', 'work'])), ['a', 'b']);
+});
+
+// Reminders. Instants are plain numbers here; local wall-clock math is covered in reminders.test.js.
+const MINUTE = 60 * 1000;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+const NOW = Date.UTC(2026, 10, 20, 17); // a fixed "now"
+
+const none = { due: null, repeat: 'none', notified: null };
+
+function makeReminders() {
+  return deepFreeze([
+    { id: 'later', text: 'Upcoming', completed: false, createdAt: 1, tags: ['work'], due: NOW + HOUR, repeat: 'none', notified: null },
+    { id: 'none', text: 'No reminder', completed: false, createdAt: 2, tags: ['home'], ...none },
+    { id: 'newer', text: 'Overdue a little', completed: false, createdAt: 3, tags: ['home'], due: NOW - MINUTE, repeat: 'none', notified: null },
+    { id: 'done', text: 'Done, past due', completed: true, createdAt: 4, tags: ['work'], due: NOW - DAY, repeat: 'none', notified: null },
+    { id: 'old', text: 'Overdue a lot', completed: false, createdAt: 5, tags: ['work'], due: NOW - 3 * DAY, repeat: 'none', notified: null },
+    { id: 'daily', text: 'Water the plants', completed: false, createdAt: 6, tags: ['home'], due: NOW - 3 * DAY, repeat: 'daily', notified: NOW - 3 * DAY },
+    { id: 'soon', text: 'Very soon', completed: false, createdAt: 7, tags: [], due: NOW + MINUTE, repeat: 'weekly', notified: null },
+  ]);
+}
+
+test('addTodo gives a new todo no reminder', () => {
+  const [added] = addTodo([], 'Plain');
+  assert.equal(added.due, null);
+  assert.equal(added.repeat, 'none');
+  assert.equal(added.notified, null);
+});
+
+test('setReminder sets due and repeat on the matching todo only and resets notified', () => {
+  const todos = makeReminders();
+  const result = setReminder(todos, 'daily', NOW + DAY, 'weekly');
+  assert.deepEqual(result[5], { ...todos[5], due: NOW + DAY, repeat: 'weekly', notified: null });
+  assert.deepEqual(result.filter((todo) => todo.id !== 'daily'), todos.filter((todo) => todo.id !== 'daily'));
+
+  const added = setReminder(todos, 'none', NOW - HOUR, 'none');
+  assert.deepEqual(added[1], { ...todos[1], due: NOW - HOUR, repeat: 'none', notified: null });
+  assert.deepEqual(added[1].tags, ['home']);
+  assert.equal(added[1].text, 'No reminder');
+});
+
+test('setReminder re-arms an already alerted reminder, even with the same time', () => {
+  const todos = makeReminders();
+  assert.equal(setReminder(todos, 'daily', todos[5].due, 'daily')[5].notified, null);
+});
+
+test('setReminder ignores an unknown id, a bad due and a bad repeat', () => {
+  const todos = makeReminders();
+  assert.equal(setReminder(todos, 'missing', NOW, 'none'), todos);
+  for (const due of [NaN, Infinity, null, undefined, '1000', 1.5, 9e15]) {
+    assert.equal(setReminder(todos, 'none', due, 'none'), todos, String(due));
+  }
+  for (const repeat of ['monthly', undefined, null, '', 'Daily', 'toString']) {
+    assert.equal(setReminder(todos, 'none', NOW, repeat), todos, String(repeat));
+  }
+});
+
+test('clearReminder resets due, repeat and notified on the matching todo only', () => {
+  const todos = makeReminders();
+  const result = clearReminder(todos, 'daily');
+  assert.deepEqual(result[5], { ...todos[5], ...none });
+  assert.deepEqual(result.filter((todo) => todo.id !== 'daily'), todos.filter((todo) => todo.id !== 'daily'));
+  assert.equal(clearReminder(todos, 'missing'), todos);
+});
+
+test('markNotified sets notified = due for the listed ids only', () => {
+  const todos = makeReminders();
+  const result = markNotified(todos, ['old', 'newer']);
+  assert.equal(result[4].notified, todos[4].due);
+  assert.equal(result[2].notified, todos[2].due);
+  for (const index of [0, 1, 3, 5, 6]) assert.equal(result[index], todos[index]);
+  assert.equal(markNotified(todos, ['none'])[1].notified, null);
+});
+
+test('dueReminders returns overdue, un-alerted todos, most overdue first', () => {
+  const todos = makeReminders();
+  // 'daily' is overdue but already alerted; 'done' is completed; 'later', 'soon' are future; 'none' has none.
+  assert.deepEqual(ids(dueReminders(todos, NOW)), ['old', 'newer']);
+  assert.deepEqual(ids(dueReminders(markNotified(todos, ['old']), NOW)), ['newer']);
+  assert.deepEqual(ids(dueReminders(todos, NOW + HOUR)), ['old', 'newer', 'soon', 'later']);
+  assert.deepEqual(dueReminders(todos, NOW - 10 * DAY), []);
+  assert.deepEqual(dueReminders([], NOW), []);
+});
+
+test('dueReminders includes a todo due exactly now', () => {
+  assert.deepEqual(ids(dueReminders(makeReminders(), NOW + MINUTE)), ['old', 'newer', 'soon']);
+});
+
+test('nextFireTime is the smallest future due of an incomplete, un-alerted todo', () => {
+  const todos = makeReminders();
+  assert.equal(nextFireTime(todos, NOW), NOW + MINUTE);
+  assert.equal(nextFireTime(todos, NOW + MINUTE), NOW + HOUR);
+  assert.equal(nextFireTime(todos, NOW + HOUR), null);
+  assert.equal(nextFireTime([], NOW), null);
+});
+
+test('nextFireTime ignores completed, alerted, past and no-reminder todos', () => {
+  const base = { text: 'x', createdAt: 1, tags: [] };
+  const todos = deepFreeze([
+    { ...base, id: 'done', completed: true, due: NOW + MINUTE, repeat: 'none', notified: null },
+    { ...base, id: 'alerted', completed: false, due: NOW + 2 * MINUTE, repeat: 'none', notified: NOW + 2 * MINUTE },
+    { ...base, id: 'past', completed: false, due: NOW - MINUTE, repeat: 'daily', notified: null },
+    { ...base, id: 'none', completed: false, ...none },
+    { ...base, id: 'legacy', completed: false },
+  ]);
+  assert.equal(nextFireTime(todos, NOW), null);
+  assert.equal(nextFireTime([...todos, { ...base, id: 'later', completed: false, due: NOW + DAY, repeat: 'none', notified: null }], NOW), NOW + DAY);
+});
+
+test('sortByUrgency puts overdue todos first by due, and keeps everything else in order', () => {
+  const todos = makeReminders();
+  // Overdue: old (-3d), daily (-3d, created later so it stays after old), newer (-1m).
+  // Then the rest in their original order, including the completed one with a past due.
+  assert.deepEqual(ids(sortByUrgency(todos, NOW)), ['old', 'daily', 'newer', 'later', 'none', 'done', 'soon']);
+});
+
+test('sortByUrgency keeps ties in their original order and leaves the input unchanged', () => {
+  const base = { text: 'x', createdAt: 1, tags: [], completed: false, repeat: 'none', notified: null };
+  const todos = deepFreeze([
+    { ...base, id: 'b', due: NOW - HOUR },
+    { ...base, id: 'a', due: NOW - HOUR },
+    { ...base, id: 'c', due: NOW - 2 * HOUR },
+    { ...base, id: 'd', due: null },
+    { ...base, id: 'e', due: NOW + HOUR },
+  ]);
+  const snapshot = structuredClone(todos);
+  assert.deepEqual(ids(sortByUrgency(todos, NOW)), ['c', 'b', 'a', 'd', 'e']);
+  assert.deepEqual(todos, snapshot);
+});
+
+test('sortByUrgency with nothing overdue keeps the order; empty stays empty', () => {
+  const todos = makeReminders();
+  assert.deepEqual(ids(sortByUrgency(todos, NOW - 10 * DAY)), ids(todos));
+  assert.deepEqual(sortByUrgency([], NOW), []);
+  assert.deepEqual(ids(sortByUrgency(makeTodos(), NOW)), ['a', 'b', 'c']);
+});
+
+test('sortByUrgency after filterByTags keeps only the filtered todos, overdue first', () => {
+  const todos = makeReminders();
+  assert.deepEqual(ids(sortByUrgency(filterByTags(todos, ['work']), NOW)), ['old', 'later', 'done']);
+  assert.deepEqual(ids(sortByUrgency(filterByTags(todos, ['home']), NOW)), ['daily', 'newer', 'none']);
+});
+
+test('toggleTodo completing a daily todo advances due and leaves it uncompleted', () => {
+  const todos = makeReminders();
+  const result = toggleTodo(todos, 'daily', NOW);
+  const todo = result[5];
+  assert.equal(todo.completed, false);
+  assert.equal(todo.due, nextOccurrence(todos[5].due, 'daily', NOW));
+  assert.ok(todo.due > NOW);
+  assert.equal(todo.text, 'Water the plants');
+  assert.deepEqual(todo.tags, ['home']);
+  assert.equal(todo.repeat, 'daily');
+  assert.equal(todo.notified, todos[5].notified);
+  assert.notEqual(todo.notified, todo.due);
+  for (const index of [0, 1, 2, 3, 4, 6]) assert.equal(result[index], todos[index]);
+});
+
+test('toggleTodo completing a weekly todo early moves it a week on', () => {
+  const todos = makeReminders();
+  const todo = toggleTodo(todos, 'soon', NOW)[6];
+  assert.equal(todo.completed, false);
+  assert.equal(todo.due, NOW + MINUTE + 7 * DAY);
+  assert.equal(todo.due, nextOccurrence(NOW + MINUTE, 'weekly', NOW));
+});
+
+test('toggleTodo completing a non-repeating todo checks it and keeps its due', () => {
+  const todos = makeReminders();
+  const todo = toggleTodo(todos, 'old', NOW)[4];
+  assert.equal(todo.completed, true);
+  assert.equal(todo.due, todos[4].due);
+  assert.equal(todo.notified, todos[4].notified);
+  // Unchecking it again just uncompletes it.
+  assert.deepEqual(toggleTodo([todo], 'old', NOW)[0], todos[4]);
+});
+
+test('toggleTodo on a completed repeating todo uncompletes it without advancing', () => {
+  const todos = deepFreeze([{ ...makeReminders()[5], completed: true }]);
+  const [todo] = toggleTodo(todos, 'daily', NOW);
+  assert.equal(todo.completed, false);
+  assert.equal(todo.due, todos[0].due);
+});
+
+test('toggleTodo on a todo without a reminder flips completed as before', () => {
+  const todos = makeReminders();
+  assert.deepEqual(toggleTodo(todos, 'none', NOW)[1], { ...todos[1], completed: true });
+  assert.deepEqual(toggleTodo(makeTodos(), 'a', NOW)[0], { id: 'a', text: 'First', completed: true, createdAt: 1 });
+});
+
+test('toggleTodo defaults now to the current time', () => {
+  const due = Date.now() - DAY - HOUR;
+  const todos = deepFreeze([{ id: 'r', text: 'x', completed: false, createdAt: 1, tags: [], due, repeat: 'daily', notified: null }]);
+  const before = Date.now();
+  const [todo] = toggleTodo(todos, 'r');
+  assert.ok(todo.due > before);
+  assert.equal(todo.completed, false);
 });

@@ -1,4 +1,5 @@
 import { normalizeTags } from './tags.js';
+import { normalizeReminder } from './reminders.js';
 
 const KEY = 'task-manager.todos.v1';
 
@@ -19,12 +20,17 @@ function withTags(todo) {
   return { ...todo, tags: Array.isArray(todo.tags) ? normalizeTags(todo.tags) : [] };
 }
 
+// Todos saved before reminders existed get no reminder; junk reminder fields are dropped.
+function withReminder(todo) {
+  return { ...todo, ...normalizeReminder(todo) };
+}
+
 export function load() {
   try {
     const raw = globalThis.localStorage.getItem(KEY);
     if (raw === null) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter(isTodo).map(withTags) : [];
+    return Array.isArray(parsed) ? parsed.filter(isTodo).map(withTags).map(withReminder) : [];
   } catch {
     return [];
   }
