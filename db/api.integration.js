@@ -14,6 +14,7 @@ import { getServices } from '../server/auth.js';
 
 const testUrl = process.env.TEST_DATABASE_URL;
 const appOrigin = 'https://task-manager.test';
+const branchOrigin = 'https://task-manager-git-feature.test';
 const otherOrigin = 'https://other.test';
 const password = 'A disposable test password';
 const handlers = {
@@ -25,15 +26,16 @@ const handlers = {
 };
 
 async function request(path, {
-  method = 'GET', account, origin = appOrigin, csrf = account?.csrfToken,
+  method = 'GET', account, site = appOrigin, origin = site, csrf = account?.csrfToken,
+  ip = '192.0.2.1',
   body, contentType = 'application/json', pathname = new URL(path, appOrigin).pathname,
 } = {}) {
-  const headers = new Headers({ 'x-vercel-forwarded-for': '192.0.2.1' });
+  const headers = new Headers({ 'x-vercel-forwarded-for': ip });
   if (origin) headers.set('Origin', origin);
   if (account) headers.set('Cookie', account.cookie);
   if (csrf) headers.set('X-CSRF-Token', csrf);
   if (method !== 'GET' && contentType) headers.set('Content-Type', contentType);
-  const response = await handlers[pathname].fetch(new Request(new URL(path, appOrigin), {
+  const response = await handlers[pathname].fetch(new Request(new URL(path, site), {
     method, headers, body: body === undefined ? undefined : JSON.stringify(body),
   }));
   assert.equal(response.headers.get('cache-control'), 'no-store');
@@ -47,14 +49,14 @@ const remove = (account, id, revision) => request(`/api/todos?id=${id}&revision=
   method: 'DELETE', account,
 });
 
-async function authenticated(response, name, email) {
+async function authenticated(response, name, email, site = appOrigin) {
   assert.equal(response.status, 200, JSON.stringify(response.data));
   const value = response.headers.getSetCookie().find((item) => item.startsWith('__Secure-better-auth.session_token='));
   assert.ok(value);
   for (const flag of [/; Path=\//i, /; HttpOnly/i, /; Secure/i, /; SameSite=Lax/i]) assert.match(value, flag);
   assert.doesNotMatch(value, /; Domain=/i);
   const cookie = value.split(';')[0];
-  const active = await request('/api/session', { account: { cookie } });
+  const active = await request('/api/session', { site, account: { cookie } });
   assert.equal(active.status, 200);
   assert.deepEqual(active.data.user, { name, email });
   assert.match(active.data.csrfToken, /^[\w-]{43}$/);
@@ -85,6 +87,7 @@ test('auth and todo API against PostgreSQL', {
   });
   delete process.env.BETTER_AUTH_URL;
   process.env.VERCEL_URL = new URL(appOrigin).host;
+  process.env.VERCEL_BRANCH_URL = new URL(branchOrigin).host;
   process.env.BETTER_AUTH_SECRET = randomBytes(32).toString('hex');
   process.env.VERCEL_ENV = 'preview';
   delete process.env.DATABASE_URL;
@@ -131,6 +134,18 @@ test('auth and todo API against PostgreSQL', {
     const badMethod = await request('/api/todos', { method: 'PUT' });
     assert.equal(badMethod.status, 405);
     assert.equal(badMethod.headers.get('allow'), 'GET, POST, PATCH, DELETE');
+  });
+
+  await t.test('serves auth and todo mutations on the exact Preview branch origin', async () => {
+    const site = { site: branchOrigin, ip: '192.0.2.2' };
+    const user = { name: 'Branch User', email: 'branch@example.test', password };
+    const account = await authenticated(await post(signupPath, user, site), user.name, user.email, branchOrigin);
+    const todo = { id: randomUUID(), text: 'Branch todo', tags: [] };
+    assert.equal((await post('/api/todos', todo, { ...site, account })).status, 201);
+    assert.equal((await post('/api/todos', todo, { ...site, account, origin: appOrigin })).status, 403);
+    assert.equal((await post('/api/todos', todo, { ...site, account, site: otherOrigin, origin: branchOrigin })).status, 403);
+    assert.equal((await post(signoutPath, {}, { ...site, account })).status, 200);
+    await authenticated(await post(signinPath, { email: user.email, password }, site), user.name, user.email, branchOrigin);
   });
 
   await t.test('isolates reads, writes, tags and reminders between two users', async () => {
