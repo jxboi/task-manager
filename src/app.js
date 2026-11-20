@@ -64,8 +64,13 @@ const INVALID_FLASH_MS = 400;
 const ROLLOVER_MS = 6000;
 const MAX_DELAY = 2 ** 31 - 1; // setTimeout's limit (about 24.8 days); check() re-arms when it fires
 const sheetQuery = window.matchMedia('(max-width: 639px), (hover: none)');
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+const PULSE_MS = 2 * 1200; // the fired row's 2 pulses (styles.css reminder-pulse)
+const NOTE_DISMISSED_KEY = 'task-manager.blocked-note-dismissed';
 
 const BLOCKED_TEXT = 'Notifications are blocked or unavailable. Due tasks will be highlighted on this page.';
+// The list-level note: short enough for one line at 375px (the editor keeps the longer BLOCKED_TEXT).
+const NOTE_TEXT = 'Notifications off. Reminders show only here.';
 const MESSAGES = {
   invalid: { kind: 'error', icon: alertIcon, text: 'Enter a valid date and time.' },
   done: { kind: 'warn', icon: infoIcon, text: "This task is done, so its reminder won't alert. Uncheck it to turn alerts back on." },
@@ -85,7 +90,8 @@ let editingId = null; // todo whose "+ tag" field is open
 let reminderId = null; // todo whose reminder editor is open
 let reminderTouched = false; // the date field was changed, or Save tried: show its error
 let sheetMode = null; // editor layout last applied: true = bottom sheet, false = popover
-const fired = new Map(); // todo id -> when its "just fired" highlight started (performance.now())
+const fired = new Map(); // todo id -> when its "just fired" pulse started (performance.now())
+let noteDismissed = readNoteDismissed(); // the blocked-notifications note, for this session
 
 let rendering = false;
 let renderPending = false;
@@ -297,7 +303,7 @@ function renderReminderAdd(todo) {
   return button;
 }
 
-// The due chip. Overdue is said in words (the "Overdue" flag and the name), not only by color.
+// The due chip. Overdue is said in words ("Overdue · …" and the name), not only by color.
 function renderReminderChip(todo, overdue, now) {
   const when = formatDue(todo.due, now);
   const repeats = todo.repeat === 'none' ? '' : `, repeats ${todo.repeat}`;
@@ -311,17 +317,10 @@ function renderReminderChip(todo, overdue, now) {
     `${overdue ? `Overdue, was due ${when}` : `Reminder ${when}`}${repeats}. Edit reminder for “${todo.text}”`,
   );
 
-  if (overdue) {
-    const flag = document.createElement('span');
-    flag.className = 'reminder-flag';
-    flag.append(icon(alertIcon), 'Overdue');
-    button.append(flag);
-  } else {
-    button.append(icon(bellIcon));
-  }
+  button.append(icon(overdue ? alertIcon : bellIcon));
   const text = document.createElement('span');
   text.className = 'reminder-when';
-  text.textContent = when;
+  text.textContent = overdue ? `Overdue · ${when}` : when;
   button.append(text);
 
   if (todo.repeat !== 'none') {
@@ -333,15 +332,6 @@ function renderReminderChip(todo, overdue, now) {
     repeat.append(icon(repeatIcon), label);
     button.append(repeat);
   }
-  return button;
-}
-
-function renderGotIt(todo) {
-  const button = withKey(document.createElement('button'), 'got-it', todo.id);
-  button.type = 'button';
-  button.className = 'reminder-got-it';
-  button.setAttribute('aria-label', `Got it, dismiss highlight for “${todo.text}”`);
-  button.textContent = 'Got it';
   return button;
 }
 
@@ -377,7 +367,6 @@ function renderTodo(todo, now, tagDraft) {
     const meta = document.createElement('div');
     meta.className = 'todo-meta';
     meta.append(renderReminderChip(todo, overdue, now));
-    if (fired.has(todo.id)) meta.append(renderGotIt(todo));
     body.append(meta);
   }
 
@@ -416,10 +405,13 @@ function render(focusKeys) {
   renderPending = false;
   pendingFocus = undefined;
 
-  // A highlight ends once its todo is no longer overdue (completed, rolled over, changed, deleted).
-  for (const id of fired.keys()) {
+  // A highlight ends once its todo is no longer overdue (completed, rolled over, changed, deleted),
+  // and once its pulses are over (animationend normally clears it first).
+  // Under reduced motion nothing pulses, so nothing stays fired.
+  const pulseNow = performance.now();
+  for (const [id, started] of fired) {
     const todo = findTodo(id);
-    if (!todo || !isOverdue(todo, now)) fired.delete(id);
+    if (reducedMotion.matches || !todo || !isOverdue(todo, now) || pulseNow - started >= PULSE_MS) fired.delete(id);
   }
   // The todo being edited was deleted: close its editor.
   if (reminderId !== null && !findTodo(reminderId)) closeEditor();
@@ -542,8 +534,11 @@ function check() {
   const ready = dueReminders(state, now);
   if (ready.length > 0) {
     notify(ready);
-    const started = performance.now();
-    for (const todo of ready) fired.set(todo.id, started);
+    // The pulse is the whole highlight: with reduced motion the row is simply overdue.
+    if (!reducedMotion.matches) {
+      const started = performance.now();
+      for (const todo of ready) fired.set(todo.id, started);
+    }
     commit(markNotified(state, ready.map((todo) => todo.id)));
   }
   // Overdue marks and order depend on the time, so re-render even when nothing fired.
@@ -604,9 +599,9 @@ function showBanner(kind, text, clearAfter) {
   clearTimeout(bannerTimer);
   announcer.textContent = ''; // so a banner change can't re-read an earlier alert
   banner.className = `banner is-${kind}`;
-  bannerIcon.replaceChildren(icon(kind === 'warn' ? infoIcon : repeatIcon));
+  bannerIcon.replaceChildren(icon(kind === 'note' ? infoIcon : repeatIcon));
   bannerText.textContent = text;
-  bannerDismiss.hidden = kind !== 'warn';
+  bannerDismiss.hidden = kind !== 'note';
   banner.hidden = false;
   if (clearAfter) bannerTimer = setTimeout(hideBanner, clearAfter);
 }
@@ -617,8 +612,37 @@ function hideBanner() {
   bannerText.textContent = '';
 }
 
+function readNoteDismissed() {
+  try {
+    return globalThis.sessionStorage.getItem(NOTE_DISMISSED_KEY) === '1';
+  } catch {
+    return false; // storage unavailable: the in-memory flag still holds for this page
+  }
+}
+
+function dismissNote() {
+  noteDismissed = true;
+  hideBanner();
+  try {
+    globalThis.sessionStorage.setItem(NOTE_DISMISSED_KEY, '1');
+  } catch {
+    // Kept in memory only.
+  }
+}
+
+// Ends a highlight on the existing row, without a render: a render would replace an open
+// "+ tag" field (in any row) and lose its caret and selection.
 function dismissFired(id) {
-  if (fired.delete(id)) renderSoon();
+  if (!fired.delete(id)) return;
+  const row = [...list.children].find((item) => item.dataset.id === id);
+  if (row) {
+    row.classList.remove('is-fired');
+    row.style.animationDelay = '';
+  }
+}
+
+function dismissAllFired() {
+  for (const id of [...fired.keys()]) dismissFired(id);
 }
 
 // --- Reminders: editor ---------------------------------------------------------------------
@@ -672,8 +696,9 @@ function saveEditor() {
   const repeat = repeatSelect.value;
   requestPermission();
   closeEditor(); // first: the sheet makes the status line inert
-  if (notificationsBlocked()) showBanner('warn', BLOCKED_TEXT);
-  else if (!banner.hidden && banner.classList.contains('is-warn')) hideBanner();
+  // The blocked note, until dismissed: then it stays hidden for the session, even on later Saves.
+  if (notificationsBlocked() && !noteDismissed) showBanner('note', NOTE_TEXT);
+  else if (!banner.hidden && banner.classList.contains('is-note')) hideBanner();
   fired.delete(id);
   commit(setReminder(state, id, due, repeat));
   check(); // a time already past alerts right away; otherwise this re-arms the timer
@@ -830,7 +855,7 @@ list.addEventListener('click', (event) => {
   const row = event.target.closest('.todo');
   if (!row) return;
   const { id } = row.dataset;
-  // Any click on a just-fired row ends its highlight.
+  // Any tap or click on a just-fired row ends its highlight.
   dismissFired(id);
 
   const button = event.target.closest('button');
@@ -859,8 +884,6 @@ list.addEventListener('click', (event) => {
   } else if (button.matches('.reminder-chip, .reminder-add')) {
     if (reminderId === id) cancelEditor();
     else openEditor(id);
-  } else if (button.matches('.reminder-got-it')) {
-    render([key('reminder', id)]);
   }
 });
 
@@ -905,15 +928,25 @@ list.addEventListener('focusin', (event) => {
   if (!rendering) dismissFired(event.target.closest('.todo')?.dataset.id);
 });
 
-// Esc ends every highlight (fields and the editor handle their own Esc first).
+// Esc ends every highlight. Capture phase, so it also runs when a "+ tag" field or the reminder
+// editor uses the same Esc to close (they still do; this neither stops nor prevents the event).
 document.addEventListener('keydown', (event) => {
-  if (event.key !== 'Escape' || event.defaultPrevented || reminderId !== null || fired.size === 0) return;
-  fired.clear();
-  renderSoon();
+  if (event.key === 'Escape') dismissAllFired();
+}, true);
+
+// Reduced motion turned on mid-pulse: CSS drops the animation without an animationend.
+reducedMotion.addEventListener('change', () => {
+  if (reducedMotion.matches) dismissAllFired();
+});
+
+// The end of the 2 pulses ends the highlight.
+list.addEventListener('animationend', (event) => {
+  if (event.animationName === 'reminder-pulse') dismissFired(event.target.closest('.todo')?.dataset.id);
 });
 
 bannerDismiss.addEventListener('click', () => {
-  hideBanner();
+  if (banner.classList.contains('is-note')) dismissNote();
+  else hideBanner();
   input.focus();
 });
 
