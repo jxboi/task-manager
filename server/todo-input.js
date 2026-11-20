@@ -1,4 +1,4 @@
-import { isOverdue, normalizeReminder, REPEATS } from '../src/reminders.js';
+import { isCompleted, isOverdue, normalizeReminder, REPEATS } from '../src/reminders.js';
 import { MAX_TAGS, normalizeTag, normalizeTags } from '../src/tags.js';
 import { addTag, clearReminder, markNotified, removeTag, setReminder } from '../src/todos.js';
 import { invalid, RequestError } from './http.js';
@@ -45,13 +45,15 @@ function readDue(value) {
   return due;
 }
 
-function complete(todo, { completed, due }) {
+function complete(todo, { completed, due, completedUntil = null }) {
   if (typeof completed !== 'boolean') throw invalid('Provide a completion state.');
   if (due !== null) readDue(due);
-  if (completed === !todo.completed && due === todo.due) return { ...todo, completed };
-  if (!todo.completed && !completed && todo.repeat !== 'none' && todo.due !== null &&
-      due !== null && due > todo.due) {
-    return { ...todo, due, notified: null };
+  if (completed !== isCompleted(todo, Date.now())) {
+    if (completedUntil === null && due === todo.due) return { ...todo, completed, completedUntil };
+    if (completed && todo.repeat !== 'none' && todo.due !== null &&
+        due !== null && due >= todo.due && completedUntil !== null && readDue(completedUntil) <= due) {
+      return { ...todo, completed, completedUntil, due, notified: due === todo.due ? todo.notified : null };
+    }
   }
   throw invalid('Invalid completion or reminder change.');
 }
@@ -84,7 +86,7 @@ export function patchTodo(todo, body) {
       checkFields(body, base);
       return todo.due === null ? todo : clearReminder(items, id)[0];
     case 'complete':
-      checkFields(body, [...base, 'completed', 'due']);
+      checkFields(body, [...base, 'completed', 'due', 'completedUntil']);
       return complete(todo, body);
     case 'markNotified':
       checkFields(body, [...base, 'due']);

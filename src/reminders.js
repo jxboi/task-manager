@@ -20,9 +20,23 @@ export function normalizeReminder(raw) {
   return { due, repeat, notified };
 }
 
+// A repeating completion expires at the start of the next occurrence's local day.
+// Rows without a cutoff keep their ordinary completion state.
+export function isCompleted(todo, now) {
+  return todo.completed && (todo.completedUntil == null || now < todo.completedUntil);
+}
+
 // Derived, never stored.
 export function isOverdue(todo, now) {
-  return !todo.completed && typeof todo.due === 'number' && todo.due <= now;
+  return !isCompleted(todo, now) && typeof todo.due === 'number' && todo.due <= now;
+}
+
+export function nextReminderAfterToday(due, repeat, now) {
+  if (!Object.hasOwn(PERIOD_DAYS, repeat) || !isInstant(due)) return null;
+  const tomorrow = new Date(now).setHours(24, 0, 0, 0);
+  const endOfToday = Number.isNaN(tomorrow) ? now : tomorrow - 1;
+  // After undoing a completion, the next occurrence is already scheduled.
+  return due > endOfToday ? due : nextOccurrence(due, repeat, endOfToday);
 }
 
 // First occurrence strictly after both `due` and `now`, stepping whole local days from `due` so the
