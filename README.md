@@ -62,7 +62,26 @@ npm ci
 node --env-file=/path/outside/the/site/.env.local db/migrate.js
 ```
 
-If `DATABASE_URL_UNPOOLED` is already exported, run `npm run db:migrate` instead. Use the direct connection for the runner’s session advisory lock, and keep the TLS options from the Neon URL. Apply migrations separately from deployments and request handling. Migrate the actual Preview branch before testing it and the Production target before merging the first release that uses the database. [Neon connection pooling](https://neon.com/docs/connect/connection-pooling)
+If `DATABASE_URL_UNPOOLED` is already exported, run `npm run db:migrate` instead. Use the direct connection for the runner’s session advisory lock, and keep the TLS options from the Neon URL. [Neon connection pooling](https://neon.com/docs/connect/connection-pooling)
+
+### Release steps
+
+Migrations run automatically in the Vercel build (`npm run build`, wired in `vercel.json`); there is no manual "migrate before merging" step.
+
+- **Production** (`VERCEL_ENV=production`): the build applies pending migrations with `DATABASE_URL_UNPOOLED` before copying the site. Any failure fails the build, so the new code never deploys. Concurrent builds are serialized by the advisory lock.
+- **Preview** (`VERCEL_ENV=preview`): Preview shares the Production database, so the build only reports pending migrations as a warning. It never writes, and never fails the build. A preview of a PR that adds a migration will error on the new columns until it merges and the Production build applies it.
+- **Local** (none of `VERCEL`, `CI` or `VERCEL_ENV` set): the build step does nothing. Use `npm run db:migrate` explicitly.
+- **Any hosted build** (`VERCEL` or `CI` set) with a missing or unknown `VERCEL_ENV` fails the build rather than skipping migrations. A CI job that runs `npm run build` must set `VERCEL_ENV=preview` (check only, never fails the build) or avoid the build script.
+
+Build logs show only the stage, the migration filename and the SQLSTATE code on failure, never the database error text or URL.
+
+`DATABASE_URL_UNPOOLED` must be available to the Production and Preview build environments.
+
+Migrations must be additive and backward compatible (add nullable or defaulted columns and new tables; never drop, rename or tighten anything in the same release). The previous deployment keeps serving against the migrated database during the deploy and after a rollback. Remove or rename in a later release, once no running version uses it. 
+
+Some releases skip the build and so skip migrations: instant rollback, staged promotion that reuses an existing build, and `vercel deploy --prebuilt`. (A standard Preview-to-Production promotion rebuilds with Production environment variables, so it does migrate.) As a safety net, the API checks once per function instance that every file in `db/migrations` is recorded in `schema_migrations`, using its existing database connection and reading only. If any are missing, every DB-backed API route returns `503 SCHEMA_OUT_OF_DATE` naming the missing filenames, instead of a 500 from a missing column. A passing check is cached, so there is no per-request query. The migration files are bundled with the functions through `functions.includeFiles` in `vercel.json`. After a buildless release, run `npm run db:migrate` with the Production `DATABASE_URL_UNPOOLED`.
+
+Migration files must not contain their own `BEGIN` or `COMMIT`: the runner wraps each file and its ledger row in one transaction, and a nested `COMMIT` would break that atomicity. Every `.sql` file in `db/migrations` must be named `NNNN_name.sql`; any other `.sql` name is an error.
 
 The runner records each file in `schema_migrations` in the same transaction as its SQL. A repeat run applies only pending files. Append changes as new four-digit numbered SQL files and leave previously applied files intact. The initial auth schema was checked against Better Auth and its CLI at version 1.7.26 with PostgreSQL and database-backed rate limiting. [Better Auth PostgreSQL adapter](https://better-auth.com/docs/adapters/postgresql)
 
@@ -102,7 +121,10 @@ src/auth.js         sign-in, sign-up and sign-out UI and session checks
 src/app.js          DOM wiring and rendering, the reminder timer and notifications
 test/               node:test unit tests
 db/migrations/      numbered PostgreSQL schema migrations
-db/migrate.js       migration runner
+db/migrate.js       `npm run db:migrate` CLI
+db/runner.js        migration runner (apply and check-only modes)
+server/schema-guard.js  runtime check that all migrations are applied (503 if not)
+db/build-migrate.js build-time step: apply on Production, report on Preview
 db/*.integration.js PostgreSQL migration and API tests
 api/                Vercel Function entry points
 server/             Better Auth configuration, API logic and local HTTP server

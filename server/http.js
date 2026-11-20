@@ -1,3 +1,4 @@
+import { assertSchemaCurrent } from './schema-guard.js';
 import { getServices, getSession, validCsrf } from './auth.js';
 
 export class RequestError extends Error {
@@ -55,7 +56,9 @@ export function endpoint(methods, handle, { authErrors = false } = {}) {
         response.headers.set('Allow', methods.join(', '));
       } else {
         try {
-          response = await handle(request, getServices());
+          const services = getServices();
+          await assertSchemaCurrent(services.pool);
+          response = await handle(request, services);
         } catch (error) {
           if (error instanceof RequestError) {
             response = errorResponse(error.status, error.code, error.message);
