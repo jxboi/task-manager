@@ -6,6 +6,7 @@
     "test": "node --test",
     "test:db": "node --test db/*.integration.js",
     "db:migrate": "node db/migrate.js",
+    "build": "node db/build-migrate.js && mkdir -p dist && cp index.html styles.css dist/ && cp -R src dist/",
     "dev": "node server/dev.js"
   },
   "dependencies": {

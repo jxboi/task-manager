@@ -1,6 +1,6 @@
 {
   "framework": null,
-  "buildCommand": "mkdir -p dist && cp index.html styles.css dist/ && cp -R src dist/",
+  "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "regions": ["iad1"]
 }

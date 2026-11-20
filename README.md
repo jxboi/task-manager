@@ -62,7 +62,19 @@ npm ci
 node --env-file=/path/outside/the/site/.env.local db/migrate.js
 ```
 
-If `DATABASE_URL_UNPOOLED` is already exported, run `npm run db:migrate` instead. Use the direct connection for the runner’s session advisory lock, and keep the TLS options from the Neon URL. Apply migrations separately from deployments and request handling. Migrate the actual Preview branch before testing it and the Production target before merging the first release that uses the database. [Neon connection pooling](https://neon.com/docs/connect/connection-pooling)
+If `DATABASE_URL_UNPOOLED` is already exported, run `npm run db:migrate` instead. Use the direct connection for the runner’s session advisory lock, and keep the TLS options from the Neon URL. [Neon connection pooling](https://neon.com/docs/connect/connection-pooling)
+
+### Release steps
+
+Migrations run automatically in the Vercel build (`npm run build`, wired in `vercel.json`); there is no manual "migrate before merging" step.
+
+- **Production** (`VERCEL_ENV=production`): the build applies pending migrations with `DATABASE_URL_UNPOOLED` before copying the site. Any failure fails the build, so the new code never deploys. Concurrent builds are serialized by the advisory lock.
+- **Preview** (`VERCEL_ENV=preview`): Preview shares the Production database, so the build only reports pending migrations as a warning. It never writes, and never fails the build. A preview of a PR that adds a migration will error on the new columns until it merges and the Production build applies it.
+- **Local and CI** (no `VERCEL_ENV`): the build step does nothing. Use `npm run db:migrate` explicitly.
+
+`DATABASE_URL_UNPOOLED` must be available to the Production and Preview build environments.
+
+Migrations must be additive and backward compatible (add nullable or defaulted columns and new tables; never drop, rename or tighten anything in the same release). The previous deployment keeps serving against the migrated database during the deploy and after a rollback. Remove or rename in a later release, once no running version uses it. Promoting a Preview build to Production, or an instant rollback, does not run a build, so it does not run migrations.
 
 The runner records each file in `schema_migrations` in the same transaction as its SQL. A repeat run applies only pending files. Append changes as new four-digit numbered SQL files and leave previously applied files intact. The initial auth schema was checked against Better Auth and its CLI at version 1.7.26 with PostgreSQL and database-backed rate limiting. [Better Auth PostgreSQL adapter](https://better-auth.com/docs/adapters/postgresql)
 
@@ -102,7 +114,9 @@ src/auth.js         sign-in, sign-up and sign-out UI and session checks
 src/app.js          DOM wiring and rendering, the reminder timer and notifications
 test/               node:test unit tests
 db/migrations/      numbered PostgreSQL schema migrations
-db/migrate.js       migration runner
+db/migrate.js       `npm run db:migrate` CLI
+db/runner.js        migration runner (apply and check-only modes)
+db/build-migrate.js build-time step: apply on Production, report on Preview
 db/*.integration.js PostgreSQL migration and API tests
 api/                Vercel Function entry points
 server/             Better Auth configuration, API logic and local HTTP server
