@@ -133,10 +133,16 @@
       <div class="reminder-editor" id="reminder-editor" role="dialog">
         <span class="reminder-edge" id="reminder-start" tabindex="0"></span>
         <div class="reminder-grab" aria-hidden="true"></div>
-        <h2 class="reminder-title">Reminder</h2>
+        <h2 class="reminder-title" id="reminder-title">Reminder</h2>
         <p class="reminder-for" id="reminder-for"></p>
+        <div class="reminder-field" id="edit-text-field" hidden>
+          <label class="reminder-label" for="edit-text">Task</label>
+          <input class="reminder-control" id="edit-text" type="text" autocomplete="off" enterkeyhint="done"
+            aria-describedby="edit-text-hint">
+          <p class="reminder-help" id="edit-text-hint">Add tags with <code>#</code>, like <code>Pay rent #home</code></p>
+        </div>
         <div class="reminder-field">
-          <label class="reminder-label" for="reminder-when">Date and time</label>
+          <label class="reminder-label" for="reminder-when" id="reminder-when-label">Date and time</label>
           <input class="reminder-control" id="reminder-when" type="datetime-local">
         </div>
         <div class="reminder-field">
@@ -170,6 +176,12 @@
     <template id="trash-icon">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
         <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/>
+      </svg>
+    </template>
+
+    <template id="pencil-icon">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+        <path d="M17 3l4 4L8 20l-5 1 1-5L17 3z"/>
       </svg>
     </template>
 

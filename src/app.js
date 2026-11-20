@@ -1,5 +1,6 @@
 import {
   addTodo,
+  editTodo,
   toggleTodo,
   addTag,
   allTags,
@@ -12,6 +13,7 @@ import { MAX_TAGS, normalizeTag, parseTodoInput, tagColor } from './tags.js';
 import { isOverdue, parseLocalInput, toLocalInput } from './reminders.js';
 import * as api from './storage.js';
 import { createSync } from './sync.js';
+import { formatTaskInput, readTaskInput } from './task-input.js';
 import { popoverTop } from './popover.js';
 
 const app = document.querySelector('.app');
@@ -37,6 +39,10 @@ const layer = document.getElementById('reminder-layer');
 const scrim = document.getElementById('reminder-scrim');
 const editor = document.getElementById('reminder-editor');
 const editorFor = document.getElementById('reminder-for');
+const editorTitle = document.getElementById('reminder-title');
+const textField = document.getElementById('edit-text-field');
+const textInput = document.getElementById('edit-text');
+const whenLabel = document.getElementById('reminder-when-label');
 const whenInput = document.getElementById('reminder-when');
 const repeatSelect = document.getElementById('reminder-repeat');
 const repeatHelp = document.getElementById('reminder-repeat-help');
@@ -50,6 +56,7 @@ const removeButton = document.getElementById('reminder-remove');
 const cancelButton = document.getElementById('reminder-cancel');
 const saveButton = document.getElementById('reminder-save');
 const trashIcon = document.getElementById('trash-icon');
+const pencilIcon = document.getElementById('pencil-icon');
 const xIcon = document.getElementById('x-icon');
 const bellIcon = document.getElementById('bell-icon');
 const repeatIcon = document.getElementById('repeat-icon');
@@ -76,6 +83,9 @@ const BLOCKED_TEXT = 'Notifications are blocked or unavailable. Due tasks will b
 const NOTE_TEXT = 'Notifications off. Reminders show only here.';
 const MESSAGES = {
   invalid: { kind: 'error', icon: alertIcon, text: 'Enter a valid date and time.' },
+  // The edit form's title, by readTaskInput's error (the rule that also disables Add).
+  empty: { kind: 'error', icon: alertIcon, text: 'Enter a task title.' },
+  long: { kind: 'error', icon: alertIcon, text: 'Keep the title to 2,000 characters or fewer.' },
   done: { kind: 'warn', icon: infoIcon, text: "This task is done, so its reminder won't alert. Uncheck it to turn alerts back on." },
   past: { kind: 'warn', icon: infoIcon, text: 'That time has passed. Saving will mark this task overdue and alert right away.' },
   blocked: { kind: 'warn', icon: infoIcon, text: BLOCKED_TEXT },
@@ -113,8 +123,11 @@ const openNotifications = new Set(); // closed when the session ends
 // View state: never saved, never in the URL.
 let activeTags = []; // A to Z
 let editingId = null; // todo whose "+ tag" field is open
-let reminderId = null; // todo whose reminder editor is open
-let reminderTouched = false; // the date field was changed, or Save tried: show its error
+let reminderId = null; // todo whose editor is open
+// 'reminder': the reminder editor (date and repeat). 'task': the edit form, the same editor with
+// the task's title and tags field above, where an empty date means no reminder.
+let editorMode = 'reminder';
+let reminderTouched = false; // a field was changed, or Save tried: show its error
 let sheetMode = null; // editor layout last applied: true = bottom sheet, false = popover
 const fired = new Map(); // todo id -> when its "just fired" pulse started (performance.now())
 let noteDismissed = readNoteDismissed(); // the blocked-notifications note, for this session
@@ -326,13 +339,15 @@ function renderTagControl(todo, tagDraft) {
   return button;
 }
 
+const reminderOpen = (id) => reminderId === id && editorMode === 'reminder';
+
 function renderReminderAdd(todo) {
   const button = withKey(document.createElement('button'), 'add-reminder', todo.id);
   button.type = 'button';
   button.className = 'reminder-add';
   button.setAttribute('aria-label', `Add reminder to “${todo.text}”`);
   button.setAttribute('aria-haspopup', 'dialog');
-  button.setAttribute('aria-expanded', String(reminderId === todo.id));
+  button.setAttribute('aria-expanded', String(reminderOpen(todo.id)));
   button.append(icon(bellIcon), '+ reminder');
   return button;
 }
@@ -345,7 +360,7 @@ function renderReminderChip(todo, overdue, now) {
   button.type = 'button';
   button.className = overdue ? 'reminder-chip is-overdue' : 'reminder-chip';
   button.setAttribute('aria-haspopup', 'dialog');
-  button.setAttribute('aria-expanded', String(reminderId === todo.id));
+  button.setAttribute('aria-expanded', String(reminderOpen(todo.id)));
   button.setAttribute(
     'aria-label',
     `${overdue ? `Overdue, was due ${when}` : `Reminder ${when}`}${repeats}. Edit reminder for “${todo.text}”`,
@@ -420,7 +435,20 @@ function renderTodo(todo, now, tagDraft) {
   deleteButton.setAttribute('aria-label', `Delete “${todo.text}”`);
   deleteButton.append(icon(trashIcon));
 
-  item.append(checkbox, body, deleteButton);
+  // Opens the edit form (the editor in 'task' mode), prefilled with this task.
+  const editButton = withKey(document.createElement('button'), 'edit', todo.id);
+  editButton.type = 'button';
+  editButton.className = 'todo-edit';
+  editButton.setAttribute('aria-label', `Edit “${todo.text}”`);
+  editButton.setAttribute('aria-haspopup', 'dialog');
+  editButton.setAttribute('aria-expanded', String(reminderId === todo.id && editorMode === 'task'));
+  editButton.append(icon(pencilIcon));
+
+  const actionsGroup = document.createElement('div');
+  actionsGroup.className = 'todo-actions';
+  actionsGroup.append(editButton, deleteButton);
+
+  item.append(checkbox, body, actionsGroup);
   return item;
 }
 
@@ -559,9 +587,10 @@ function rejectTag(field) {
   }, INVALID_FLASH_MS);
 }
 
-// Same parse as submit: with the active filter tags, which can push a #tag back into the title.
+// Same parse and check as submit (and the edit form): with the active filter tags, which can push
+// a #tag back into the title.
 function syncAddButton() {
-  addButton.disabled = phase !== 'ready' || parseTodoInput(input.value, activeTags).text === '';
+  addButton.disabled = phase !== 'ready' || readTaskInput(input.value, activeTags).error !== null;
 }
 
 // --- Reminders: alerting -------------------------------------------------------------------
@@ -721,20 +750,32 @@ function dismissAllFired() {
 
 // --- Reminders: editor ---------------------------------------------------------------------
 
-function openEditor(id) {
+// `mode` 'task' opens the edit form: the same editor, prefilled with the task's title and tags
+// (as the add field would take them), its reminder and its repeat.
+function openEditor(id, mode = 'reminder') {
   const todo = findTodo(id);
+  const task = mode === 'task';
   reminderId = id;
+  editorMode = mode;
   reminderTouched = false;
+  editorTitle.textContent = task ? 'Edit task' : 'Reminder';
   editorFor.textContent = todo.text;
-  editor.setAttribute('aria-label', `Reminder for “${todo.text}”`);
+  editorFor.hidden = task; // the Task field shows it
+  editor.setAttribute('aria-label', task ? `Edit “${todo.text}”` : `Reminder for “${todo.text}”`);
+  textField.hidden = !task;
+  textInput.value = task ? formatTaskInput(todo) : '';
+  whenLabel.textContent = task ? 'Reminder' : 'Date and time';
   whenInput.value = todo.due === null ? '' : toLocalInput(todo.due);
   repeatSelect.value = todo.repeat;
-  removeButton.hidden = todo.due === null;
+  // In the edit form an emptied date removes the reminder on Save, so there is no Remove button.
+  removeButton.hidden = task || todo.due === null;
   layer.hidden = false;
   render(); // the opener shows aria-expanded; render places the editor
   syncEditor();
   // The popover is placed to fit; focusing it never scrolls the page.
-  whenInput.focus({ preventScroll: true });
+  const first = task ? textInput : whenInput;
+  first.focus({ preventScroll: true });
+  if (task) first.setSelectionRange?.(first.value.length, first.value.length);
 }
 
 // Hides the editor without rendering; callers render (or renderSoon) with their focus.
@@ -746,18 +787,25 @@ function closeEditor() {
   hideMessage();
 }
 
-function openerKeys(id) {
+// Where focus goes back to when the editor closes: the control that opened it, in its row.
+function openerKeys(id, mode = editorMode) {
   const todo = findTodo(id);
+  if (mode === 'task') return [key('edit', id), key('checkbox', id)];
   return todo && todo.due !== null ? [key('reminder', id)] : [key('add-reminder', id), key('checkbox', id)];
 }
 
 function cancelEditor() {
   const id = reminderId;
+  const mode = editorMode;
   closeEditor();
-  render(openerKeys(id));
+  render(openerKeys(id, mode));
 }
 
 function saveEditor() {
+  if (editorMode === 'task') {
+    saveTaskEditor();
+    return;
+  }
   const due = editorDue();
   if (due === null) {
     // Save is aria-disabled: a no-op that shows why.
@@ -776,6 +824,46 @@ function saveEditor() {
   fired.delete(id);
   saveReminder(id, due, repeat);
   render(openerKeys(id));
+}
+
+// The edit form's Save: one write with the title, tags and reminder, shown at once and rolled back
+// if the server refuses it (a 409 reloads and says the task changed in another tab).
+function saveTaskEditor() {
+  const { text, tags, error } = readTaskInput(textInput.value);
+  const due = editorDue();
+  if (error !== null || due === undefined) {
+    reminderTouched = true;
+    syncEditor();
+    (error !== null ? textInput : whenInput).focus();
+    return;
+  }
+  const id = reminderId;
+  const todo = findTodo(id);
+  const fields = { text, tags, due, repeat: due === null ? 'none' : repeatSelect.value };
+  const reminderChanged = fields.due !== todo.due || fields.repeat !== todo.repeat;
+  // The edited row can leave the view (a filter tag removed): focus then goes to a neighbour.
+  const keys = [...openerKeys(id, 'task'), ...rowFallbackKeys(id)];
+  if (due !== null) requestPermission(); // as the reminder editor does; "ask" said it would
+  closeEditor();
+  if (due !== null && reminderChanged) {
+    if (notificationsBlocked() && !noteDismissed) showBanner('note', NOTE_TEXT);
+    else if (!banner.hidden && banner.classList.contains('is-note')) hideBanner();
+  }
+  if (editTodo([todo], id, fields)[0] !== todo) {
+    if (reminderChanged) fired.delete(id);
+    hideSync();
+    saveEdit(id, fields);
+  }
+  render(keys);
+}
+
+// `retry` (after an uncertain failure) re-sends only if the row doesn't already match the edit.
+function saveEdit(id, fields) {
+  saved(id, sync.edit(id, fields), () => {
+    const todo = findTodo(id);
+    if (todo && editTodo([todo], id, fields)[0] !== todo) saveEdit(id, fields);
+  });
+  check();
 }
 
 function saveReminder(id, due, repeat) {
@@ -821,7 +909,9 @@ function placeEditor() {
   }
   const row = [...list.children].find((item) => item.dataset.id === reminderId);
   if (!row) return;
-  const opener = row.querySelector('.reminder-chip, .reminder-add') ?? row;
+  // The edit form opens under the task's text and chips, so it doesn't cover what it edits.
+  const anchor = editorMode === 'task' ? '.todo-body' : '.reminder-chip, .reminder-add';
+  const opener = row.querySelector(anchor) ?? row;
   const rect = opener.getBoundingClientRect();
   const viewport = document.documentElement.clientWidth;
   const left = Math.max(8, Math.min(rect.left, viewport - editor.offsetWidth - 8));
@@ -831,7 +921,18 @@ function placeEditor() {
 }
 
 function editorFocusables() {
-  return [whenInput, repeatSelect, ...actions.children].filter((element) => !element.hidden);
+  return [textInput, whenInput, repeatSelect, ...actions.children].filter(
+    (element) => !element.hidden && !(element === textInput && textField.hidden),
+  );
+}
+
+// `describedBy`: the field's own description, kept alongside the message.
+function markInvalid(field, invalid, describedBy) {
+  const ids = [invalid && 'reminder-message', describedBy].filter(Boolean).join(' ');
+  if (invalid) field.setAttribute('aria-invalid', 'true');
+  else field.removeAttribute('aria-invalid');
+  if (ids) field.setAttribute('aria-describedby', ids);
+  else field.removeAttribute('aria-describedby');
 }
 
 function hideMessage() {
@@ -842,29 +943,34 @@ function hideMessage() {
 
 // The instant in the date field. An unchanged field keeps the saved instant: in the repeated hour
 // when clocks go back, its text ("01:30") would read back as the other 01:30.
+// In the reminder editor null means invalid. In the edit form an empty field is null (no
+// reminder) and undefined means invalid (a half-typed date also reads as '', so badInput is checked).
 function editorDue() {
   const todo = findTodo(reminderId);
-  return todo.due !== null && whenInput.value === toLocalInput(todo.due) ? todo.due : parseLocalInput(whenInput.value);
+  if (editorMode === 'task' && whenInput.value === '') return whenInput.validity?.badInput ? undefined : null;
+  const due = todo.due !== null && whenInput.value === toLocalInput(todo.due) ? todo.due : parseLocalInput(whenInput.value);
+  return editorMode === 'task' && due === null ? undefined : due;
 }
 
 // Save state, field validity, the repeat helper and the one message, from the current inputs.
 function syncEditor() {
   const todo = findTodo(reminderId);
-  const due = editorDue();
-  const invalid = due === null;
+  const task = editorMode === 'task';
+  const rawDue = editorDue();
+  // From here `due` is the instant or null; `invalid` is about the date field only.
+  const invalid = task ? rawDue === undefined : rawDue === null;
+  const due = invalid ? null : rawDue;
   const showError = invalid && reminderTouched;
+  const titleError = task ? readTaskInput(textInput.value).error : null;
+  const showTitleError = titleError !== null && reminderTouched;
 
-  saveButton.setAttribute('aria-disabled', String(invalid));
-  if (showError) {
-    whenInput.setAttribute('aria-invalid', 'true');
-    whenInput.setAttribute('aria-describedby', 'reminder-message');
-  } else {
-    whenInput.removeAttribute('aria-invalid');
-    whenInput.removeAttribute('aria-describedby');
-  }
+  saveButton.setAttribute('aria-disabled', String(invalid || titleError !== null));
+  // One message at a time, title first: only the field it is about points at it.
+  markInvalid(textInput, showTitleError, 'edit-text-hint');
+  markInvalid(whenInput, showError && !showTitleError);
 
   const repeat = repeatSelect.value;
-  repeatHelp.hidden = invalid || repeat === 'none';
+  repeatHelp.hidden = due === null || repeat === 'none';
   // Emptied when hidden: it is the select's description, and hidden text is still read from there.
   repeatHelp.textContent = '';
   if (!repeatHelp.hidden) {
@@ -874,19 +980,24 @@ function syncEditor() {
     repeatHelp.textContent = `Repeats every ${day} at ${time.format(date)}`;
   }
 
+  // In the edit form the reminder notes only apply with a date set, and "has passed" only to a
+  // newly chosen time (an overdue task whose title is being edited stays as it is).
+  const reminderNotes = !task || due !== null;
+  const newTime = !task || due !== todo.due;
   let next = null;
-  if (showError) next = MESSAGES.invalid;
-  else if (!invalid && due <= Date.now()) next = MESSAGES.past;
-  else if (!invalid && todo.completed) next = MESSAGES.done;
-  else if (typeof Notification !== 'undefined' && Notification.permission === 'default') next = MESSAGES.ask;
-  else if (!invalid && notificationsBlocked()) next = MESSAGES.blocked;
+  if (showTitleError) next = MESSAGES[titleError === 'empty' ? 'empty' : 'long'];
+  else if (showError) next = MESSAGES.invalid;
+  else if (!invalid && due !== null && newTime && due <= Date.now()) next = MESSAGES.past;
+  else if (!invalid && reminderNotes && todo.completed) next = MESSAGES.done;
+  else if (reminderNotes && typeof Notification !== 'undefined' && Notification.permission === 'default') next = MESSAGES.ask;
+  else if (!invalid && reminderNotes && notificationsBlocked()) next = MESSAGES.blocked;
 
   if (next === null) {
     hideMessage();
   } else if (messageText.textContent !== next.text || message.hidden) {
     // Only touch the live region when the message changes, so it isn't re-announced per keystroke.
     message.className = `reminder-message is-${next.kind}`;
-    if (next === MESSAGES.invalid) message.setAttribute('role', 'alert');
+    if (next.kind === 'error') message.setAttribute('role', 'alert');
     else message.removeAttribute('role');
     messageIcon.replaceChildren(icon(next.icon));
     messageText.textContent = next.text;
@@ -903,8 +1014,8 @@ input.addEventListener('input', syncAddButton);
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
   const raw = input.value;
-  const { text, tags } = parseTodoInput(raw, activeTags);
-  if (text === '' || phase !== 'ready') return;
+  const { text, tags, error } = readTaskInput(raw, activeTags);
+  if (error !== null || phase !== 'ready') return;
   const [todo] = addTodo([], text, tags);
   // Re-adding a draft whose save was uncertain sends the same ID: a 409 then means it was saved.
   const draft = draftKey(todo.text, todo.tags);
@@ -1024,8 +1135,11 @@ list.addEventListener('click', (event) => {
     editingId = id;
     render([key('tag-field', id)]);
   } else if (button.matches('.reminder-chip, .reminder-add')) {
-    if (reminderId === id) cancelEditor();
+    if (reminderOpen(id)) cancelEditor();
     else openEditor(id);
+  } else if (button.matches('.todo-edit')) {
+    if (reminderId === id && editorMode === 'task') cancelEditor();
+    else openEditor(id, 'task');
   }
 });
 
@@ -1093,10 +1207,12 @@ bannerDismiss.addEventListener('click', () => {
   input.focus();
 });
 
-whenInput.addEventListener('input', () => {
-  reminderTouched = true;
-  syncEditor();
-});
+for (const field of [textInput, whenInput]) {
+  field.addEventListener('input', () => {
+    reminderTouched = true;
+    syncEditor();
+  });
+}
 repeatSelect.addEventListener('change', syncEditor);
 saveButton.addEventListener('click', saveEditor);
 cancelButton.addEventListener('click', cancelEditor);
@@ -1107,7 +1223,7 @@ editor.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
     event.preventDefault();
     cancelEditor();
-  } else if (event.key === 'Enter' && event.target === whenInput) {
+  } else if (event.key === 'Enter' && !event.isComposing && (event.target === whenInput || event.target === textInput)) {
     event.preventDefault();
     saveButton.click(); // the same path as clicking Save (the only place permission is asked)
   }
@@ -1122,7 +1238,7 @@ editorEnd.addEventListener('focus', () => editorFocusables()[0].focus());
 // the render waits for the click (see `pressing`). Pressing the control that opened it toggles it shut.
 document.addEventListener('mousedown', (event) => {
   if (reminderId === null || layer.contains(event.target)) return;
-  const opener = event.target.closest?.('.reminder-chip, .reminder-add');
+  const opener = event.target.closest?.(editorMode === 'task' ? '.todo-edit' : '.reminder-chip, .reminder-add');
   if (opener && opener.closest('.todo').dataset.id === reminderId) return;
   // Focus stays on a control the press lands on; otherwise it goes back to the opener.
   returnFocus = openerKeys(reminderId);
@@ -1265,6 +1381,7 @@ function clearView() {
   // Nothing of the old account stays in the hidden editor or the live regions.
   editorFor.textContent = '';
   editor.removeAttribute('aria-label');
+  textInput.value = '';
   whenInput.value = '';
   repeatSelect.value = 'none';
   announcer.textContent = '';
