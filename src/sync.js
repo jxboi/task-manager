@@ -7,6 +7,7 @@
 import {
   addTag,
   clearReminder,
+  editTodo,
   removeTag,
   removeTodo,
   setReminder,
@@ -216,6 +217,12 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
 
     setReminder(id, due, repeat) {
       return patch(id, (todos) => setReminder(todos, id, due, repeat), 'setReminder', { due, repeat });
+    },
+
+    // The edit form: title, tags and reminder in one write. `fields` is the whole new state,
+    // {text, tags, due, repeat}, so it applies the same on the server as it did here.
+    edit(id, fields) {
+      return patch(id, (todos) => editTodo(todos, id, fields), 'edit', fields);
     },
 
     clearReminder(id) {

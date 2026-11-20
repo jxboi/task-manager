@@ -1,6 +1,15 @@
 import { MAX_TAGS, normalizeTag, normalizeTags } from './tags.js';
 import { isCompleted, isOverdue, nextReminderAfterToday, normalizeReminder } from './reminders.js';
 
+// The title rule the server enforces too: 1 to 2,000 characters once trimmed, and no NUL.
+export const MAX_TEXT_LENGTH = 2000;
+
+export function validText(text) {
+  if (typeof text !== 'string') return false;
+  const trimmed = text.trim();
+  return trimmed !== '' && !trimmed.includes('\0') && [...trimmed].length <= MAX_TEXT_LENGTH;
+}
+
 export function addTodo(todos, text, tags = []) {
   const trimmed = text.trim();
   if (trimmed === '') return todos;
@@ -79,6 +88,32 @@ export function setReminder(todos, id, due, repeat) {
   const reminder = normalizeReminder({ due, repeat });
   if (!todo || reminder.due === null || reminder.due !== due || reminder.repeat !== repeat) return todos;
   return todos.map((item) => (item === todo ? { ...item, due, repeat, notified: null } : item));
+}
+
+// Replaces the text, tags and reminder in one change (the edit form). `due` null means no
+// reminder (then `repeat` must be 'none'). The reminder re-arms only if its time changes (a repeat
+// change alone keeps the claim on the same occurrence), so it doesn't alert again. Today's tick
+// keeps its expiration while the task repeats and becomes permanent if repetition stops.
+// Returns `todos` itself for an unknown id, invalid fields, or when nothing changes.
+export function editTodo(todos, id, { text, tags, due, repeat } = {}) {
+  const todo = todos.find((item) => item.id === id);
+  if (!todo || !validText(text) || !Array.isArray(tags)) return todos;
+  const reminder = normalizeReminder({ due, repeat });
+  if (reminder.due !== due || reminder.repeat !== repeat) return todos;
+  const next = {
+    ...todo,
+    text: text.trim(),
+    tags: normalizeTags(tags),
+    due: reminder.due,
+    repeat: reminder.repeat,
+    notified: reminder.due === todo.due ? todo.notified : null,
+  };
+  if (reminder.repeat === 'none' && todo.completedUntil != null) next.completedUntil = null;
+  const same = next.text === todo.text && next.due === todo.due && next.repeat === todo.repeat &&
+    next.completedUntil === todo.completedUntil && next.notified === todo.notified &&
+    next.tags.length === todo.tags.length &&
+    next.tags.every((tag, index) => tag === todo.tags[index]);
+  return same ? todos : todos.map((item) => (item === todo ? next : item));
 }
 
 // Returns `todos` itself for an unknown id.

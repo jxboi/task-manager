@@ -155,7 +155,12 @@ body {
   line-height: 16px;
 }
 
-.hint code {
+.hint.is-limit > :not(#hint-limit) {
+  display: none; /* the reason Add is disabled replaces the tag hints */
+}
+
+.hint code,
+.reminder-help code {
   padding: 0 4px;
   border-radius: 4px;
   background: #f4f4f5;
@@ -393,13 +398,20 @@ body {
   text-decoration: line-through;
 }
 
+.todo-actions {
+  flex: none;
+  display: flex;
+  margin: -6px 0;
+}
+
+/* Edit and delete: the same quiet icon button, shown on row hover or focus (always on touch). */
+.todo-edit,
 .todo-delete {
   flex: none;
   display: grid;
   place-items: center;
   width: 32px;
   height: 32px;
-  margin: -6px 0;
   padding: 0;
   border: 0;
   border-radius: var(--radius-icon-button);
@@ -409,9 +421,17 @@ body {
   opacity: 0;
 }
 
-.todo:hover .todo-delete,
-.todo:focus-within .todo-delete {
+.todo:hover :is(.todo-edit, .todo-delete),
+.todo:focus-within :is(.todo-edit, .todo-delete),
+.todo-edit[aria-expanded="true"] {
   opacity: 1;
+}
+
+.todo-edit:hover,
+.todo-edit:focus-visible,
+.todo-edit[aria-expanded="true"] {
+  background: #f4f4f5;
+  color: var(--color-text);
 }
 
 .todo:hover .todo-delete,
@@ -708,6 +728,11 @@ body {
   margin-bottom: 12px;
 }
 
+/* The edit form hides the "for" line (its Task field shows the text): keep that line's gap. */
+.reminder-for[hidden] + .reminder-field {
+  margin-top: 12px;
+}
+
 .reminder-label {
   display: block;
   margin-bottom: 4px;
@@ -917,6 +942,10 @@ select.reminder-control {
   line-height: 18px;
 }
 
+.is-sheet .reminder-for[hidden] + .reminder-field {
+  margin-top: 16px;
+}
+
 /* 16px text so iOS doesn't zoom into the field. */
 .is-sheet .reminder-control {
   height: 44px;
@@ -1052,6 +1081,7 @@ select.reminder-control {
 /* Touch devices and small screens: delete is always visible */
 
 @media (hover: none) {
+  .todo-edit,
   .todo-delete {
     opacity: 1;
   }
@@ -1083,6 +1113,18 @@ select.reminder-control {
   .reminder-add {
     padding: 0 6px;
   }
+
+  /* Edit and delete get full 44px tap targets; the negative margins keep the row's height and
+     let the targets reach into the row's right padding. */
+  .todo-actions {
+    margin: -12px -8px -12px -6px;
+  }
+
+  .todo-edit,
+  .todo-delete {
+    width: 44px;
+    height: 44px;
+  }
 }
 
 @media (max-width: 639px) {
@@ -1095,6 +1137,7 @@ select.reminder-control {
     max-width: none;
   }
 
+  .todo-edit,
   .todo-delete {
     opacity: 1;
   }
@@ -1413,4 +1456,15 @@ select.reminder-control {
 
   .auth-card { padding: 20px; }
   .auth-primary { height: 48px; }
+}
+
+/* The edit form's tags, under the title field. */
+.edit-tags {
+  margin-top: 8px;
+}
+
+.edit-tags .tag-label {
+  display: flex;
+  align-items: center;
+  cursor: default;
 }

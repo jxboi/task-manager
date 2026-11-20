@@ -139,3 +139,9 @@ test('PALETTE_SIZE matches the data-color rules in styles.css', () => {
     Array.from({ length: PALETTE_SIZE }, (_, i) => i),
   );
 });
+
+test('parseTodoInput keeps the original "#" rules: a tag stops at the next "#"', () => {
+  assert.deepEqual(parseTodoInput('#ref#42'), { text: '#42', tags: ['ref'] });
+  assert.deepEqual(parseTodoInput('Review #ref#42'), { text: 'Review #42', tags: ['ref'] });
+  assert.deepEqual(parseTodoInput('Fix ##work'), { text: 'Fix ##work', tags: [] });
+});
