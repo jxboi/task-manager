@@ -8,6 +8,17 @@
   --color-accent-hover: #4338ca;
   --color-danger: #dc2626;
   --color-done: #a1a1aa;
+  --color-accent-tint: #eef2ff;
+  --color-over: #b91c1c;
+  --color-over-bg: #fef2f2;
+  --color-over-bg-hover: #fee2e2;
+  --color-fired-bg: #eef2ff;
+  --color-fired-peak: #e0e7ff;
+  --color-meta: #3f3f46;
+  --color-meta-done: #52525b;
+  --color-field-border: #71717a;
+  --color-warn-bg: #fef3c7;
+  --color-warn-text: #92400e;
   --radius: 10px;
   --radius-checkbox: 6px;
   --radius-icon-button: 8px;
@@ -151,6 +162,58 @@ body {
   background: #f4f4f5;
   color: #3f3f46;
   font: inherit;
+}
+
+/* Status line: notification note and repeat rollover message */
+
+.banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.banner.is-warn {
+  background: var(--color-warn-bg);
+  color: var(--color-warn-text);
+}
+
+.banner.is-info {
+  background: var(--color-accent-tint);
+  color: var(--color-meta);
+}
+
+.banner-icon {
+  display: flex;
+  margin-top: 1px;
+}
+
+.banner.is-info .banner-icon {
+  color: var(--color-accent);
+}
+
+.banner-text {
+  flex: 1;
+  margin: 0;
+}
+
+.banner-dismiss {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin: -3px -4px -3px 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
 }
 
 /* Tag palette: tags.js hashes each tag into one of these slots (PALETTE_SIZE).
@@ -456,6 +519,467 @@ body {
   outline-color: var(--color-danger);
 }
 
+/* Reminders on a todo: the due chip sits on a meta line under the text */
+
+.todo-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 6px;
+}
+
+.icon {
+  flex: none;
+}
+
+.reminder-chip {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 4px;
+  max-width: 100%;
+  min-height: 22px;
+  padding: 0 8px;
+  border: 1px solid #d4d4d8;
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-meta);
+  font: inherit;
+  font-size: 12px;
+  line-height: 20px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.reminder-chip:hover {
+  border-color: var(--color-muted);
+}
+
+.reminder-repeat {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 2px;
+  padding-left: 6px;
+  border-left: 1px solid #d4d4d8;
+}
+
+/* Overdue: a solid "Overdue" label plus red text, so never color alone. Never on done rows. */
+.reminder-chip.is-overdue {
+  gap: 0 6px;
+  padding-left: 0;
+  border-color: var(--color-over);
+  color: var(--color-over);
+  font-weight: 600;
+}
+
+.reminder-chip.is-overdue .reminder-repeat {
+  border-left-color: #fca5a5;
+}
+
+.reminder-flag {
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: -1px 2px -1px -1px;
+  padding: 0 8px 0 7px;
+  border-radius: 6px 0 0 6px;
+  background: var(--color-over);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* Done: plain muted text that still passes AA (no strikethrough, no opacity). */
+.todo.is-done .reminder-chip {
+  background: transparent;
+  color: var(--color-meta-done);
+}
+
+.reminder-got-it {
+  height: 22px;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  color: var(--color-accent-hover);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+/* "+ reminder": the same dashed pattern as "+ tag". */
+.reminder-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px dashed #d4d4d8;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-muted);
+  font: inherit;
+  font-size: 12px;
+  line-height: 20px;
+  cursor: pointer;
+}
+
+.reminder-add:hover {
+  border-color: var(--color-muted);
+  color: var(--color-text);
+}
+
+:is(.reminder-chip, .reminder-add)[aria-expanded="true"] {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+/* Row states. The tint and bar repeat what the "Overdue" label says. */
+
+.todo.is-overdue {
+  background: var(--color-over-bg);
+  box-shadow: inset 3px 0 0 var(--color-over);
+}
+
+.todo.is-overdue:hover {
+  background: var(--color-over-bg-hover);
+}
+
+/* Just fired: overdue plus an accent ring and two short pulses, then static. */
+.todo.is-fired,
+.todo.is-fired:hover {
+  background: var(--color-fired-bg);
+  box-shadow: inset 3px 0 0 var(--color-over), inset 0 0 0 2px var(--color-accent);
+  animation: reminder-pulse 1.2s ease-in-out 2;
+}
+
+@keyframes reminder-pulse {
+  50% {
+    background: var(--color-fired-peak);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .todo.is-fired {
+    animation: none;
+  }
+}
+
+/* Reminder editor: a popover under the chip; a bottom sheet under 640px */
+
+.reminder-editor {
+  position: absolute;
+  z-index: 10;
+  width: 324px;
+  max-width: calc(100vw - 16px);
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface);
+  box-shadow: 0 8px 24px rgb(24 24 27 / 0.14), 0 1px 3px rgb(0 0 0 / 0.08);
+}
+
+.reminder-scrim,
+.reminder-grab {
+  display: none;
+}
+
+/* Focus guards that wrap Tab inside the editor; never seen. */
+.reminder-edge {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  outline: none;
+}
+
+.reminder-title {
+  margin: 0;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+}
+
+.reminder-for {
+  margin: 0 0 12px;
+  overflow: hidden;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reminder-field {
+  margin-bottom: 12px;
+}
+
+.reminder-label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 600;
+}
+
+/* Field borders are darker than the list's so the input boundary meets 3:1. */
+.reminder-control {
+  display: block;
+  width: 100%;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--color-field-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  color: inherit;
+  font: inherit;
+}
+
+/* Repeat: native arrow replaced by a 12px chevron in the icon style (24-unit grid, 2px round stroke). */
+select.reminder-control {
+  -webkit-appearance: none;
+  appearance: none;
+  padding-right: 32px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2352525B' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 12px 12px;
+}
+
+.reminder-control:focus-visible {
+  border-color: transparent;
+}
+
+.reminder-control[aria-invalid="true"] {
+  border-color: var(--color-over);
+  box-shadow: 0 0 0 1px var(--color-over);
+}
+
+.reminder-help {
+  margin: 4px 0 0;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.reminder-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.reminder-message-icon {
+  display: flex;
+  margin-top: 2px;
+}
+
+.reminder-message-icon .icon {
+  width: 12px;
+  height: 12px;
+}
+
+.reminder-message.is-info {
+  background: var(--color-accent-tint);
+  color: var(--color-meta);
+}
+
+.reminder-message.is-info .reminder-message-icon {
+  color: var(--color-accent);
+}
+
+.reminder-message.is-warn {
+  background: var(--color-warn-bg);
+  color: var(--color-warn-text);
+}
+
+.reminder-message.is-error {
+  background: var(--color-over-bg);
+  color: var(--color-over);
+}
+
+.reminder-note {
+  margin: 0 0 12px;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.reminder-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.reminder-actions button {
+  height: 36px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.reminder-remove {
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  color: var(--color-over);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.remove-long {
+  display: none;
+}
+
+.reminder-cancel {
+  margin-left: auto;
+  padding: 0 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.reminder-cancel:hover {
+  border-color: #d4d4d8;
+  background: #fafafa;
+}
+
+.reminder-save {
+  padding: 0 16px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--color-accent);
+  color: #fff;
+}
+
+.reminder-save:hover {
+  background: var(--color-accent-hover);
+}
+
+/* aria-disabled, not disabled: Save stays focusable so its reason can be found. */
+.reminder-save[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.reminder-save[aria-disabled="true"]:hover {
+  background: var(--color-accent);
+}
+
+/* Bottom sheet: modal, over a scrim; the page behind is inert. */
+
+.reminder-layer.is-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+}
+
+.is-sheet .reminder-scrim {
+  display: block;
+  position: absolute;
+  inset: 0;
+  background: rgb(24 24 27 / 0.45);
+}
+
+.is-sheet .reminder-editor {
+  top: auto;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: auto;
+  max-width: none;
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 8px 16px calc(20px + env(safe-area-inset-bottom));
+  border: 0;
+  border-radius: 20px 20px 0 0;
+  box-shadow: 0 -8px 24px rgb(0 0 0 / 0.18);
+}
+
+.is-sheet .reminder-grab {
+  display: block;
+  width: 36px;
+  height: 4px;
+  margin: 0 auto 12px;
+  border-radius: 2px;
+  background: #a1a1aa;
+}
+
+.is-sheet .reminder-title {
+  font-size: 16px;
+  line-height: 24px;
+}
+
+.is-sheet .reminder-for {
+  margin-bottom: 16px;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+/* 16px text so iOS doesn't zoom into the field. */
+.is-sheet .reminder-control {
+  height: 44px;
+  font-size: 16px;
+}
+
+.is-sheet .reminder-message {
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.is-sheet .reminder-actions {
+  display: grid;
+  grid-template-columns: auto auto;
+  justify-content: space-between;
+  gap: 8px 0;
+}
+
+.is-sheet .reminder-save {
+  grid-column: 1 / -1;
+  height: 48px;
+  border-radius: var(--radius);
+  font-size: 15px;
+}
+
+.is-sheet .reminder-cancel,
+.is-sheet .reminder-remove {
+  height: 44px;
+  margin: 0;
+  padding: 0 8px;
+  border: 0;
+  background: none;
+  font-size: 14px;
+}
+
+.is-sheet .reminder-cancel {
+  color: var(--color-meta);
+}
+
+.is-sheet .reminder-remove {
+  grid-column: 2;
+}
+
+.is-sheet .remove-short {
+  display: none;
+}
+
+.is-sheet .remove-long {
+  display: inline;
+}
+
 .footer {
   margin: 12px 0 0;
   padding: 0 4px;
@@ -501,7 +1025,7 @@ body {
    (not display: none) so they stay focusable and focus can be moved onto them. */
 
 @media (hover: hover) and (min-width: 640px) {
-  .todo:not(:hover, :focus-within) :is(.tag-remove, .tag-add) {
+  .todo:not(:hover, :focus-within, .is-editing, .is-held) :is(.tag-remove, .tag-add, .reminder-add) {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -511,7 +1035,7 @@ body {
     white-space: nowrap;
   }
 
-  .todo:not(:hover, :focus-within) .todo-tags.is-empty {
+  .todo:not(:hover, :focus-within, .is-editing, .is-held) .todo-tags.is-empty {
     margin-top: 0;
   }
 }
@@ -521,6 +1045,29 @@ body {
 @media (hover: none) {
   .todo-delete {
     opacity: 1;
+  }
+}
+
+/* Small or touch screens: chips keep their 22px look with a 30px hit area. (The editor is a
+   bottom sheet here too; app.js uses the same query.) */
+
+@media (max-width: 639px), (hover: none) {
+  .reminder-chip,
+  .reminder-add,
+  .reminder-got-it {
+    position: relative;
+  }
+
+  .reminder-chip::after,
+  .reminder-add::after,
+  .reminder-got-it::after {
+    content: "";
+    position: absolute;
+    inset: -4px -2px;
+  }
+
+  .reminder-add {
+    padding: 0 6px;
   }
 }
 
@@ -543,6 +1090,36 @@ body {
 
   .clear-short {
     display: inline;
+  }
+
+  /* The chip stays on one line: the repeat part is icon-only (the chip's aria-label still says
+     "repeats daily") and drops its divider. */
+  .reminder-chip {
+    flex-wrap: nowrap;
+  }
+
+  .reminder-repeat-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .reminder-flag {
+    align-self: flex-start;
+    height: 22px;
+  }
+
+  .reminder-repeat,
+  .reminder-chip.is-overdue .reminder-repeat {
+    margin-left: 0;
+    padding-left: 0;
+    border-left: 0;
   }
 
   /* Filter chips scroll sideways; the right edge fades out. The 3px inset keeps focus
