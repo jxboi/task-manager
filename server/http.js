@@ -16,12 +16,14 @@ export function json(value, status = 200) {
   return Response.json(value, { status });
 }
 
-export function checkMutation(request, origin) {
-  if (request.headers.get('origin') !== origin) {
+export function checkMutation(request, origins) {
+  const origin = request.headers.get('origin');
+  if (!origins.includes(origin) || origin !== new URL(request.url).origin) {
     throw new RequestError(403, 'INVALID_ORIGIN', 'The request must come from this site.');
   }
   const contentType = request.headers.get('content-type')?.split(';')[0].trim().toLowerCase();
   if (contentType !== 'application/json') throw invalid('Send application/json.');
+  return origin;
 }
 
 export async function readObject(request) {

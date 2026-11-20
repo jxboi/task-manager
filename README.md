@@ -48,8 +48,11 @@ In the Vercel Marketplace, install Neon on the free tier in Singapore (AWS `ap-s
 | `TEST_DATABASE_URL` | Database tests | Direct PostgreSQL URL for a disposable database whose role can create schemas. |
 | `DATABASE_URL` (or `POSTGRES_URL`) | API and Better Auth | Pooled PostgreSQL URL from the integration. |
 | `BETTER_AUTH_SECRET` | Better Auth | Server-only random secret of at least 32 characters, unique per environment. Generate one with `openssl rand -base64 32`. |
-| `BETTER_AUTH_URL` | Better Auth | Canonical app origin. Use `https://task-manager-mu-sepia-18.vercel.app` in Production and `http://localhost:3000` for local auth development. |
-| `VERCEL_URL` | Preview auth | Vercel-provided deployment hostname for the Preview origin when `BETTER_AUTH_URL` is unset. Enable Vercel system environment variables for Preview. |
+| `BETTER_AUTH_URL` | Better Auth | Required outside Preview. Use `https://task-manager-mu-sepia-18.vercel.app` in Production and `http://localhost:3000` for local auth development. |
+| `VERCEL_URL` | Preview auth | Required Vercel deployment hostname, without a scheme. |
+| `VERCEL_BRANCH_URL` | Preview auth | Optional Vercel Git branch alias hostname, without a scheme. |
+
+On Preview, enable Vercel system environment variables. The deployment hostname and optional branch alias are the only accepted HTTPS origins. Each host has its own session cookie. [Vercel system environment variables](https://vercel.com/docs/environment-variables/system-environment-variables)
 
 Keep connection strings and secrets out of Git and any directory served by the static HTTP server. For Development, run `vercel link` and `vercel env pull /path/outside/the/site/.env.local`. Confirm the direct endpoint matches the intended Neon branch, then run:
 

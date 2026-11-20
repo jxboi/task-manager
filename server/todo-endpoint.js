@@ -77,7 +77,7 @@ async function deleteTodo(pool, userId, id, rawRevision) {
 export const todosEndpoint = endpoint(['GET', 'POST', 'PATCH', 'DELETE'], async (request, services) => {
   const { method } = request;
   const mutation = method !== 'GET';
-  if (mutation) checkMutation(request, services.origin);
+  if (mutation) checkMutation(request, services.origins);
   // Reads carrying X-CSRF-Token are bound to that session too, so a tab left open after an
   // account switch can't load the new account's list as the old one.
   const bound = mutation || request.headers.has('x-csrf-token');
