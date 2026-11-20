@@ -76,7 +76,7 @@ The email signup, sign-in and sign-out routes are `POST /api/auth/sign-up/email`
 | `GET /api/todos` | List the signed-in user’s todos by creation date and ID. |
 | `GET /api/todos?id=UUID` | Read one owned todo. An unknown or other user’s ID returns 404. |
 | `POST /api/todos` | Create using `{id, text, tags}`. |
-| `PATCH /api/todos?id=UUID` | Send the current `revision` and an `action` of `addTag`, `removeTag`, `setReminder`, `clearReminder`, `complete` or `markNotified`, with that action’s fields. |
+| `PATCH /api/todos?id=UUID` | Send the current `revision` and an `action` of `addTag`, `removeTag`, `setReminder`, `clearReminder`, `complete`, `markNotified` or `edit`, with that action’s fields. `edit` takes the whole editable state, `{text, tags, due, repeat}` (`due` null and `repeat` `none` for no reminder), and checks text and tags as a create does. It leaves completion alone, and re-arms the reminder only if `due` or `repeat` changes. |
 | `DELETE /api/todos?id=UUID&revision=N` | Delete an owned todo at the specified revision. |
 
 A stale revision returns 409.
@@ -90,8 +90,9 @@ A stale revision returns 409.
 ```
 index.html          markup
 styles.css          styles
-src/todos.js        pure logic: addTodo, toggleTodo, removeTodo, addTag, removeTag, allTags, filterByTags,
-                    setReminder, clearReminder, markNotified, dueReminders, nextFireTime, sortByUrgency
+src/todos.js        pure logic: validText, addTodo, editTodo, toggleTodo, removeTodo, addTag, removeTag, allTags,
+                    filterByTags, setReminder, clearReminder, markNotified, dueReminders, nextFireTime, sortByUrgency
+src/task-input.js   the add and edit fields' shared rules: readTaskInput (#tags and title check), formatTaskInput
 src/tags.js         pure tag rules: normalizeTag, parseTodoInput, tagColor
 src/reminders.js    pure reminder rules: normalizeReminder, isOverdue, nextOccurrence, parseLocalInput, toLocalInput
 src/storage.js      every server request: session, sign-in/up/out and /api/todos (no task data in browser storage)

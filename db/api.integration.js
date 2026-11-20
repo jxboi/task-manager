@@ -218,6 +218,32 @@ test('auth and todo API against PostgreSQL', {
     assert.equal(completed.data.todo.completed, true);
   });
 
+  await t.test('edits text, tags and reminder in one revisioned PATCH, owner only', async () => {
+    const id = randomUUID();
+    assert.equal((await create(a, id, 'Before', ['one'])).status, 201);
+    const due = Date.now() + 3_600_000;
+    const edit = { action: 'edit', revision: 1, text: '  After  ', tags: ['#Two', 'three'], due, repeat: 'weekly' };
+    assert.equal((await patch(b, id, edit)).status, 404);
+    const edited = await patch(a, id, edit);
+    assert.equal(edited.status, 200, JSON.stringify(edited.data));
+    assert.deepEqual(
+      (({ text, tags, due: when, repeat, revision, completed }) => ({ text, tags, when, repeat, revision, completed }))(edited.data.todo),
+      { text: 'After', tags: ['two', 'three'], when: due, repeat: 'weekly', revision: 2, completed: false },
+    );
+    assert.equal((await patch(a, id, edit)).status, 409, 'a stale revision conflicts');
+    // Same state again: no write, the revision stays.
+    const same = { ...edit, revision: 2, text: 'After', tags: ['two', 'three'] };
+    assert.equal((await patch(a, id, same)).data.todo.revision, 2);
+    for (const bad of [{ text: ' ' }, { text: 'x'.repeat(2001) }, { tags: ['##x'] }, { due: null }, { repeat: 'hourly' }, { completed: true }]) {
+      assert.equal((await patch(a, id, { ...same, ...bad })).status, 400, JSON.stringify(bad));
+    }
+    const cleared = await patch(a, id, { ...same, due: null, repeat: 'none' });
+    assert.deepEqual([cleared.data.todo.due, cleared.data.todo.repeat, cleared.data.todo.revision], [null, 'none', 3]);
+    const stored = await request(`/api/todos?id=${id}`, { account: a });
+    assert.deepEqual(stored.data.todo, cleared.data.todo);
+    assert.equal((await remove(a, id, 3)).status, 204);
+  });
+
   await t.test('revokes sign-out sessions and rejects stale and expired sessions', async () => {
     const signedOut = await post(signoutPath, {}, { account: a });
     assert.equal(signedOut.status, 200);

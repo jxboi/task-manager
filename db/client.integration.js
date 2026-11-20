@@ -248,6 +248,27 @@ test('browser storage modules against PostgreSQL', {
     assert.equal((await tabA.remove(todo.id)).ok, true);
   });
 
+  await t.test('a task edit saves text, tags and reminder together; a stale tab conflicts and rolls back', async () => {
+    const todo = newTodo('Draft title', ['old']);
+    await tabA.create(todo);
+    const tabB = createSync(api);
+    await tabB.load();
+    const due = Date.now() + 3_600_000;
+    const edit = { text: 'Final title', tags: ['work', 'q4'], due, repeat: 'daily' };
+    assert.equal((await tabA.edit(todo.id, edit)).ok, true);
+    const { rows } = await admin.query('SELECT text, tags, due, repeat, notified, completed, revision FROM todos WHERE id = $1', [todo.id]);
+    assert.deepEqual(rows, [{ ...edit, due: String(due), notified: null, completed: false, revision: 2 }]);
+    // tabB still has revision 1: its edit shows, then is refused and replaced by tabA's.
+    const stale = tabB.edit(todo.id, { text: 'From B', tags: [], due: null, repeat: 'none' });
+    assert.equal(tabB.todos.find((item) => item.id === todo.id).text, 'From B');
+    const outcome = await stale;
+    assert.equal(outcome.error.status, 409);
+    assert.equal(outcome.reloaded, true);
+    assert.deepEqual(tabB.todos.find((item) => item.id === todo.id), tabA.todos.find((item) => item.id === todo.id));
+    assert.equal((await admin.query('SELECT text FROM todos WHERE id = $1', [todo.id])).rows[0].text, 'Final title');
+    assert.equal((await tabA.remove(todo.id)).ok, true);
+  });
+
   await t.test('an uncertain create retried with the same UUID is saved once', async () => {
     const todo = newTodo('Once only');
     const real = globalThis.fetch;

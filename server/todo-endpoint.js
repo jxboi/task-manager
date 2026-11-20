@@ -48,11 +48,11 @@ async function updateTodo(pool, userId, id, body) {
   if (changed === todo) return json({ todo });
 
   const { rows: [row] } = await pool.query(
-    `UPDATE todos SET completed = $4, tags = $5, due = $6, repeat = $7, notified = $8,
+    `UPDATE todos SET completed = $4, tags = $5, due = $6, repeat = $7, notified = $8, text = $9,
        revision = revision + 1
      WHERE user_id = $1 AND id = $2 AND revision = $3
      RETURNING ${columns}`,
-    [userId, id, revision, changed.completed, changed.tags, changed.due, changed.repeat, changed.notified],
+    [userId, id, revision, changed.completed, changed.tags, changed.due, changed.repeat, changed.notified, changed.text],
   );
   if (!row) {
     await findTodo(pool, userId, id);

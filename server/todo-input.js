@@ -1,6 +1,6 @@
 import { isOverdue, normalizeReminder, REPEATS } from '../src/reminders.js';
 import { MAX_TAGS, normalizeTag, normalizeTags } from '../src/tags.js';
-import { addTag, clearReminder, markNotified, removeTag, setReminder } from '../src/todos.js';
+import { addTag, clearReminder, editTodo, markNotified, removeTag, setReminder, validText } from '../src/todos.js';
 import { invalid, RequestError } from './http.js';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -30,13 +30,19 @@ function readTag(raw) {
 export function createInput(body) {
   checkFields(body, ['id', 'text', 'tags']);
   const id = readId(body.id);
-  const text = typeof body.text === 'string' ? body.text.trim() : '';
-  if (!text || text.includes('\0') || [...text].length > 2000) {
-    throw invalid('Enter a title of 1 to 2,000 characters.');
-  }
-  if (!Array.isArray(body.tags)) throw invalid('Provide a list of tags.');
-  if (new Set(body.tags.map(readTag)).size > MAX_TAGS) throw invalid('Use at most 10 tags.');
-  return { id, text, tags: normalizeTags(body.tags) };
+  return { id, text: readText(body.text), tags: readTags(body.tags) };
+}
+
+// Create and edit share these, so a title or tag list one accepts the other does too.
+function readText(value) {
+  if (!validText(value)) throw invalid('Enter a title of 1 to 2,000 characters.');
+  return value.trim();
+}
+
+function readTags(value) {
+  if (!Array.isArray(value)) throw invalid('Provide a list of tags.');
+  if (new Set(value.map(readTag)).size > MAX_TAGS) throw invalid('Use at most 10 tags.');
+  return normalizeTags(value);
 }
 
 function readDue(value) {
@@ -79,6 +85,17 @@ export function patchTodo(todo, body) {
       if (!REPEATS.includes(body.repeat)) throw invalid('Provide a valid repeat setting.');
       if (todo.due === due && todo.repeat === body.repeat && todo.notified === null) return todo;
       return setReminder(items, id, due, body.repeat)[0];
+    }
+    case 'edit': {
+      // The whole editable state at once: title, tags and reminder (`due` null for none).
+      checkFields(body, [...base, 'text', 'tags', 'due', 'repeat']);
+      const text = readText(body.text);
+      const tags = readTags(body.tags);
+      const due = body.due === null ? null : readDue(body.due);
+      if (!REPEATS.includes(body.repeat) || (due === null && body.repeat !== 'none')) {
+        throw invalid('Provide a valid repeat setting.');
+      }
+      return editTodo(items, id, { text, tags, due, repeat: body.repeat })[0];
     }
     case 'clearReminder':
       checkFields(body, base);
