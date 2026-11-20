@@ -6,12 +6,12 @@ export function authMutation(path) {
     if (new URL(request.url).pathname !== `/api/auth/${path}`) {
       throw new RequestError(404, 'NOT_FOUND', 'This endpoint is unavailable.');
     }
-    checkMutation(request, services.origin);
+    const origin = checkMutation(request, services.origins);
     if (path === 'sign-out') {
       await requireSession(request, services, true);
       await readObject(request.clone());
     }
-    return services.auth.handler(request);
+    return services.authByOrigin.get(origin).handler(request);
   }, { authErrors: true });
 }
 
