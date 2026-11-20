@@ -16,6 +16,7 @@ import {
 import { MAX_TAGS, parseTodoInput, tagColor } from './tags.js';
 import { isOverdue, parseLocalInput, toLocalInput } from './reminders.js';
 import { load, save } from './storage.js';
+import { popoverTop } from './popover.js';
 
 const app = document.querySelector('.app');
 const form = document.getElementById('add-form');
@@ -326,7 +327,10 @@ function renderReminderChip(todo, overdue, now) {
   if (todo.repeat !== 'none') {
     const repeat = document.createElement('span');
     repeat.className = 'reminder-repeat';
-    repeat.append(icon(repeatIcon), REPEAT_LABELS[todo.repeat]);
+    const label = document.createElement('span');
+    label.className = 'reminder-repeat-label';
+    label.textContent = REPEAT_LABELS[todo.repeat];
+    repeat.append(icon(repeatIcon), label);
     button.append(repeat);
   }
   return button;
@@ -631,7 +635,8 @@ function openEditor(id) {
   layer.hidden = false;
   render(); // the opener shows aria-expanded; render places the editor
   syncEditor();
-  whenInput.focus();
+  // The popover is placed to fit; focusing it never scrolls the page.
+  whenInput.focus({ preventScroll: true });
 }
 
 // Hides the editor without rendering; callers render (or renderSoon) with their focus.
@@ -710,7 +715,8 @@ function placeEditor() {
   const viewport = document.documentElement.clientWidth;
   const left = Math.max(8, Math.min(rect.left, viewport - editor.offsetWidth - 8));
   editor.style.left = `${left + window.scrollX}px`;
-  editor.style.top = `${rect.bottom + window.scrollY + 6}px`;
+  const top = popoverTop(rect.top, rect.bottom, editor.offsetHeight, window.innerHeight);
+  editor.style.top = `${top + window.scrollY}px`;
 }
 
 function editorFocusables() {
@@ -775,6 +781,8 @@ function syncEditor() {
     messageText.textContent = next.text;
     message.hidden = false;
   }
+  // The message and helper change the editor's height, which its placement depends on.
+  placeEditor();
 }
 
 // --- Events --------------------------------------------------------------------------------
