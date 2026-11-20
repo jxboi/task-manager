@@ -219,6 +219,64 @@ test('edit form', async (t) => {
     byId('sync-dismiss').click();
   });
 
+  await t.test('a draft opened before another tab changed the task is not saved over it', async () => {
+    const original = { ...serverRow('rent') };
+    open('rent');
+    // Another tab adds a tag and a reminder; this tab's list refreshes while the form is open.
+    const reminder = Date.parse('2099-05-06T08:00:00');
+    server.rows = server.rows.map((item) => (item.id === ids.rent
+      ? { ...item, tags: ['home', 'bills'], due: reminder, repeat: 'daily', revision: item.revision + 1 } : item));
+    window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: server.session } }));
+    await settle();
+    const before = patches().length;
+    type(text, 'Pay rent today #home'); // a title-only edit of the stale prefilled values
+    save.click();
+    await settle();
+    assert.equal(patches().length, before, 'nothing is sent');
+    assert.equal(layer.hidden, true);
+    assert.equal(syncNote.hidden, false);
+    assert.equal(syncText.textContent, changedElsewhere);
+    assert.deepEqual([serverRow('rent').tags, serverRow('rent').due, serverRow('rent').repeat], [['home', 'bills'], reminder, 'daily']);
+    byId('sync-dismiss').click();
+    // Opened again, the form has the refreshed values and saves.
+    open('rent');
+    assert.equal(text.value, 'Pay rent early #home #bills');
+    type(text, 'Pay rent today #home #bills');
+    save.click();
+    await settle();
+    assert.deepEqual([serverRow('rent').text, serverRow('rent').due, serverRow('rent').tags], ['Pay rent today', reminder, ['home', 'bills']]);
+    // Put the row back for the tests after this one.
+    server.rows = server.rows.map((item) => (item.id === ids.rent ? { ...original, revision: item.revision + 1 } : item));
+    window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: server.session } }));
+    await settle();
+  });
+
+  await t.test('Esc during IME composition keeps the draft', () => {
+    open('rent');
+    type(text, 'Half typed');
+    const composing = Object.assign(new Event('keydown'), { key: 'Escape', isComposing: true, preventDefault() {} });
+    Object.defineProperty(composing, 'target', { value: text });
+    editor.dispatchEvent(composing);
+    assert.equal(layer.hidden, false);
+    assert.equal(text.value, 'Half typed');
+    key(text, 'Escape');
+    assert.equal(layer.hidden, true);
+  });
+
+  await t.test('Add says why it is disabled when the title is too long', () => {
+    const add = byId('new-todo');
+    add.value = 'x'.repeat(2001);
+    add.dispatchEvent(new Event('input'));
+    assert.equal(byId('add-button').disabled, true);
+    assert.equal(byId('hint-limit').hidden, false);
+    assert.equal(byId('hint-limit').textContent, 'Keep the title to 2,000 characters or fewer.');
+    add.value = 'ok';
+    add.dispatchEvent(new Event('input'));
+    assert.equal(byId('hint-limit').hidden, true);
+    add.value = '';
+    add.dispatchEvent(new Event('input'));
+  });
+
   await t.test('a failed save rolls back and Try again re-sends it', async () => {
     server.failNext = (method) => (method === 'PATCH' ? new Response('{}', { status: 500 }) : undefined);
     open('rent');

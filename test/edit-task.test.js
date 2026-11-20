@@ -38,11 +38,11 @@ test('editTodo replaces text, tags and reminder and leaves completion alone', ()
   assert.equal(next.createdAt, todo.createdAt);
 });
 
-test('editTodo keeps an alerted occurrence alerted unless the reminder itself changes', () => {
+test('editTodo keeps an alerted occurrence alerted unless the due time changes', () => {
   const due = Date.now() - HOUR;
   const todo = base({ due, repeat: 'daily', notified: due });
   assert.equal(editTodo([todo], todo.id, fields({ text: 'Renamed', due, repeat: 'daily' }))[0].notified, due);
-  assert.equal(editTodo([todo], todo.id, fields({ due, repeat: 'weekly' }))[0].notified, null);
+  assert.equal(editTodo([todo], todo.id, fields({ due, repeat: 'weekly' }))[0].notified, due, 'a repeat change alone keeps the claim');
   assert.equal(editTodo([todo], todo.id, fields({ due: due + 1, repeat: 'daily' }))[0].notified, null);
   const cleared = editTodo([todo], todo.id, fields())[0];
   assert.deepEqual([cleared.due, cleared.repeat, cleared.notified], [null, 'none', null]);
@@ -180,4 +180,10 @@ test('an edit against a row another tab changed gets 409, rolls back and reloads
   assert.equal(outcome.reloaded, true);
   assert.equal(sync.todos[0].text, 'Changed elsewhere');
   assert.equal(server.rows[0].text, 'Changed elsewhere');
+});
+
+test('tags that contain # survive the edit field round trip', () => {
+  const todo = { text: 'Review PR', tags: ['ref#42', 'c#', 'a#b#c'] };
+  assert.equal(formatTaskInput(todo), 'Review PR #ref#42 #c# #a#b#c');
+  assert.deepEqual(readTaskInput(formatTaskInput(todo)), { ...todo, error: null });
 });

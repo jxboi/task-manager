@@ -85,8 +85,8 @@ export function setReminder(todos, id, due, repeat) {
 }
 
 // Replaces the text, tags and reminder in one change (the edit form). `due` null means no
-// reminder (then `repeat` must be 'none'). The reminder re-arms only if its time or repeat changes,
-// so an alerted occurrence that is left alone doesn't alert again. Completion is never touched.
+// reminder (then `repeat` must be 'none'). The reminder re-arms only if its time changes (a repeat
+// change alone keeps the claim on the same occurrence), so it doesn't alert again. Completion is never touched.
 // Returns `todos` itself for an unknown id, invalid fields, or when nothing changes.
 export function editTodo(todos, id, { text, tags, due, repeat } = {}) {
   const todo = todos.find((item) => item.id === id);
@@ -99,7 +99,7 @@ export function editTodo(todos, id, { text, tags, due, repeat } = {}) {
     tags: normalizeTags(tags),
     due: reminder.due,
     repeat: reminder.repeat,
-    notified: reminder.due === todo.due && reminder.repeat === todo.repeat ? todo.notified : null,
+    notified: reminder.due === todo.due ? todo.notified : null,
   };
   const same = next.text === todo.text && next.due === todo.due && next.repeat === todo.repeat &&
     next.notified === todo.notified && next.tags.length === todo.tags.length &&

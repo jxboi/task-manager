@@ -6,7 +6,8 @@ export const MAX_TAG_LENGTH = 24;
 export const PALETTE_SIZE = 8;
 
 // "#tag" at the start of the input or after whitespace, so "C#" and "email#1" are not tags.
-const TOKEN = /(^|\s)#([^\s#]+)/g;
+// A tag may contain "#" inside ("ref#42"), but not start with one ("##work" stays text).
+const TOKEN = /(^|\s)#(\S+)/g;
 
 // Idempotent: normalizing a normalized tag gives it back, so load() never changes saved tags.
 // A tag can't start with "#" once one is stripped ("##work" is invalid, not "#work").
@@ -33,7 +34,7 @@ export function parseTodoInput(raw, baseTags = []) {
   const tags = normalizeTags(baseTags);
   const text = raw
     .replace(TOKEN, (token, before, body) => {
-      const tag = normalizeTag(body);
+      const tag = body.startsWith('#') ? null : normalizeTag(body);
       if (tag === null) return token;
       if (tags.includes(tag)) return before;
       if (tags.length >= MAX_TAGS) return token;

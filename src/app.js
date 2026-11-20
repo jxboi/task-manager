@@ -26,6 +26,8 @@ const summary = document.getElementById('summary');
 const clearFilters = document.getElementById('clear-filters');
 const hintDefault = document.getElementById('hint-default');
 const hintAuto = document.getElementById('hint-auto');
+const hintLimit = document.getElementById('hint-limit');
+const addHint = document.getElementById('add-hint');
 const filterWrap = document.getElementById('filter-wrap');
 const filterBar = document.getElementById('filter-bar');
 const footer = document.getElementById('footer');
@@ -79,6 +81,8 @@ const CLAIM_RETRY_MS = 30_000;
 const NOTE_DISMISSED_KEY = 'task-manager.blocked-note-dismissed';
 
 const BLOCKED_TEXT = 'Notifications are blocked or unavailable. Due tasks will be highlighted on this page.';
+const CHANGED_ELSEWHERE = 'This task changed in another tab or device. The list is up to date now, so try again.';
+
 // The list-level note: short enough for one line at 375px (the editor keeps the longer BLOCKED_TEXT).
 const NOTE_TEXT = 'Notifications off. Reminders show only here.';
 const MESSAGES = {
@@ -124,6 +128,7 @@ const openNotifications = new Set(); // closed when the session ends
 let activeTags = []; // A to Z
 let editingId = null; // todo whose "+ tag" field is open
 let reminderId = null; // todo whose editor is open
+let draftRevision = null; // revision of that todo when the edit form opened
 // 'reminder': the reminder editor (date and repeat). 'task': the edit form, the same editor with
 // the task's title and tags field above, where an empty date means no reminder.
 let editorMode = 'reminder';
@@ -590,7 +595,13 @@ function rejectTag(field) {
 // Same parse and check as submit (and the edit form): with the active filter tags, which can push
 // a #tag back into the title.
 function syncAddButton() {
-  addButton.disabled = phase !== 'ready' || readTaskInput(input.value, activeTags).error !== null;
+  const { error } = readTaskInput(input.value, activeTags);
+  addButton.disabled = phase !== 'ready' || error !== null;
+  // Say why Add is disabled when it is the length (the one reason that isn't obvious).
+  const tooLong = error === 'invalid';
+  hintLimit.hidden = !tooLong;
+  hintLimit.textContent = tooLong ? MESSAGES.long.text : '';
+  addHint.classList.toggle('is-limit', tooLong);
 }
 
 // --- Reminders: alerting -------------------------------------------------------------------
@@ -758,6 +769,7 @@ function openEditor(id, mode = 'reminder') {
   reminderId = id;
   editorMode = mode;
   reminderTouched = false;
+  draftRevision = todo.revision;
   editorTitle.textContent = task ? 'Edit task' : 'Reminder';
   editorFor.textContent = todo.text;
   editorFor.hidden = task; // the Task field shows it
@@ -839,6 +851,14 @@ function saveTaskEditor() {
   }
   const id = reminderId;
   const todo = findTodo(id);
+  if (!todo || todo.revision !== draftRevision) {
+    // The task changed (another tab, or a refresh) after the form opened: its prefilled values are
+    // stale, and saving them would overwrite that change. Show the conflict instead.
+    closeEditor();
+    showSync(CHANGED_ELSEWHERE);
+    render(todo ? openerKeys(id, 'task') : undefined);
+    return;
+  }
   const fields = { text, tags, due, repeat: due === null ? 'none' : repeatSelect.value };
   const reminderChanged = fields.due !== todo.due || fields.repeat !== todo.repeat;
   // The edited row can leave the view (a filter tag removed): focus then goes to a neighbour.
@@ -1221,6 +1241,7 @@ scrim.addEventListener('click', cancelEditor);
 
 editor.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
+    if (event.isComposing) return; // Esc cancels the IME composition, not the draft
     event.preventDefault();
     cancelEditor();
   } else if (event.key === 'Enter' && !event.isComposing && (event.target === whenInput || event.target === textInput)) {
@@ -1320,14 +1341,14 @@ async function saved(id, result, retry) {
   if (outcome.skipped) return; // the row is gone
   if (outcome.cancelled) {
     // The user acted before seeing the refreshed row.
-    showSync('This task changed in another tab or device. The list is up to date now, so try again.');
+    showSync(CHANGED_ELSEWHERE);
     return;
   }
   const { error } = outcome;
   if (handleSessionError(error)) return;
   if (error.status === 409 || error.status === 404) {
     if (outcome.reloaded) {
-      showSync('This task changed in another tab or device. The list is up to date now, so try again.');
+      showSync(CHANGED_ELSEWHERE);
     } else {
       showSync("This task changed in another tab or device, and the latest list couldn't be loaded. Try again.", reloadList);
     }

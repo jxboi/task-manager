@@ -155,6 +155,10 @@ body {
   line-height: 16px;
 }
 
+.hint.is-limit > :not(#hint-limit) {
+  display: none; /* the reason Add is disabled replaces the tag hints */
+}
+
 .hint code,
 .reminder-help code {
   padding: 0 4px;
