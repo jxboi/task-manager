@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { createFakeApi, settle as flush } from './fake-api.js';
+import { installDom } from './dom.js';
 
 const permissionInfo = 'When you save, your browser will ask to allow notifications. If you say no, due tasks are still highlighted on this page.';
 const invalidDate = 'Enter a valid date and time.';
@@ -11,139 +13,41 @@ const blockedNote = 'Notifications off. Reminders show only here.';
 const styles = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
 const future = '2099-01-01T12:00';
 const past = '2000-01-01T12:00';
-const markup = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
-
-// Supply the DOM operations used by the editor so its event handlers can run in node:test.
-class Element extends EventTarget {
-  attributes = new Map();
-  children = [];
-  dataset = {};
-  className = '';
-  classList = {
-    add: (name) => this.classList.toggle(name, true),
-    remove: (name) => this.classList.toggle(name, false),
-    contains: (name) => this.className.split(/\s+/).includes(name),
-    toggle: (name, enabled) => {
-      const classes = new Set(this.className.split(/\s+/).filter(Boolean));
-      if (enabled) classes.add(name);
-      else classes.delete(name);
-      this.className = [...classes].join(' ');
-    },
-  };
-  style = {};
-  value = '';
-  hidden = false;
-
-  setAttribute(name, value) { this.attributes.set(name, value); }
-  getAttribute(name) { return this.attributes.get(name) ?? null; }
-  removeAttribute(name) { this.attributes.delete(name); }
-  focus() { document.activeElement = this; }
-  cloneNode() { return new Element(); }
-
-  append(...children) {
-    for (const child of children) {
-      if (child instanceof Element) {
-        this.children.push(child);
-        child.parent = this;
-      }
-    }
-  }
-  replaceChildren(...children) {
-    this.children = [];
-    this.append(...children);
-  }
-  matches(selector) {
-    if (selector === 'button') return this.tagName === 'button';
-    if (selector === '[data-focus-key]') return this.dataset.focusKey !== undefined;
-    return selector.split(', ').some((part) => this.className.split(' ').includes(part.slice(1)));
-  }
-  closest(selector) {
-    return this.matches(selector) ? this : this.parent?.closest(selector) ?? null;
-  }
-  querySelectorAll(selector) {
-    return this.children.flatMap((child) => [
-      ...(child.matches(selector) ? [child] : []),
-      ...child.querySelectorAll(selector),
-    ]);
-  }
-  querySelector(selector) { return this.querySelectorAll(selector)[0] ?? null; }
-  contains(element) { return element === this || this.children.some((child) => child.contains(element)); }
-
-  click() {
-    if (this.disabled) return;
-    this.focus();
-    const event = new Event('click');
-    Object.defineProperty(event, 'target', { value: this });
-    for (let element = this; element; element = element.parent) element.dispatchEvent(event);
-  }
-}
 
 test('reminder editor', async (t) => {
-  const elements = new Map(Array.from(markup.matchAll(/<(\w+)\b[^>]*\bid="([^"]+)"[^>]*>/g), ([html, tag, id]) => {
-    const element = new Element();
-    element.tagName = tag;
-    element.hidden = /\shidden\b/.test(html);
-    if (tag === 'template') element.content = { firstElementChild: new Element() };
-    return [id, element];
-  }));
-  const byId = (id) => elements.get(id);
-  const app = new Element();
-  const list = byId('todo-list');
-  app.append(list, byId('filter-bar'));
-  const queries = new Map();
-  const matchMedia = (query) => {
-    if (!queries.has(query)) {
-      queries.set(query, Object.assign(new EventTarget(), { matches: !query.includes('reduced-motion') }));
-    }
-    return queries.get(query);
-  };
+  const { byId, list, matchMedia, session } = installDom(t, { fetch: (...args) => server.fetch(...args) });
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
   const lateDue = Date.parse('2001-01-01T09:00:00');
-  const tasks = [
-    { id: 'open', text: 'Open task', completed: false, createdAt: 1 },
-    { id: 'done', text: 'Done task', completed: true, createdAt: 2 },
-    // Overdue and not alerted yet: it fires when the app starts.
-    { id: 'late', text: 'Late task', completed: false, createdAt: 3, due: lateDue, repeat: 'none', notified: null },
-  ];
-  const session = new Map();
-  const globals = {
-    document: Object.assign(new EventTarget(), {
-      querySelector: () => app,
-      getElementById: byId,
-      createElement: (tagName) => Object.assign(new Element(), { tagName }),
-    }),
-    window: Object.assign(new EventTarget(), { matchMedia }),
-    localStorage: { getItem: () => JSON.stringify(tasks), setItem: () => {} },
-    sessionStorage: {
-      getItem: (name) => session.get(name) ?? null,
-      setItem: (name, value) => session.set(name, String(value)),
-    },
-    Notification: { permission: 'default' },
+  const ids = {
+    open: '00000000-0000-4000-8000-000000000001',
+    done: '00000000-0000-4000-8000-000000000002',
+    late: '00000000-0000-4000-8000-000000000003',
   };
-  const previous = Object.getOwnPropertyDescriptors(globalThis);
-  for (const [name, value] of Object.entries(globals)) {
-    Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
-  }
-  t.after(() => {
-    for (const name of Object.keys(globals)) {
-      if (previous[name]) Object.defineProperty(globalThis, name, previous[name]);
-      else delete globalThis[name];
-    }
-  });
+  const base = { tags: [], due: null, repeat: 'none', notified: null, revision: 1 };
+  const server = createFakeApi();
+  server.rows = [
+    { ...base, id: ids.open, text: 'Open task', completed: false, createdAt: 1 },
+    { ...base, id: ids.done, text: 'Done task', completed: true, createdAt: 2 },
+    // Overdue and not alerted yet: it fires when the app starts.
+    { ...base, id: ids.late, text: 'Late task', completed: false, createdAt: 3, due: lateDue },
+  ];
   await import('../src/app.js');
+  // What the auth module sends once the session is known.
+  window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: server.session } }));
+  await flush();
 
   const date = byId('reminder-when');
   const save = byId('reminder-save');
   const message = byId('reminder-message');
   const messageText = byId('reminder-message-text');
-  const open = (id) => list.children.find((row) => row.dataset.id === id).querySelector('.reminder-add').click();
+  const open = (id) => list.children.find((row) => row.dataset.id === ids[id]).querySelector('.reminder-add').click();
   const cancel = () => byId('reminder-cancel').click();
   const edit = (value) => {
     date.value = value;
     date.dispatchEvent(new Event('input'));
   };
   const visibleMessage = () => message.hidden ? null : messageText.textContent;
-  const row = (id) => list.children.find((item) => item.dataset.id === id);
+  const row = (id) => list.children.find((item) => item.dataset.id === ids[id]);
   const isFired = (id) => row(id).className.split(' ').includes('is-fired');
   const settle = () => new Promise((resolve) => setTimeout(resolve)); // renderSoon is deferred
   const dispatch = (target, type, props = {}) => {
@@ -151,11 +55,13 @@ test('reminder editor', async (t) => {
     Object.defineProperty(event, 'target', { value: target });
     return event;
   };
-  // Saving a past time re-arms the alert, so the todo fires again: a fresh highlight.
-  const fireAgain = (id) => {
+  // Saving a past time re-arms the alert, so the todo fires again (once the server has the
+  // reminder and grants the claim): a fresh highlight.
+  const fireAgain = async (id) => {
     row(id).querySelector('.reminder-chip').click();
     edit(past);
     save.click();
+    await flush();
   };
 
   await t.test('opens empty with permission info when applicable and no invalid state or alert', () => {
@@ -251,15 +157,15 @@ test('reminder editor', async (t) => {
     assert.equal(chip.getAttribute('aria-label'), `Overdue, was due ${when}. Edit reminder for “Late task”`);
   });
 
-  await t.test('a fired row has no "Got it" button', () => {
+  await t.test('a fired row has no "Got it" button', async () => {
     Notification.permission = 'granted';
-    fireAgain('late');
+    await fireAgain('late');
     assert.equal(isFired('late'), true);
     assert.equal(row('late').querySelector('.reminder-got-it'), null);
   });
 
   await t.test('a tap or click anywhere in a fired row clears it', async () => {
-    fireAgain('late');
+    await fireAgain('late');
     assert.equal(isFired('late'), true);
     list.dispatchEvent(dispatch(row('late').querySelector('.todo-text'), 'click'));
     await settle();
@@ -268,7 +174,7 @@ test('reminder editor', async (t) => {
   });
 
   await t.test('focus moving into a fired row clears it', async () => {
-    fireAgain('late');
+    await fireAgain('late');
     assert.equal(isFired('late'), true);
     list.dispatchEvent(dispatch(row('late').querySelector('.todo-checkbox'), 'focusin'));
     await settle();
@@ -276,7 +182,7 @@ test('reminder editor', async (t) => {
   });
 
   await t.test('Esc clears a fired row', async () => {
-    fireAgain('late');
+    await fireAgain('late');
     assert.equal(isFired('late'), true);
     document.dispatchEvent(dispatch(document, 'keydown', { key: 'Escape' }));
     await settle();
@@ -284,7 +190,7 @@ test('reminder editor', async (t) => {
   });
 
   await t.test('the end of the pulses clears a fired row; other animations do not', async () => {
-    fireAgain('late');
+    await fireAgain('late');
     list.dispatchEvent(dispatch(row('late'), 'animationend', { animationName: 'something-else' }));
     await settle();
     assert.equal(isFired('late'), true);
@@ -294,7 +200,7 @@ test('reminder editor', async (t) => {
   });
 
   await t.test('the pulse ending updates the row in place and keeps an open "+ tag" field', async () => {
-    fireAgain('late');
+    await fireAgain('late');
     row('open').querySelector('.tag-add').click();
     const field = row('open').querySelector('.tag-field');
     const lateRow = row('late');
@@ -312,7 +218,7 @@ test('reminder editor', async (t) => {
 
   // The real handler runs in the capture phase, before the field's own Esc handler.
   await t.test('Esc in an open "+ tag" field clears the pulses and still closes the field', async () => {
-    fireAgain('late');
+    await fireAgain('late');
     row('open').querySelector('.tag-add').click();
     const field = row('open').querySelector('.tag-field');
     const escape = dispatch(field, 'keydown', { key: 'Escape', preventDefault() { this.prevented = true; } });
@@ -325,7 +231,7 @@ test('reminder editor', async (t) => {
   });
 
   await t.test('Esc in the reminder editor clears the pulses and still closes the editor', async () => {
-    fireAgain('late');
+    await fireAgain('late');
     row('open').querySelector('.reminder-add').click();
     assert.equal(byId('reminder-layer').hidden, false);
     const escape = dispatch(date, 'keydown', { key: 'Escape', preventDefault() {} });
@@ -337,7 +243,7 @@ test('reminder editor', async (t) => {
   });
 
   await t.test('reduced motion turned on mid-pulse leaves no fired state behind', async () => {
-    fireAgain('late');
+    await fireAgain('late');
     assert.equal(isFired('late'), true);
     reducedMotion.matches = true;
     try {
@@ -359,7 +265,7 @@ test('reminder editor', async (t) => {
 
   // Saves a future time; the next test saves a past one again, so no timer keeps node:test alive.
   await t.test('editing the todo clears a fired row', async () => {
-    fireAgain('late');
+    await fireAgain('late');
     assert.equal(isFired('late'), true);
     row('late').querySelector('.reminder-chip').click();
     edit(future);
@@ -367,10 +273,10 @@ test('reminder editor', async (t) => {
     assert.equal(isFired('late'), false);
   });
 
-  await t.test('with reduced motion a fired row is just overdue (no pulse to wait for)', () => {
+  await t.test('with reduced motion a fired row is just overdue (no pulse to wait for)', async () => {
     reducedMotion.matches = true;
     try {
-      fireAgain('late');
+      await fireAgain('late');
       assert.equal(isFired('late'), false);
       assert.match(row('late').className, /\bis-overdue\b/);
     } finally {
@@ -378,11 +284,11 @@ test('reminder editor', async (t) => {
     }
   });
 
-  await t.test('the blocked note, once dismissed, stays hidden for the session on later Saves', () => {
+  await t.test('the blocked note, once dismissed, stays hidden for the session on later Saves', async () => {
     const banner = byId('banner');
     Notification.permission = 'denied';
     try {
-      fireAgain('late');
+      await fireAgain('late');
       assert.equal(banner.hidden, false);
       assert.match(banner.className, /\bis-note\b/);
       assert.equal(byId('banner-text').textContent, blockedNote);
@@ -392,9 +298,9 @@ test('reminder editor', async (t) => {
       assert.equal(banner.hidden, true);
       assert.equal(session.get('task-manager.blocked-note-dismissed'), '1');
 
-      fireAgain('late');
+      await fireAgain('late');
       assert.equal(banner.hidden, true);
-      fireAgain('late');
+      await fireAgain('late');
       assert.equal(banner.hidden, true);
     } finally {
       Notification.permission = 'default';

@@ -1,3 +1,5 @@
+import { authRequest, readSession, setToken } from './storage.js';
+
 const byId = (id) => document.getElementById(id);
 const title = byId('app-title');
 const authView = byId('auth-view');
@@ -111,21 +113,15 @@ function setSubmitting(active) {
   submitText.textContent = active ? (creating ? 'Creating account…' : 'Signing in…') : heading.textContent;
 }
 
-async function readSession() {
-  const response = await fetch('/api/session', { cache: 'no-store' });
-  if (response.status === 401) return { user: null, csrfToken: null };
-  if (!response.ok) throw new Error('Session check failed');
-  return response.json();
-}
-
-function post(path, body, token) {
-  const headers = { 'Content-Type': 'application/json' };
-  if (token) headers['X-CSRF-Token'] = token;
-  return fetch(`/api/auth/${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
+// Tells the task view which session it shows: a session object, or null when signed out.
+// The task view resets whenever the session's CSRF token changes.
+function announceSession(active) {
+  window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active } }));
 }
 
 function setAccount(active) {
   currentSession = active;
+  setToken(active.csrfToken);
   const label = active.user.name || active.user.email;
   accountName.textContent = label;
   accountName.title = label;
@@ -137,11 +133,14 @@ function showSignedIn(active, focus = false) {
   for (const element of [accountName, signOut, taskView]) element.hidden = false;
   for (const element of [authView, loading, retry]) element.hidden = true;
   setMode(false, { keepEmail: false });
+  announceSession(active);
   if (focus) (touch.matches ? title : byId('new-todo')).focus();
 }
 
 function showSignedOut({ focus = false, expired = false } = {}) {
   currentSession = null;
+  setToken(null);
+  announceSession(null);
   if (!byId('reminder-layer').hidden) byId('reminder-cancel').click();
   for (const element of [accountName, signOut, taskView, loading, retry, signOutNote]) element.hidden = true;
   accountName.textContent = '';
@@ -190,7 +189,9 @@ async function refreshSession() {
     const active = await readSession();
     if (busy || currentSession !== previous) return;
     if (active.user) {
+      // The task view reloads (same session) or resets for the account now signed in.
       setAccount(active);
+      announceSession(active);
     } else {
       showSignedOut({ focus: true, expired: true });
     }
@@ -280,8 +281,8 @@ form.addEventListener('submit', async (event) => {
   let response;
   let errorCode;
   try {
-    response = await post(creating ? 'sign-up/email' : 'sign-in/email', body);
-    if (!response.ok) errorCode = (await response.json().catch(() => null))?.code;
+    response = await authRequest(creating ? 'sign-up/email' : 'sign-in/email', body);
+    errorCode = response.code;
   } catch {
     setSummary(networkMessage);
     submit.focus();
@@ -305,7 +306,7 @@ signOut.addEventListener('click', async () => {
   signOut.textContent = 'Signing out…';
   signOut.setAttribute('aria-disabled', 'true');
   try {
-    const response = await post('sign-out', {}, currentSession.csrfToken);
+    const response = await authRequest('sign-out', {}, { csrf: true });
     if (!response.ok && response.status !== 401) throw new Error('Sign out failed');
     showSignedOut({ focus: true });
     announce('Signed out.');
@@ -318,6 +319,13 @@ signOut.addEventListener('click', async () => {
     busy = false;
   }
 });
+
+// From the task view: its session ended (401), or a request was refused because the session
+// changed in another tab.
+window.addEventListener('tasks:expired', () => {
+  if (currentSession) showSignedOut({ focus: true, expired: true });
+});
+window.addEventListener('tasks:revalidate', () => refreshSession());
 
 document.addEventListener('visibilitychange', refreshSession);
 window.addEventListener('focus', refreshSession);
