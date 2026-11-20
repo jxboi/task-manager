@@ -724,6 +724,11 @@ body {
   margin-bottom: 12px;
 }
 
+/* The edit form hides the "for" line (its Task field shows the text): keep that line's gap. */
+.reminder-for[hidden] + .reminder-field {
+  margin-top: 12px;
+}
+
 .reminder-label {
   display: block;
   margin-bottom: 4px;
@@ -931,6 +936,10 @@ select.reminder-control {
   margin-bottom: 16px;
   font-size: 13px;
   line-height: 18px;
+}
+
+.is-sheet .reminder-for[hidden] + .reminder-field {
+  margin-top: 16px;
 }
 
 /* 16px text so iOS doesn't zoom into the field. */
