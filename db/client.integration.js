@@ -204,6 +204,23 @@ test('browser storage modules against PostgreSQL', {
     assert.deepEqual(tabA.todos.find((todo) => todo.id === anaTodo.id).tags, ['home', 'urgent', 'from-b']);
   });
 
+  await t.test('a queued completion is not replayed over another tab\'s completion after a conflict', async () => {
+    const todo = newTodo('Shared chore');
+    await tabA.create(todo);
+    const before = tabA.todos.find((item) => item.id === todo.id);
+    const tabB = createSync(api);
+    await tabB.load();
+    assert.equal((await tabB.toggle(todo.id, Date.now())).ok, true); // B completes it
+    const tag = tabA.addTag(todo.id, 'mine'); // A's stale tag write conflicts...
+    const complete = tabA.toggle(todo.id, Date.now(), before); // ...and A's queued click is cancelled
+    assert.equal((await tag).error.status, 409);
+    assert.deepEqual(await complete, { ok: false, cancelled: true });
+    const { rows } = await admin.query('SELECT completed, revision FROM todos WHERE id = $1', [todo.id]);
+    assert.deepEqual(rows, [{ completed: true, revision: 2 }]);
+    assert.equal(tabA.todos.find((item) => item.id === todo.id).completed, true);
+    assert.equal((await tabA.remove(todo.id)).ok, true);
+  });
+
   await t.test('an uncertain create retried with the same UUID is saved once', async () => {
     const todo = newTodo('Once only');
     const real = globalThis.fetch;

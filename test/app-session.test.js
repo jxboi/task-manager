@@ -20,6 +20,20 @@ test('task view against the server API', async (t) => {
     return servers[cookie].fetch(...args);
   };
   const { byId, list } = installDom(t, { fetch });
+  // Desktop notifications the app opens, so teardown can be checked.
+  const notifications = [];
+  globalThis.Notification = class {
+    static permission = 'granted';
+    constructor(title) {
+      this.title = title;
+      this.closed = false;
+      notifications.push(this);
+    }
+    close() {
+      this.closed = true;
+      this.onclose?.();
+    }
+  };
   const events = [];
   await import('../src/app.js');
   for (const type of ['tasks:expired', 'tasks:revalidate']) window.addEventListener(type, () => events.push(type));
@@ -169,11 +183,126 @@ test('task view against the server API', async (t) => {
     servers.a.session = { ...sessionA, csrfToken: 'token-a2' };
     await toggle('Pay rent');
     assert.deepEqual(events, ['tasks:expired', 'tasks:revalidate']);
+    // The list stays hidden while the session is re-read.
+    assert.deepEqual(texts(), []);
+    assert.equal(summary.textContent, 'Loading your tasks…');
     servers.a.session = { ...sessionA };
+    signIn(sessionA); // the auth module found the same session
+    await settle();
+    assert.ok(texts().includes('Pay rent'));
+    assert.match(byId('sync-text').textContent, /blocked/);
     byId('sync-dismiss').click();
   });
 
+  await t.test('item 1: another tab changing the session hides the list at once and ignores late answers', async () => {
+    const before = texts();
+    let open;
+    gate = new Promise((resolve) => { open = resolve; });
+    list.dispatchEvent(event(rowOf('Pay rent').querySelector('.todo-checkbox'), 'change'));
+    // auth.js got a BroadcastChannel message from another tab.
+    window.dispatchEvent(new CustomEvent('tasks:invalidate'));
+    assert.deepEqual(texts(), []);
+    assert.equal(summary.textContent, 'Loading your tasks…');
+    assert.equal(byId('add-button').disabled, true);
+    gate = null;
+    open(); // the already-authorized answer arrives: ignored
+    await settle();
+    assert.deepEqual(texts(), []);
+    assert.equal(note.hidden, true);
+    signIn(sessionA); // the session re-read: still Ana
+    await settle();
+    assert.deepEqual(texts().sort(), before.sort());
+  });
+
+  await t.test('item 6: a failed delete brings the row back with its reminder timer re-armed', async () => {
+    const due = Date.now() + 120;
+    servers.a.rows = [...servers.a.rows, row(92, 'Ping', { due, createdAt: 92 })];
+    signIn(sessionA);
+    await settle();
+    servers.a.failNext = (method) => (method === 'DELETE' ? new Response('{}', { status: 500 }) : undefined);
+    rowOf('Ping').querySelector('.todo-delete').click();
+    await settle();
+    assert.ok(texts().includes('Ping'));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await settle();
+    assert.equal(byId('announcer').textContent, 'Reminder due: Ping');
+    assert.equal(servers.a.rows.find((item) => item.id === ID(92)).notified, due);
+    byId('sync-dismiss').click();
+  });
+
+  await t.test('item 5: Try again after a lost reminder save reconciles first and never re-arms a claimed alert', async () => {
+    rowOf('Fix tap').querySelector('.reminder-add').click();
+    const when = byId('reminder-when');
+    when.value = '2000-01-01T12:00';
+    when.dispatchEvent(new Event('input'));
+    servers.a.failNext = (method) => (method === 'PATCH' ? { afterWrite: true } : undefined);
+    byId('reminder-save').click();
+    await settle();
+    const saved = servers.a.rows.find((item) => item.text === 'Fix tap');
+    assert.ok(saved.due !== null, 'the save reached the server');
+    assert.equal(rowOf('Fix tap').querySelector('.reminder-chip'), null, 'rolled back here');
+    // Another tab claims (alerts) it before this tab retries.
+    servers.a.rows = servers.a.rows.map((item) => (item === saved ? { ...item, notified: item.due, revision: item.revision + 1 } : item));
+    const patches = () => servers.a.requests.filter((r) => r.method === 'PATCH' && r.path.endsWith(saved.id)).length;
+    const sent = patches();
+    const announced = byId('announcer').textContent;
+    byId('sync-retry').click();
+    await settle();
+    assert.equal(patches(), sent, 'nothing re-sent');
+    const after = servers.a.rows.find((item) => item.id === saved.id);
+    assert.equal(after.notified, after.due);
+    assert.equal(byId('announcer').textContent, announced, 'no second alert');
+    assert.ok(rowOf('Fix tap').querySelector('.reminder-chip'));
+  });
+
+  await t.test('item 4: each lost create keeps its own retry ID, also after a duplicate with a failed reload', async () => {
+    const count = (text) => servers.a.rows.filter((item) => item.text === text).length;
+    const lostPost = (method) => (method === 'POST' ? { afterWrite: true } : undefined);
+    servers.a.failNext = lostPost;
+    await add('Alpha');
+    assert.equal(input.value, 'Alpha');
+    servers.a.failNext = lostPost;
+    await add('Beta');
+    assert.equal(input.value, 'Beta');
+    await add('Beta');
+    await add('Alpha');
+    assert.equal(count('Alpha'), 1);
+    assert.equal(count('Beta'), 1);
+    assert.equal(texts().filter((text) => text === 'Alpha').length, 1);
+
+    servers.a.failNext = lostPost;
+    await add('Gamma');
+    // Re-adding gets 409 (it was saved) but the reload fails: the ID must survive.
+    servers.a.failNext = (method) => (method === 'GET' ? new Response('{}', { status: 500 }) : undefined);
+    await add('Gamma');
+    assert.equal(input.value, 'Gamma');
+    await add('Gamma');
+    assert.equal(count('Gamma'), 1);
+    assert.equal(texts().filter((text) => text === 'Gamma').length, 1);
+    assert.equal(input.value, '');
+  });
+
+  await t.test('nit: a conflict whose reload failed does not claim the list is up to date', async () => {
+    servers.a.rows = servers.a.rows.map((item) => (item.text === 'Alpha' ? { ...item, revision: item.revision + 1 } : item));
+    servers.a.failNext = (method) => (method === 'GET' ? new Response('{}', { status: 500 }) : undefined);
+    await toggle('Alpha');
+    assert.doesNotMatch(byId('sync-text').textContent, /up to date/);
+    assert.match(byId('sync-text').textContent, /couldn't be loaded/);
+    assert.equal(byId('sync-retry').hidden, false);
+    byId('sync-retry').click();
+    await settle();
+    assert.equal(note.hidden, true);
+    await toggle('Alpha');
+    assert.equal(servers.a.rows.find((item) => item.text === 'Alpha').completed, true);
+  });
+
   await t.test('signing out clears rows, filters, drafts and editors; late answers are ignored', async () => {
+    assert.ok(notifications.length > 0 && notifications.some((item) => !item.closed));
+    assert.notEqual(byId('announcer').textContent, '');
+    // item 2: an open reminder editor with values in it.
+    rowOf('Existing').querySelector('.reminder-add').click();
+    byId('reminder-when').value = '2031-05-05T08:00';
+    byId('reminder-repeat').value = 'daily';
     byId('filter-bar').children.find((item) => item.dataset.tag === 'home').click();
     input.value = 'half-typed';
     let open;
@@ -189,6 +318,13 @@ test('task view against the server API', async (t) => {
     assert.equal(byId('filter-wrap').hidden, true);
     assert.equal(byId('reminder-layer').hidden, true);
     assert.equal(note.hidden, true);
+    assert.equal(byId('reminder-for').textContent, '');
+    assert.equal(byId('reminder-editor').getAttribute('aria-label'), null);
+    assert.equal(byId('reminder-when').value, '');
+    assert.equal(byId('reminder-repeat').value, 'none');
+    assert.equal(byId('announcer').textContent, '');
+    assert.equal(byId('reminder-announcer').textContent, '');
+    assert.ok(notifications.every((item) => item.closed));
   });
 
   await t.test('the next account on the same browser sees only its own list', async () => {

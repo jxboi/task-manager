@@ -67,6 +67,7 @@ export function createFakeApi({ csrfToken = 'token-a', user = { name: 'Ana', ema
     const method = init.method ?? 'GET';
     const headers = init.headers ?? {};
     server.requests.push({ method, path: `${url.pathname}${url.search}`, headers, body: init.body });
+    // failNext stays armed until it returns something, so it can wait for a particular request.
     const injected = server.failNext?.(method, url);
     if (injected !== undefined) {
       server.failNext = null;

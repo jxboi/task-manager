@@ -238,3 +238,44 @@ test('session errors come back to the caller: 401 and a CSRF mismatch', async ()
   assert.equal(expired.error.status, 401);
   assert.deepEqual(sync.todos, []);
 });
+
+test('item 3: a conflict cancels the queued changes for that todo instead of rebasing them', async () => {
+  const { server, sync } = setup();
+  const todo = newTodo('Shared');
+  const other = newTodo('Unrelated');
+  await sync.create(todo);
+  const before = sync.todos[0];
+  // Another tab completes it: this tab's revision is stale.
+  server.rows = [{ ...server.rows[0], completed: true, revision: 2 }];
+  const tag = sync.addTag(todo.id, 'mine');
+  const complete = sync.toggle(todo.id, Date.now(), before); // queued behind the tag write
+  const create = sync.create(other); // another todo: not affected
+  assert.equal((await tag).error.status, 409);
+  assert.deepEqual(await complete, { ok: false, cancelled: true });
+  assert.equal((await create).ok, true);
+  // The other tab's completion stands; nothing turned it back.
+  assert.equal(server.rows[0].completed, true);
+  assert.equal(server.rows[0].revision, 2);
+  assert.equal(sync.todos.find((item) => item.id === todo.id).completed, true);
+  assert.ok(server.rows.some((item) => item.id === other.id));
+  // Changes made after the conflict go through.
+  assert.equal((await sync.addTag(todo.id, 'later')).ok, true);
+});
+
+test('item 3: a queued completion whose row changed under it (after a reload) is refused', async () => {
+  const { server, sync } = setup();
+  const todo = newTodo('Shared');
+  await sync.create(todo);
+  const before = sync.todos[0];
+  server.rows = [{ ...server.rows[0], completed: true, revision: 2 }];
+  // A reload (returning to the tab) lands before the queued click is sent.
+  const reload = sync.load();
+  const complete = sync.toggle(todo.id, Date.now(), before);
+  await reload;
+  const outcome = await complete;
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.error.code, 'STALE_CHANGE');
+  assert.equal(outcome.reloaded, true);
+  assert.equal(server.rows[0].completed, true);
+  assert.equal(server.requests.filter((r) => r.method === 'PATCH').length, 0);
+});

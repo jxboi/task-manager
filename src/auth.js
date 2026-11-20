@@ -181,8 +181,12 @@ async function loadSession({ focus = false } = {}) {
   }
 }
 
-async function refreshSession() {
-  if (!currentSession || busy || checking || document.visibilityState !== 'visible') return;
+// `force`: re-read even in a background tab, and once more after a check already running (it may
+// have started before the session changed).
+let refreshAgain = false;
+async function refreshSession(force = false) {
+  if (checking && force) refreshAgain = true;
+  if (!currentSession || busy || checking || (!force && document.visibilityState !== 'visible')) return;
   const previous = currentSession;
   checking = true;
   try {
@@ -199,8 +203,31 @@ async function refreshSession() {
     // Keep the current view during temporary connectivity failures.
   } finally {
     checking = false;
+    if (refreshAgain) {
+      refreshAgain = false;
+      refreshSession(true);
+    }
   }
 }
+
+// Other tabs of this browser share the session cookie. When one signs in, up or out, the rest
+// hide their lists at once (nothing of the old account stays on screen or answers late) and
+// re-read the session.
+const authChannel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('task-manager-auth') : null;
+
+function broadcastAuthChange() {
+  try {
+    authChannel?.postMessage('session-changed');
+  } catch {
+    // The other tabs catch up when they next check the session.
+  }
+}
+
+authChannel?.addEventListener('message', () => {
+  if (!currentSession) return;
+  window.dispatchEvent(new CustomEvent('tasks:invalidate'));
+  refreshSession(true);
+});
 
 function handleAuthError(response, code) {
   if (creating && ['USER_ALREADY_EXISTS', 'USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL'].includes(code)) {
@@ -296,6 +323,7 @@ form.addEventListener('submit', async (event) => {
   }
   password.value = '';
   authView.hidden = true;
+  broadcastAuthChange();
   await loadSession({ focus: true });
 });
 
@@ -309,6 +337,7 @@ signOut.addEventListener('click', async () => {
     const response = await authRequest('sign-out', {}, { csrf: true });
     if (!response.ok && response.status !== 401) throw new Error('Sign out failed');
     showSignedOut({ focus: true });
+    broadcastAuthChange();
     announce('Signed out.');
   } catch {
     signOutNote.hidden = false;
@@ -325,9 +354,9 @@ signOut.addEventListener('click', async () => {
 window.addEventListener('tasks:expired', () => {
   if (currentSession) showSignedOut({ focus: true, expired: true });
 });
-window.addEventListener('tasks:revalidate', () => refreshSession());
+window.addEventListener('tasks:revalidate', () => refreshSession(true));
 
-document.addEventListener('visibilitychange', refreshSession);
-window.addEventListener('focus', refreshSession);
-window.addEventListener('pageshow', refreshSession);
+document.addEventListener('visibilitychange', () => refreshSession());
+window.addEventListener('focus', () => refreshSession());
+window.addEventListener('pageshow', () => refreshSession());
 loadSession();

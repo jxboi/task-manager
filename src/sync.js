@@ -26,6 +26,10 @@ export function createSync(api, { onChange = () => {} } = {}) {
   let generation = 0;
   let queue = Promise.resolve();
   let loaded = false;
+  // A conflict on a todo cancels the writes for that todo still queued behind it: they were made
+  // against a row that turned out to be stale, so they aren't replayed on another tab's version.
+  let seq = 0;
+  const conflictedAt = new Map(); // todo id -> seq of its latest conflict
 
   function changed() {
     view = pending.reduce((todos, entry) => entry.apply(todos), confirmed);
@@ -49,8 +53,11 @@ export function createSync(api, { onChange = () => {} } = {}) {
 
   // One write. `apply` is the optimistic change (omitted for claims); `send` gets the confirmed row
   // (or null for a create) and resolves to the server's row (or null after a delete).
-  function write({ id, apply, send, needsRow = true, commit }) {
+  // `holds(row)`, if given, is the change's assumption about the confirmed row when its turn comes;
+  // if it no longer holds (another tab changed the row), the change is refused as a conflict.
+  function write({ id, apply, send, needsRow = true, commit, holds }) {
     const gen = generation;
+    const queuedAt = ++seq;
     const entry = apply && { apply };
     if (entry) {
       pending.push(entry);
@@ -67,6 +74,19 @@ export function createSync(api, { onChange = () => {} } = {}) {
         changed();
         return { ok: false, skipped: true };
       }
+      if ((conflictedAt.get(id) ?? 0) > queuedAt) {
+        settle();
+        changed();
+        return { ok: false, cancelled: true };
+      }
+      if (holds && !holds(row)) {
+        settle();
+        conflictedAt.set(id, ++seq);
+        const reloaded = await reloadNow(gen).catch(() => false);
+        if (gen !== generation) return { ok: false, stale: true };
+        if (!reloaded) changed();
+        return { ok: false, error: { status: 409, code: 'STALE_CHANGE' }, reloaded };
+      }
       try {
         const result = await send(row);
         if (gen !== generation) return { ok: false, stale: true };
@@ -79,17 +99,21 @@ export function createSync(api, { onChange = () => {} } = {}) {
         settle();
         changed();
         let reloaded = false;
-        if (needsReload(error)) reloaded = await reloadNow(gen).catch(() => false);
+        if (needsReload(error)) {
+          conflictedAt.set(id, ++seq);
+          reloaded = await reloadNow(gen).catch(() => false);
+        }
         if (gen !== generation) return { ok: false, stale: true };
         return { ok: false, error, reloaded };
       }
     });
   }
 
-  function patch(id, apply, action, fields) {
+  function patch(id, apply, action, fields, holds) {
     return write({
       id,
       apply,
+      holds,
       send: (row) => api.patchTodo(id, row.revision, action, typeof fields === 'function' ? fields(row) : fields),
       commit: replace,
     });
@@ -111,6 +135,7 @@ export function createSync(api, { onChange = () => {} } = {}) {
 
     reset() {
       generation++;
+      conflictedAt.clear();
       confirmed = [];
       pending = [];
       view = [];
@@ -151,11 +176,13 @@ export function createSync(api, { onChange = () => {} } = {}) {
 
     // The browser works out the next occurrence of a repeating todo in its own zone; the server
     // checks the transition.
-    toggle(id, now) {
+    // `before` is the row as shown when it was clicked: completing is only sent if the server's row
+    // is still in that state, so a queued click can't undo another tab's completion.
+    toggle(id, now, before) {
       return patch(id, (todos) => toggleTodo(todos, id, now), 'complete', (row) => {
         const after = toggleTodo([row], id, now)[0];
         return { completed: after.completed, due: after.due };
-      });
+      }, before && ((row) => row.completed === before.completed && row.due === before.due));
     },
 
     remove(id) {

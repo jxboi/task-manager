@@ -96,11 +96,14 @@ let sessionEmail = null;
 let revalidating = false; // a CSRF rejection asked the auth module to re-read the session
 let resuming = false;
 let viewSignature = '[]';
-let createDraft = null; // {raw, id}: a create that may or may not have reached the server
+// Creates that may or may not have reached the server: draft text -> their IDs, oldest first.
+// Adding the same text again reuses one of those IDs, so a create that did land can't be doubled.
+const createDrafts = new Map();
 let retryAction = null;
 const claiming = new Set(); // "id:due" occurrences being claimed by this tab
 const claimBackoff = new Map(); // "id:due" -> time before which it isn't claimed again
 let recheckTimer;
+const openNotifications = new Set(); // closed when the session ends
 // View state: never saved, never in the URL.
 let activeTags = []; // A to Z
 let editingId = null; // todo whose "+ tag" field is open
@@ -622,6 +625,8 @@ function notify(ready) {
       count === 1
         ? new Notification(first.text, { body: 'Reminder', tag: first.id })
         : new Notification(`${count} reminders due`, { body: `${first.text} and ${count - 1} more` });
+    openNotifications.add(notification);
+    notification.onclose = () => openNotifications.delete(notification);
     notification.onclick = () => {
       window.focus();
       notification.close();
@@ -760,7 +765,10 @@ function saveEditor() {
 
 function saveReminder(id, due, repeat) {
   // A time already past alerts right away (once saved); otherwise this re-arms the timer.
-  saved(sync.setReminder(id, due, repeat), () => findTodo(id) && saveReminder(id, due, repeat));
+  saved(sync.setReminder(id, due, repeat), () => {
+    const todo = findTodo(id);
+    if (todo && (todo.due !== due || todo.repeat !== repeat)) saveReminder(id, due, repeat);
+  });
   check();
 }
 
@@ -773,7 +781,7 @@ function removeReminder() {
 }
 
 function clearSavedReminder(id) {
-  saved(sync.clearReminder(id), () => findTodo(id) && clearSavedReminder(id));
+  saved(sync.clearReminder(id), () => findTodo(id)?.due != null && clearSavedReminder(id));
   check();
 }
 
@@ -884,8 +892,11 @@ form.addEventListener('submit', async (event) => {
   if (text === '' || phase !== 'ready') return;
   const [todo] = addTodo([], text, tags);
   // Re-adding a draft whose save was uncertain sends the same ID: a 409 then means it was saved.
-  if (createDraft?.raw === raw) todo.id = createDraft.id;
-  createDraft = null;
+  const retryIds = createDrafts.get(raw);
+  if (retryIds) {
+    todo.id = retryIds.shift();
+    if (retryIds.length === 0) createDrafts.delete(raw);
+  }
   hideSync();
   const result = sync.create(todo);
   input.value = '';
@@ -899,8 +910,10 @@ form.addEventListener('submit', async (event) => {
     input.value = raw;
     syncAddButton();
   }
-  const uncertain = !outcome.error || outcome.error.status === 0 || outcome.error.status >= 500;
-  if (uncertain) createDraft = { raw, id: todo.id };
+  // A duplicate ID whose reload failed is uncertain too: keep the ID for the next try.
+  const { status, code } = outcome.error ?? {};
+  const uncertain = !outcome.error || status === 0 || status >= 500 || code === 'DUPLICATE_ID';
+  if (uncertain) createDrafts.set(raw, [...(createDrafts.get(raw) ?? []), todo.id]);
   if (handleSessionError(outcome.error)) return;
   showSync(uncertain
     ? `Couldn't add “${text}”. Check your connection, then press Add to try again.`
@@ -931,7 +944,7 @@ function toggle(id) {
   const now = Date.now();
   const [after] = toggleTodo([before], id, now);
   fired.delete(id);
-  saved(sync.toggle(id, now), () => {
+  saved(sync.toggle(id, now, before), () => {
     const current = findTodo(id);
     if (current?.completed === before.completed && current.due === before.due) toggle(id);
   });
@@ -948,11 +961,11 @@ function removeRow(id) {
 }
 
 function addSavedTag(id, tag) {
-  saved(sync.addTag(id, tag), () => findTodo(id) && addSavedTag(id, tag));
+  saved(sync.addTag(id, tag), () => findTodo(id) && !findTodo(id).tags.includes(tag) && addSavedTag(id, tag));
 }
 
 function removeSavedTag(id, tag) {
-  saved(sync.removeTag(id, tag), () => findTodo(id) && removeSavedTag(id, tag));
+  saved(sync.removeTag(id, tag), () => findTodo(id)?.tags.includes(tag) && removeSavedTag(id, tag));
 }
 
 // Tries a tag from the "+ tag" field. Returns the todo's tags after it, or null if rejected
@@ -1152,6 +1165,7 @@ function handleSessionError(error) {
     if (revalidating) {
       showSync('This change was blocked. Reload the page and try again.');
     } else {
+      hideForRevalidation();
       revalidating = true;
       window.dispatchEvent(new CustomEvent('tasks:revalidate'));
     }
@@ -1164,18 +1178,51 @@ function handleSessionError(error) {
 // reloaded it); `retry` repeats the same change if it still applies.
 async function saved(result, retry) {
   const outcome = await result;
-  if (outcome.ok || outcome.stale || outcome.skipped) {
-    if (outcome.ok) rearm(Date.now());
+  if (outcome.stale) return;
+  if (outcome.ok) {
+    rearm(Date.now());
     return;
   }
+  // The change rolled back (a deleted row came back, say): recheck reminders and re-arm the timer.
+  check();
+  // Skipped (row gone) or cancelled behind a conflict that has already been reported.
+  if (outcome.skipped || outcome.cancelled) return;
   const { error } = outcome;
   if (handleSessionError(error)) return;
-  if (outcome.reloaded || error.status === 409 || error.status === 404) {
-    showSync('This task changed in another tab or device. The list is up to date now, so try again.');
+  if (error.status === 409 || error.status === 404) {
+    if (outcome.reloaded) {
+      showSync('This task changed in another tab or device. The list is up to date now, so try again.');
+    } else {
+      showSync("This task changed in another tab or device, and the latest list couldn't be loaded. Try again.", reloadList);
+    }
   } else if (error.status === 400) {
     showSync("Couldn't save that change.");
   } else {
-    showSync("Couldn't save your change. Check your connection and try again.", retry);
+    showSync("Couldn't save your change. Check your connection and try again.", () => reconcileThen(retry));
+  }
+}
+
+// After an uncertain failure the change may have been saved anyway (only the answer was lost),
+// and another tab may have acted on it since. Reload first; `retry` re-sends only what is missing.
+async function reconcileThen(retry) {
+  const result = await sync.load();
+  if (result.stale) return;
+  if (!result.ok) {
+    if (!handleSessionError(result.error)) {
+      showSync("Couldn't save your change. Check your connection and try again.", () => reconcileThen(retry));
+    }
+    return;
+  }
+  retry?.();
+  check();
+}
+
+async function reloadList() {
+  const result = await sync.load();
+  if (result.stale) return;
+  if (result.ok) check();
+  else if (!handleSessionError(result.error)) {
+    showSync("The latest list couldn't be loaded. Check your connection and try again.", reloadList);
   }
 }
 
@@ -1188,6 +1235,21 @@ function clearView() {
   activeTags = [];
   editingId = null;
   if (reminderId !== null) closeEditor();
+  // Nothing of the old account stays in the hidden editor or the live regions.
+  editorFor.textContent = '';
+  editor.removeAttribute('aria-label');
+  whenInput.value = '';
+  repeatSelect.value = 'none';
+  announcer.textContent = '';
+  editorAnnouncer.textContent = '';
+  for (const notification of openNotifications) {
+    try {
+      notification.close();
+    } catch {
+      // Already gone.
+    }
+  }
+  openNotifications.clear();
   fired.clear();
   claiming.clear();
   claimBackoff.clear();
@@ -1196,10 +1258,22 @@ function clearView() {
   hideBanner();
   hideSync();
   input.value = '';
-  createDraft = null;
+  createDrafts.clear();
   revalidating = false;
   resuming = false;
 }
+
+// The session may have changed (another tab signed in or out, or a request was refused): hide
+// the list, drop its pending changes and alerts, and ignore answers still on their way until the
+// auth module has re-read the session and sent `tasks:session`.
+function hideForRevalidation() {
+  if (phase === 'signed-out') return;
+  clearView();
+  phase = 'loading';
+  render();
+}
+
+window.addEventListener('tasks:invalidate', hideForRevalidation);
 
 async function loadList() {
   const result = await sync.load();
@@ -1252,6 +1326,7 @@ window.addEventListener('tasks:session', ({ detail: { active } }) => {
     // The same session, re-read on return to the tab or after a blocked request.
     if (revalidating) {
       revalidating = false;
+      resume();
       showSync('This change was blocked. Reload the page and try again.');
       return;
     }
