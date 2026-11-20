@@ -175,12 +175,23 @@ body {
   line-height: 18px;
 }
 
-/* Blocked notifications: a muted line of text, no fill, so it never outweighs the task list. */
+/* Blocked notifications: one muted line (it wraps only at larger text sizes), no fill, so it
+   never outweighs the task list. Its copy is short enough for one line at 375px. */
 .banner.is-note {
+  gap: 8px;
   margin-top: -12px; /* 8px under the add hint (its margin is 20px) */
   padding: 0 2px;
   border-radius: 0;
   color: #52525b;
+}
+
+.banner.is-note .banner-icon {
+  margin-top: 2px;
+}
+
+.banner.is-note .banner-icon svg {
+  width: 14px;
+  height: 14px;
 }
 
 .banner.is-info {
@@ -629,7 +640,13 @@ body {
   animation: reminder-pulse 1.2s ease-in-out 2;
 }
 
+/* Explicit endpoints: on a hovered row the base would already be the peak tint. */
 @keyframes reminder-pulse {
+  0%,
+  100% {
+    background: var(--color-over-bg);
+  }
+
   50% {
     background: var(--color-over-bg-hover);
   }

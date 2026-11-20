@@ -7,6 +7,8 @@ const invalidDate = 'Enter a valid date and time.';
 const pastTime = 'That time has passed. Saving will mark this task overdue and alert right away.';
 const doneTask = "This task is done, so its reminder won't alert. Uncheck it to turn alerts back on.";
 const notificationsBlocked = 'Notifications are blocked or unavailable. Due tasks will be highlighted on this page.';
+const blockedNote = 'Notifications off. Reminders show only here.';
+const styles = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
 const future = '2099-01-01T12:00';
 const past = '2000-01-01T12:00';
 const markup = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
@@ -19,6 +21,7 @@ class Element extends EventTarget {
   className = '';
   classList = {
     add: (name) => this.classList.toggle(name, true),
+    remove: (name) => this.classList.toggle(name, false),
     contains: (name) => this.className.split(/\s+/).includes(name),
     toggle: (name, enabled) => {
       const classes = new Set(this.className.split(/\s+/).filter(Boolean));
@@ -95,11 +98,12 @@ test('reminder editor', async (t) => {
     return queries.get(query);
   };
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  const lateDue = Date.parse('2001-01-01T09:00:00');
   const tasks = [
     { id: 'open', text: 'Open task', completed: false, createdAt: 1 },
     { id: 'done', text: 'Done task', completed: true, createdAt: 2 },
     // Overdue and not alerted yet: it fires when the app starts.
-    { id: 'late', text: 'Late task', completed: false, createdAt: 3, due: Date.parse('2001-01-01T09:00:00'), repeat: 'none', notified: null },
+    { id: 'late', text: 'Late task', completed: false, createdAt: 3, due: lateDue, repeat: 'none', notified: null },
   ];
   const session = new Map();
   const globals = {
@@ -240,8 +244,11 @@ test('reminder editor', async (t) => {
   await t.test('an overdue chip is one chip reading "Overdue · {due}" with a sensible name', () => {
     const chip = row('late').querySelector('.reminder-chip');
     assert.match(chip.className, /\bis-overdue\b/);
-    assert.match(chip.querySelector('.reminder-when').textContent, /^Overdue · Jan 1, 2001, 9:00\sAM$/);
-    assert.match(chip.getAttribute('aria-label'), /^Overdue, was due Jan 1, 2001, 9:00\sAM\. Edit reminder for “Late task”$/);
+    // Another year: "{short date with year}, {time}", in the runtime's locale, as the app formats it.
+    const format = (options) => new Intl.DateTimeFormat(undefined, options).format(new Date(lateDue));
+    const when = `${format({ month: 'short', day: 'numeric', year: 'numeric' })}, ${format({ hour: 'numeric', minute: '2-digit' })}`;
+    assert.equal(chip.querySelector('.reminder-when').textContent, `Overdue · ${when}`);
+    assert.equal(chip.getAttribute('aria-label'), `Overdue, was due ${when}. Edit reminder for “Late task”`);
   });
 
   await t.test('a fired row has no "Got it" button', () => {
@@ -286,6 +293,70 @@ test('reminder editor', async (t) => {
     assert.equal(isFired('late'), false);
   });
 
+  await t.test('the pulse ending updates the row in place and keeps an open "+ tag" field', async () => {
+    fireAgain('late');
+    row('open').querySelector('.tag-add').click();
+    const field = row('open').querySelector('.tag-field');
+    const lateRow = row('late');
+    assert.ok(field);
+    assert.equal(isFired('late'), true);
+    list.dispatchEvent(dispatch(lateRow, 'animationend', { animationName: 'reminder-pulse' }));
+    await settle();
+    assert.equal(row('late'), lateRow, 'the row was not re-rendered');
+    assert.equal(lateRow.style.animationDelay, '');
+    assert.equal(isFired('late'), false);
+    assert.equal(row('open').querySelector('.tag-field'), field, 'the tag field was not replaced');
+    assert.equal(document.activeElement, field);
+    list.dispatchEvent(dispatch(field, 'keydown', { key: 'Escape', preventDefault() {} }));
+  });
+
+  // The real handler runs in the capture phase, before the field's own Esc handler.
+  await t.test('Esc in an open "+ tag" field clears the pulses and still closes the field', async () => {
+    fireAgain('late');
+    row('open').querySelector('.tag-add').click();
+    const field = row('open').querySelector('.tag-field');
+    const escape = dispatch(field, 'keydown', { key: 'Escape', preventDefault() { this.prevented = true; } });
+    document.dispatchEvent(escape);
+    list.dispatchEvent(escape);
+    await settle();
+    assert.equal(isFired('late'), false);
+    assert.equal(escape.prevented, true);
+    assert.equal(row('open').querySelector('.tag-field'), null);
+  });
+
+  await t.test('Esc in the reminder editor clears the pulses and still closes the editor', async () => {
+    fireAgain('late');
+    row('open').querySelector('.reminder-add').click();
+    assert.equal(byId('reminder-layer').hidden, false);
+    const escape = dispatch(date, 'keydown', { key: 'Escape', preventDefault() {} });
+    document.dispatchEvent(escape);
+    byId('reminder-editor').dispatchEvent(escape);
+    await settle();
+    assert.equal(byId('reminder-layer').hidden, true);
+    assert.equal(isFired('late'), false);
+  });
+
+  await t.test('reduced motion turned on mid-pulse leaves no fired state behind', async () => {
+    fireAgain('late');
+    assert.equal(isFired('late'), true);
+    reducedMotion.matches = true;
+    try {
+      reducedMotion.dispatchEvent(new Event('change'));
+      assert.equal(isFired('late'), false);
+    } finally {
+      reducedMotion.matches = false;
+      reducedMotion.dispatchEvent(new Event('change'));
+    }
+    byId('reminder-cancel').click(); // any render: the old pulse must not come back
+    assert.equal(isFired('late'), false);
+  });
+
+  await t.test('the pulse starts and ends on the base overdue tint, so it shows on a hovered row', () => {
+    const keyframes = styles.match(/@keyframes reminder-pulse \{([\s\S]*?)\n\}/)[1];
+    assert.match(keyframes, /0%,\s*100% \{\s*background: var\(--color-over-bg\);/);
+    assert.match(keyframes, /50% \{\s*background: var\(--color-over-bg-hover\);/);
+  });
+
   // Saves a future time; the next test saves a past one again, so no timer keeps node:test alive.
   await t.test('editing the todo clears a fired row', async () => {
     fireAgain('late');
@@ -314,7 +385,7 @@ test('reminder editor', async (t) => {
       fireAgain('late');
       assert.equal(banner.hidden, false);
       assert.match(banner.className, /\bis-note\b/);
-      assert.equal(byId('banner-text').textContent, notificationsBlocked);
+      assert.equal(byId('banner-text').textContent, blockedNote);
       assert.equal(byId('banner-dismiss').hidden, false);
 
       byId('banner-dismiss').click();

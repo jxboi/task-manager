@@ -69,6 +69,8 @@ const PULSE_MS = 2 * 1200; // the fired row's 2 pulses (styles.css reminder-puls
 const NOTE_DISMISSED_KEY = 'task-manager.blocked-note-dismissed';
 
 const BLOCKED_TEXT = 'Notifications are blocked or unavailable. Due tasks will be highlighted on this page.';
+// The list-level note: short enough for one line at 375px (the editor keeps the longer BLOCKED_TEXT).
+const NOTE_TEXT = 'Notifications off. Reminders show only here.';
 const MESSAGES = {
   invalid: { kind: 'error', icon: alertIcon, text: 'Enter a valid date and time.' },
   done: { kind: 'warn', icon: infoIcon, text: "This task is done, so its reminder won't alert. Uncheck it to turn alerts back on." },
@@ -405,10 +407,11 @@ function render(focusKeys) {
 
   // A highlight ends once its todo is no longer overdue (completed, rolled over, changed, deleted),
   // and once its pulses are over (animationend normally clears it first).
+  // Under reduced motion nothing pulses, so nothing stays fired.
   const pulseNow = performance.now();
   for (const [id, started] of fired) {
     const todo = findTodo(id);
-    if (!todo || !isOverdue(todo, now) || pulseNow - started >= PULSE_MS) fired.delete(id);
+    if (reducedMotion.matches || !todo || !isOverdue(todo, now) || pulseNow - started >= PULSE_MS) fired.delete(id);
   }
   // The todo being edited was deleted: close its editor.
   if (reminderId !== null && !findTodo(reminderId)) closeEditor();
@@ -627,8 +630,19 @@ function dismissNote() {
   }
 }
 
+// Ends a highlight on the existing row, without a render: a render would replace an open
+// "+ tag" field (in any row) and lose its caret and selection.
 function dismissFired(id) {
-  if (fired.delete(id)) renderSoon();
+  if (!fired.delete(id)) return;
+  const row = [...list.children].find((item) => item.dataset.id === id);
+  if (row) {
+    row.classList.remove('is-fired');
+    row.style.animationDelay = '';
+  }
+}
+
+function dismissAllFired() {
+  for (const id of [...fired.keys()]) dismissFired(id);
 }
 
 // --- Reminders: editor ---------------------------------------------------------------------
@@ -683,7 +697,7 @@ function saveEditor() {
   requestPermission();
   closeEditor(); // first: the sheet makes the status line inert
   // The blocked note, until dismissed: then it stays hidden for the session, even on later Saves.
-  if (notificationsBlocked() && !noteDismissed) showBanner('note', BLOCKED_TEXT);
+  if (notificationsBlocked() && !noteDismissed) showBanner('note', NOTE_TEXT);
   else if (!banner.hidden && banner.classList.contains('is-note')) hideBanner();
   fired.delete(id);
   commit(setReminder(state, id, due, repeat));
@@ -914,11 +928,15 @@ list.addEventListener('focusin', (event) => {
   if (!rendering) dismissFired(event.target.closest('.todo')?.dataset.id);
 });
 
-// Esc ends every highlight (fields and the editor handle their own Esc first).
+// Esc ends every highlight. Capture phase, so it also runs when a "+ tag" field or the reminder
+// editor uses the same Esc to close (they still do; this neither stops nor prevents the event).
 document.addEventListener('keydown', (event) => {
-  if (event.key !== 'Escape' || event.defaultPrevented || reminderId !== null || fired.size === 0) return;
-  fired.clear();
-  renderSoon();
+  if (event.key === 'Escape') dismissAllFired();
+}, true);
+
+// Reduced motion turned on mid-pulse: CSS drops the animation without an animationend.
+reducedMotion.addEventListener('change', () => {
+  if (reducedMotion.matches) dismissAllFired();
 });
 
 // The end of the 2 pulses ends the highlight.
