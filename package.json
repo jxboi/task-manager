@@ -4,10 +4,14 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
-    "test:db": "node --test db/migrations.integration.js",
+    "test:db": "node --test db/*.integration.js",
     "db:migrate": "node db/migrate.js"
   },
   "dependencies": {
+    "better-auth": "1.7.26",
     "pg": "8.23.1"
+  },
+  "engines": {
+    "node": "22.x"
   }
 }

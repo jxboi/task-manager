@@ -28,7 +28,7 @@ The unit tests use Node.js 20 or newer and the built-in test runner.
 npm test
 ```
 
-To test migrations, install dependencies with `npm ci` and set `TEST_DATABASE_URL` to a direct URL for a disposable PostgreSQL database. The test creates an empty schema, checks concurrent replay and reruns, then removes the schema. It skips if the URL is unset.
+Use Node.js 22.12 or later in the 22.x line for the API and database tests. Run `npm ci` and set `TEST_DATABASE_URL` to a direct URL for a disposable PostgreSQL database. The tests create empty schemas, exercise migrations and the API, then remove the schemas. They skip if the URL is unset.
 
 ```sh
 npm run test:db
@@ -36,16 +36,16 @@ npm run test:db
 
 ## Provision Neon and migrate
 
-In the Vercel Marketplace, install Neon on the free tier in Singapore (AWS `ap-southeast-1`) and connect the existing Vercel project. Use separate database targets for Production, Preview and Development, and place the Vercel Functions in Singapore when they are added. Enable automatic preview branching only with a data-free parent. Otherwise use a separate empty Preview database. [Neon’s Vercel Marketplace guide](https://neon.com/docs/guides/vercel-managed-integration)
+In the Vercel Marketplace, install Neon on the free tier in Singapore (AWS `ap-southeast-1`) and connect the existing Vercel project. Use separate database targets for Production, Preview and Development. The Vercel configuration places the Node.js Functions in Singapore and publishes only the HTML, CSS and browser modules. Enable automatic preview branching only with a data-free parent. Otherwise use a separate empty Preview database. [Neon’s Vercel Marketplace guide](https://neon.com/docs/guides/vercel-managed-integration)
 
 | Variable | Used by | Value |
 | --- | --- | --- |
 | `DATABASE_URL_UNPOOLED` | Migration runner | Direct, unpooled PostgreSQL URL for the intended database or branch. If the integration uses another name, copy its direct URL into this variable. |
 | `TEST_DATABASE_URL` | Database tests | Direct PostgreSQL URL for a disposable database whose role can create schemas. |
-| `DATABASE_URL` (or `POSTGRES_URL`) | Upcoming API and Better Auth | Pooled PostgreSQL URL from the integration. |
-| `BETTER_AUTH_SECRET` | Upcoming Better Auth | Server-only random secret, unique per environment. Generate one with `openssl rand -base64 32`. |
-| `BETTER_AUTH_URL` | Upcoming Better Auth | Canonical app origin. Use `https://task-manager-mu-sepia-18.vercel.app` in Production and `http://localhost:3000` for local auth development. |
-| `VERCEL_URL` | Upcoming Preview auth | Vercel-provided deployment hostname for the Preview origin when `BETTER_AUTH_URL` is unset. Enable Vercel system environment variables for Preview. |
+| `DATABASE_URL` (or `POSTGRES_URL`) | API and Better Auth | Pooled PostgreSQL URL from the integration. |
+| `BETTER_AUTH_SECRET` | Better Auth | Server-only random secret of at least 32 characters, unique per environment. Generate one with `openssl rand -base64 32`. |
+| `BETTER_AUTH_URL` | Better Auth | Canonical app origin. Use `https://task-manager-mu-sepia-18.vercel.app` in Production and `http://localhost:3000` for local auth development. |
+| `VERCEL_URL` | Preview auth | Vercel-provided deployment hostname for the Preview origin when `BETTER_AUTH_URL` is unset. Enable Vercel system environment variables for Preview. |
 
 Keep connection strings and secrets out of Git and any directory served by the static HTTP server. For Development, run `vercel link` and `vercel env pull /path/outside/the/site/.env.local`. Confirm the direct endpoint matches the intended Neon branch, then run:
 
@@ -57,6 +57,22 @@ node --env-file=/path/outside/the/site/.env.local db/migrate.js
 If `DATABASE_URL_UNPOOLED` is already exported, run `npm run db:migrate` instead. Use the direct connection for the runner’s session advisory lock, and keep the TLS options from the Neon URL. Apply migrations separately from deployments and request handling. Migrate the actual Preview branch before testing it and the Production target before merging the first release that uses the database. [Neon connection pooling](https://neon.com/docs/connect/connection-pooling)
 
 The runner records each file in `schema_migrations` in the same transaction as its SQL. A repeat run applies only pending files. Append changes as new four-digit numbered SQL files and leave previously applied files intact. The initial auth schema was checked against Better Auth and its CLI at version 1.7.26 with PostgreSQL and database-backed rate limiting. [Better Auth PostgreSQL adapter](https://better-auth.com/docs/adapters/postgresql)
+
+## Server API
+
+The email signup, sign-in and sign-out routes are `POST /api/auth/sign-up/email`, `POST /api/auth/sign-in/email` and `POST /api/auth/sign-out`. Signup is open and signs the user in immediately. The minimum password length is 12 characters. Database sessions last seven days from sign-in.
+
+`GET /api/session` returns the signed-in user’s name, email and CSRF token. Both fields in the response, `user` and `csrfToken`, are null when signed out. Send the exact app origin and `Content-Type: application/json` for all mutations, including bodyless todo deletion. Include `X-CSRF-Token` on sign-out and todo mutations. Keep that token in memory and refresh it from the session endpoint when the session changes.
+
+| Method and path | Request |
+| --- | --- |
+| `GET /api/todos` | List the signed-in user’s todos by creation date and ID. |
+| `GET /api/todos?id=UUID` | Read one owned todo. An unknown or other user’s ID returns 404. |
+| `POST /api/todos` | Create using `{id, text, tags}`. |
+| `PATCH /api/todos?id=UUID` | Send the current `revision` and an `action` of `addTag`, `removeTag`, `setReminder`, `clearReminder`, `complete` or `markNotified`, with that action’s fields. |
+| `DELETE /api/todos?id=UUID&revision=N` | Delete an owned todo at the specified revision. |
+
+A stale revision returns 409. The current browser task list still uses localStorage.
 
 ## Layout
 
@@ -72,5 +88,7 @@ src/app.js          DOM wiring and rendering, the reminder timer and notificatio
 test/               node:test unit tests
 db/migrations/      numbered PostgreSQL schema migrations
 db/migrate.js       migration runner
-db/migrations.integration.js  PostgreSQL migration test
+db/*.integration.js PostgreSQL migration and API tests
+api/                Vercel Function entry points
+server/             Better Auth configuration and server-side API logic
 ```
