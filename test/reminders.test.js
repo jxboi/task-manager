@@ -155,6 +155,17 @@ test('nextOccurrence in the DST gap: daily 02:30 lands at 03:30 (documented limi
   assert.equal(new Date(nextOccurrence(next, 'daily', next + 1)).getHours(), 3);
 });
 
+test('nextOccurrence DST: a skipped gap occurrence does not shift later ones', () => {
+  // Daily 02:30 from Sat Mar 7. Sun Mar 8 02:30 doesn't exist (it reads 03:30) and is already past
+  // at 04:00, so the next one is Mon Mar 9 at 02:30 again, not 03:30.
+  const due = Date.UTC(2026, 2, 7, 7, 30); // Sat Mar 7 02:30 EST
+  const next = nextOccurrence(due, 'daily', Date.UTC(2026, 2, 8, 8)); // Sun Mar 8 04:00 EDT
+  assert.equal(next, Date.UTC(2026, 2, 9, 6, 30)); // Mon Mar 9 02:30 EDT
+  assert.equal(new Date(next).getHours(), 2);
+  const weekly = Date.UTC(2026, 2, 1, 7, 30); // Sun Mar 1 02:30 EST; Mar 8 02:30 falls in the gap
+  assert.equal(nextOccurrence(weekly, 'weekly', Date.UTC(2026, 2, 8, 12)), Date.UTC(2026, 2, 15, 6, 30));
+});
+
 test('nextOccurrence after years asleep returns quickly and is in the future', () => {
   const now = Date.UTC(2026, 10, 20, 17);
   const due = now - 5 * 365 * DAY;
@@ -211,6 +222,12 @@ test('toLocalInput formats an instant as local datetime-local text', () => {
   assert.equal(toLocalInput(Date.UTC(2026, 2, 8, 13, 30, 59)), '2026-03-08T09:30');
   assert.equal(toLocalInput(NaN), '');
   assert.equal(toLocalInput(null), '');
+});
+
+test('DST fall back: the repeated 01:30 reads back as the first one (why the editor keeps an unchanged due)', () => {
+  const second = Date.UTC(2026, 10, 1, 6, 30); // Nov 1 01:30 EST, the second 01:30 that night
+  assert.equal(toLocalInput(second), '2026-11-01T01:30');
+  assert.equal(parseLocalInput('2026-11-01T01:30'), Date.UTC(2026, 10, 1, 5, 30)); // 01:30 EDT
 });
 
 test('toLocalInput and parseLocalInput round-trip', () => {

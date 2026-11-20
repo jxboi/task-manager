@@ -35,6 +35,7 @@ const bannerIcon = document.getElementById('banner-icon');
 const bannerText = document.getElementById('banner-text');
 const bannerDismiss = document.getElementById('banner-dismiss');
 const announcer = document.getElementById('announcer');
+const editorAnnouncer = document.getElementById('reminder-announcer');
 const layer = document.getElementById('reminder-layer');
 const scrim = document.getElementById('reminder-scrim');
 const editor = document.getElementById('reminder-editor');
@@ -61,12 +62,12 @@ const infoIcon = document.getElementById('info-icon');
 const INVALID_FLASH_MS = 400;
 const ROLLOVER_MS = 6000;
 const MAX_DELAY = 2 ** 31 - 1; // setTimeout's limit (about 24.8 days); check() re-arms when it fires
-const sheetQuery = window.matchMedia('(max-width: 639px)');
+const sheetQuery = window.matchMedia('(max-width: 639px), (hover: none)');
 
 const BLOCKED_TEXT = 'Notifications are blocked or unavailable. Due tasks will be highlighted on this page.';
 const MESSAGES = {
   invalid: { kind: 'error', icon: alertIcon, text: 'Enter a valid date and time.' },
-  done: { kind: 'warn', icon: infoIcon, text: 'This task is done, so its reminder won’t alert. Uncheck it to turn alerts back on.' },
+  done: { kind: 'warn', icon: infoIcon, text: "This task is done, so its reminder won't alert. Uncheck it to turn alerts back on." },
   past: { kind: 'warn', icon: infoIcon, text: 'That time has passed. Saving will mark this task overdue and alert right away.' },
   blocked: { kind: 'warn', icon: infoIcon, text: BLOCKED_TEXT },
   ask: {
@@ -88,6 +89,7 @@ const fired = new Map(); // todo id -> when its "just fired" highlight started (
 let rendering = false;
 let renderPending = false;
 let pendingFocus; // focus keys for the deferred render
+let returnFocus = null; // where focus goes if a press that closed the editor left nothing focused
 let pressing = false;
 let timer; // the one reminder timeout
 let bannerTimer;
@@ -171,11 +173,24 @@ function footerText(todos) {
 
 // Due text in the browser's locale and zone: "Today 5:30 PM", "Tomorrow 9:00 AM", "Mon 7:00 PM"
 // (within 6 days either side), "Dec 4, 9:00 AM", "Jan 8, 2027, 9:00 AM" (another year).
-const timeFormat = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
-const weekdayFormat = new Intl.DateTimeFormat(undefined, { weekday: 'short' });
-const longWeekdayFormat = new Intl.DateTimeFormat(undefined, { weekday: 'long' });
-const dateFormat = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
-const yearDateFormat = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+// A formatter fixes its zone when created, so they are rebuilt when the browser's zone changes:
+// the text then agrees with the Date math (and the editor), which always uses the current zone.
+let formats;
+function getFormats() {
+  const zone = new Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (formats?.zone !== zone) {
+    const format = (options) => new Intl.DateTimeFormat(undefined, options);
+    formats = {
+      zone,
+      time: format({ hour: 'numeric', minute: '2-digit' }),
+      weekday: format({ weekday: 'short' }),
+      longWeekday: format({ weekday: 'long' }),
+      date: format({ month: 'short', day: 'numeric' }),
+      yearDate: format({ month: 'short', day: 'numeric', year: 'numeric' }),
+    };
+  }
+  return formats;
+}
 const RELATIVE_DAYS = new Map([[-1, 'Yesterday'], [0, 'Today'], [1, 'Tomorrow']]);
 
 // Local calendar day number, so a day difference ignores the time of day and DST.
@@ -187,11 +202,12 @@ function formatDue(ms, now) {
   const date = new Date(ms);
   const today = new Date(now);
   const days = dayNumber(date) - dayNumber(today);
-  const time = timeFormat.format(date);
-  if (RELATIVE_DAYS.has(days)) return `${RELATIVE_DAYS.get(days)} ${time}`;
-  if (Math.abs(days) <= 6) return `${weekdayFormat.format(date)} ${time}`;
-  const day = date.getFullYear() === today.getFullYear() ? dateFormat : yearDateFormat;
-  return `${day.format(date)}, ${time}`;
+  const { time, weekday, date: monthDay, yearDate } = getFormats();
+  const clock = time.format(date);
+  if (RELATIVE_DAYS.has(days)) return `${RELATIVE_DAYS.get(days)} ${clock}`;
+  if (Math.abs(days) <= 6) return `${weekday.format(date)} ${clock}`;
+  const day = date.getFullYear() === today.getFullYear() ? monthDay : yearDate;
+  return `${day.format(date)}, ${clock}`;
 }
 
 const REPEAT_LABELS = { daily: 'Daily', weekly: 'Weekly' };
@@ -436,7 +452,10 @@ function render(focusKeys) {
   // Focus moved by the render itself is not the user's: focus handlers ignore it.
   rendering = false;
 
-  if (reminderId !== null) placeEditor();
+  if (reminderId !== null) {
+    placeEditor();
+    syncEditor(); // e.g. "That time has passed" once it has
+  }
 }
 
 // Pressing a control blurs an open "+ tag" field (or closes the reminder editor) before that
@@ -468,6 +487,11 @@ function renderSoon(focusKeys) {
 
 function flushRender() {
   if (renderPending) render(pendingFocus);
+  if (returnFocus && !pressing) {
+    const keys = returnFocus;
+    returnFocus = null;
+    if (document.activeElement === document.body || !document.activeElement) render(keys);
+  }
 }
 
 // Neighbouring rows in the current view, for when the acted-on row leaves it.
@@ -564,12 +588,17 @@ function requestPermission() {
   }
 }
 
+// While the bottom sheet is open the page (and its status line) is inert, so the announcement
+// goes to a live region inside the sheet. Only the latest announcement is kept.
 function announce(text) {
-  announcer.textContent = text;
+  const [target, other] = app.inert ? [editorAnnouncer, announcer] : [announcer, editorAnnouncer];
+  other.textContent = '';
+  target.textContent = text;
 }
 
 function showBanner(kind, text, clearAfter) {
   clearTimeout(bannerTimer);
+  announcer.textContent = ''; // so a banner change can't re-read an earlier alert
   banner.className = `banner is-${kind}`;
   bannerIcon.replaceChildren(icon(kind === 'warn' ? infoIcon : repeatIcon));
   bannerText.textContent = text;
@@ -610,6 +639,7 @@ function closeEditor() {
   reminderId = null;
   layer.hidden = true;
   app.inert = false;
+  editorAnnouncer.textContent = '';
   hideMessage();
 }
 
@@ -625,7 +655,7 @@ function cancelEditor() {
 }
 
 function saveEditor() {
-  const due = parseLocalInput(whenInput.value);
+  const due = editorDue();
   if (due === null) {
     // Save is aria-disabled: a no-op that shows why.
     reminderTouched = true;
@@ -633,12 +663,13 @@ function saveEditor() {
     return;
   }
   const id = reminderId;
+  const repeat = repeatSelect.value;
   requestPermission();
+  closeEditor(); // first: the sheet makes the status line inert
   if (notificationsBlocked()) showBanner('warn', BLOCKED_TEXT);
   else if (!banner.hidden && banner.classList.contains('is-warn')) hideBanner();
-  closeEditor();
   fired.delete(id);
-  commit(setReminder(state, id, due, repeatSelect.value));
+  commit(setReminder(state, id, due, repeat));
   check(); // a time already past alerts right away; otherwise this re-arms the timer
   render(openerKeys(id));
 }
@@ -652,7 +683,7 @@ function removeReminder() {
   render(openerKeys(id));
 }
 
-// The bottom sheet under 640px is modal (the page behind is inert); the popover is not.
+// The bottom sheet (under 640px, or a touch screen) is modal: the page behind is inert. The popover is not.
 function placeEditor() {
   const sheet = sheetQuery.matches;
   if (sheet !== sheetMode) {
@@ -691,10 +722,17 @@ function hideMessage() {
   messageText.textContent = '';
 }
 
+// The instant in the date field. An unchanged field keeps the saved instant: in the repeated hour
+// when clocks go back, its text ("01:30") would read back as the other 01:30.
+function editorDue() {
+  const todo = findTodo(reminderId);
+  return todo.due !== null && whenInput.value === toLocalInput(todo.due) ? todo.due : parseLocalInput(whenInput.value);
+}
+
 // Save state, field validity, the repeat helper and the one message, from the current inputs.
 function syncEditor() {
   const todo = findTodo(reminderId);
-  const due = parseLocalInput(whenInput.value);
+  const due = editorDue();
   const invalid = due === null;
   const showError = invalid && reminderTouched;
 
@@ -709,10 +747,13 @@ function syncEditor() {
 
   const repeat = repeatSelect.value;
   repeatHelp.hidden = invalid || repeat === 'none';
+  // Emptied when hidden: it is the select's description, and hidden text is still read from there.
+  repeatHelp.textContent = '';
   if (!repeatHelp.hidden) {
     const date = new Date(due);
-    const day = repeat === 'daily' ? 'day' : longWeekdayFormat.format(date);
-    repeatHelp.textContent = `Repeats every ${day} at ${timeFormat.format(date)}`;
+    const { longWeekday, time } = getFormats();
+    const day = repeat === 'daily' ? 'day' : longWeekday.format(date);
+    repeatHelp.textContent = `Repeats every ${day} at ${time.format(date)}`;
   }
 
   let next = null;
@@ -883,7 +924,7 @@ editor.addEventListener('keydown', (event) => {
     cancelEditor();
   } else if (event.key === 'Enter' && event.target === whenInput) {
     event.preventDefault();
-    saveEditor();
+    saveButton.click(); // the same path as clicking Save (the only place permission is asked)
   }
 });
 
@@ -898,11 +939,16 @@ document.addEventListener('mousedown', (event) => {
   if (reminderId === null || layer.contains(event.target)) return;
   const opener = event.target.closest?.('.reminder-chip, .reminder-add');
   if (opener && opener.closest('.todo').dataset.id === reminderId) return;
+  // Focus stays on a control the press lands on; otherwise it goes back to the opener.
+  returnFocus = openerKeys(reminderId);
   closeEditor();
   renderSoon();
 }, true);
 
 window.addEventListener('resize', () => {
+  if (reminderId !== null) placeEditor();
+});
+sheetQuery.addEventListener('change', () => {
   if (reminderId !== null) placeEditor();
 });
 

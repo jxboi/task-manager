@@ -32,12 +32,17 @@ export function nextOccurrence(due, repeat, now) {
   if (!Object.hasOwn(PERIOD_DAYS, repeat) || !isInstant(due)) return null;
   const days = PERIOD_DAYS[repeat];
   const after = Math.max(due, now);
+  // Each candidate is counted from `due` itself, so a skipped occurrence that fell in a DST gap
+  // doesn't drag later ones off their wall-clock time.
+  const occurrence = (index) => {
+    const date = new Date(due);
+    date.setDate(date.getDate() + index * days);
+    return date.getTime();
+  };
   // Jump close first (a local day is 23 to 25 hours, so this never overshoots), then step.
-  const periods = Math.floor((after - due) / (days * DAY_MS));
-  const date = new Date(due);
-  date.setDate(date.getDate() + periods * days);
-  while (date.getTime() <= after) date.setDate(date.getDate() + days);
-  const next = date.getTime();
+  let index = Math.floor((after - due) / (days * DAY_MS));
+  while (occurrence(index) <= after) index++;
+  const next = occurrence(index);
   return isInstant(next) ? next : null;
 }
 

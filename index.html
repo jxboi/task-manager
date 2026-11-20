@@ -64,7 +64,7 @@
     <div class="reminder-layer" id="reminder-layer" hidden>
       <div class="reminder-scrim" id="reminder-scrim"></div>
       <div class="reminder-editor" id="reminder-editor" role="dialog">
-        <span class="reminder-edge" id="reminder-start" tabindex="0" aria-hidden="true"></span>
+        <span class="reminder-edge" id="reminder-start" tabindex="0"></span>
         <div class="reminder-grab" aria-hidden="true"></div>
         <h2 class="reminder-title">Reminder</h2>
         <p class="reminder-for" id="reminder-for"></p>
@@ -87,6 +87,7 @@
             <span id="reminder-message-text"></span>
           </p>
         </div>
+        <span class="visually-hidden" id="reminder-announcer" aria-live="polite"></span>
         <p class="reminder-note">Reminders alert only while this page is open in a browser tab.</p>
         <div class="reminder-actions" id="reminder-actions">
           <button class="reminder-remove" id="reminder-remove" type="button" aria-label="Remove reminder">
@@ -95,7 +96,7 @@
           <button class="reminder-cancel" id="reminder-cancel" type="button">Cancel</button>
           <button class="reminder-save" id="reminder-save" type="button">Save</button>
         </div>
-        <span class="reminder-edge" id="reminder-end" tabindex="0" aria-hidden="true"></span>
+        <span class="reminder-edge" id="reminder-end" tabindex="0"></span>
       </div>
     </div>
 

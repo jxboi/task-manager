@@ -1037,6 +1037,29 @@ body {
   }
 }
 
+/* Small or touch screens: chips keep their 22px look with a 30px hit area. (The editor is a
+   bottom sheet here too; app.js uses the same query.) */
+
+@media (max-width: 639px), (hover: none) {
+  .reminder-chip,
+  .reminder-add,
+  .reminder-got-it {
+    position: relative;
+  }
+
+  .reminder-chip::after,
+  .reminder-add::after,
+  .reminder-got-it::after {
+    content: "";
+    position: absolute;
+    inset: -4px -2px;
+  }
+
+  .reminder-add {
+    padding: 0 6px;
+  }
+}
+
 @media (max-width: 639px) {
   body {
     padding: 40px 16px;
@@ -1056,25 +1079,6 @@ body {
 
   .clear-short {
     display: inline;
-  }
-
-  /* Chips keep their 22px look with a 30px hit area. */
-  .reminder-chip,
-  .reminder-add,
-  .reminder-got-it {
-    position: relative;
-  }
-
-  .reminder-chip::after,
-  .reminder-add::after,
-  .reminder-got-it::after {
-    content: "";
-    position: absolute;
-    inset: -4px -2px;
-  }
-
-  .reminder-add {
-    padding: 0 6px;
   }
 
   /* The chip may wrap onto two lines: the label keeps its height and the repeat part drops its divider. */
