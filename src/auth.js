@@ -181,8 +181,8 @@ async function loadSession({ focus = false } = {}) {
   }
 }
 
-// Bumped whenever another tab reports a session change. A session read that was in flight when
-// it happened may describe the session before that change, so its result is discarded.
+// Bumped on local auth changes and when another tab reports one. In-flight session reads may
+// describe the previous session, so their results are discarded.
 let invalidations = 0;
 let following = false;
 
@@ -252,6 +252,7 @@ async function refreshSession() {
 const authChannel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('task-manager-auth') : null;
 
 function broadcastAuthChange() {
+  invalidations++;
   try {
     authChannel?.postMessage('session-changed');
   } catch {

@@ -306,6 +306,27 @@ test('task view against the server API', async (t) => {
     assert.equal(texts().filter((text) => text === 'Check supplies').length, 2);
   });
 
+  await t.test('a draft can be edited after its UUID is recreated following empty reconciliation', async () => {
+    const server = servers.a;
+    const text = 'Recreate draft';
+    const saved = () => server.rows.find((item) => item.text === text);
+    server.failNext = (method) => (method === 'POST' ? { afterWrite: true } : undefined);
+    await add(text);
+    const { id } = saved();
+    // The retry gets a duplicate response, then another tab deletes the row before the GET.
+    server.failNext = (method) => {
+      if (method === 'GET') server.rows = server.rows.filter((item) => item.id !== id);
+    };
+    await add(text);
+    server.failNext = null;
+    assert.equal(saved(), undefined);
+    assert.equal(input.value, text);
+    await add(text);
+    assert.equal(saved().id, id);
+    await toggle(text);
+    assert.equal(saved().completed, true);
+  });
+
   await t.test('item 4: Try again keeps a recurring reminder that another tab claimed and advanced', async () => {
     const target = servers.a.rows.find((item) => item.text === 'Unrelated');
     rowOf('Unrelated').querySelector('.reminder-add').click();

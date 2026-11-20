@@ -158,6 +158,28 @@ test('retrying an uncertain create with the same UUID reconciles instead of dupl
   assert.deepEqual(sync.todos, server.rows);
 });
 
+test('a list reload restores an editable revision for a UUID after empty reconciliation', async () => {
+  const { server, sync } = setup();
+  const todo = newTodo('Recreated elsewhere');
+  await sync.create(todo);
+  const [original] = server.rows;
+  const hold = holdReloads(server);
+  const retry = sync.create(todo);
+  await settle();
+  server.rows = [];
+  await hold.release();
+  hold.stop();
+  const outcome = await retry;
+  assert.equal(outcome.error.code, 'DUPLICATE_ID');
+  assert.equal(outcome.reloaded, true);
+  assert.deepEqual(sync.todos, []);
+
+  server.rows = [{ ...original, createdAt: original.createdAt + 1, revision: 1 }];
+  assert.equal((await sync.load()).ok, true);
+  assert.equal((await sync.addTag(todo.id, 'later')).ok, true);
+  assert.deepEqual(server.rows[0].tags, ['later']);
+});
+
 test('reset discards rows, pending writes and late answers from the previous session', async () => {
   const { server, sync } = setup();
   server.rows = [{ ...newTodo('Account A'), revision: 1 }];
@@ -272,10 +294,7 @@ test('item 3: a queued completion whose row changed under it (after a reload) is
   const reload = sync.load();
   const complete = sync.toggle(todo.id, Date.now(), before);
   await reload;
-  const outcome = await complete;
-  assert.equal(outcome.ok, false);
-  assert.equal(outcome.error.code, 'STALE_CHANGE');
-  assert.equal(outcome.reloaded, true);
+  assert.deepEqual(await complete, { ok: false, cancelled: true });
   assert.equal(server.rows[0].completed, true);
   assert.equal(server.requests.filter((r) => r.method === 'PATCH').length, 0);
 });
@@ -319,6 +338,44 @@ test('item 2: a delete clicked while a conflict reload is on its way is cancelle
   // Once the refreshed row is what the user sees, edits go through.
   assert.equal((await sync.remove(todo.id)).ok, true);
   assert.deepEqual(server.rows, []);
+});
+
+test('a focus reload cancels a queued delete after the conflict reload failed', async () => {
+  const { server, sync } = setup();
+  const todo = newTodo('Shared');
+  await sync.create(todo);
+  server.rows = [{ ...server.rows[0], tags: ['theirs'], revision: 2 }];
+  const hold = holdReloads(server);
+  const tag = sync.addTag(todo.id, 'mine');
+  await settle();
+  const focus = sync.load();
+  assert.equal(sync.todos[0].revision, 1);
+  const remove = sync.remove(todo.id);
+  server.failNext = (method) => (method === 'GET' ? new Response('{}', { status: 500 }) : undefined);
+  await hold.release();
+  await hold.release();
+  hold.stop();
+  assert.equal((await tag).reloaded, false);
+  assert.equal((await focus).ok, true);
+  assert.deepEqual(await remove, { ok: false, cancelled: true });
+  assert.deepEqual(sync.todos, server.rows);
+  assert.deepEqual(server.rows[0].tags, ['theirs']);
+});
+
+test('a reminder claim conflict reload cancels a queued delete of that task', async () => {
+  const { server, sync } = setup();
+  const due = Date.now() - 1000;
+  const todo = { ...newTodo('Due'), due, revision: 1 };
+  server.rows = [todo];
+  await sync.load();
+  server.rows = [{ ...todo, notified: due, revision: 2 }];
+  const candidate = { id: todo.id, due };
+  const claim = sync.claim([candidate]);
+  const remove = sync.remove(todo.id);
+  assert.deepEqual((await claim).conflicts, [candidate]);
+  assert.deepEqual(await remove, { ok: false, cancelled: true });
+  assert.deepEqual(sync.todos, server.rows);
+  assert.equal(server.rows[0].notified, due);
 });
 
 test('item 2: an edit made before the refreshed row is on screen is cancelled; after, it goes through', async () => {

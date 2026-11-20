@@ -28,10 +28,9 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
   let generation = 0;
   let queue = Promise.resolve();
   let loaded = false;
-  // After a conflict, the revision the reload brought in for that todo. A change made while the
-  // user still saw an older revision (queued before the conflict, or clicked while the reload was
-  // on its way) is cancelled instead of being applied to another tab's version of the row.
-  const refreshedAt = new Map(); // todo id -> revision loaded by its latest conflict reload
+  // A reload that discovers a changed row sets the oldest revision an edit may have seen.
+  // Successful local writes may advance the row without invalidating other queued edits.
+  let refreshedAt = new Map();
 
   function changed() {
     view = pending.reduce((todos, entry) => entry.apply(todos), confirmed);
@@ -47,6 +46,12 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
   async function reloadNow(gen) {
     const todos = await api.listTodos();
     if (gen !== generation) return false;
+    const previous = new Map(confirmed.map((todo) => [todo.id, todo]));
+    refreshedAt = new Map(todos.map((todo) => {
+      const row = previous.get(todo.id);
+      const unchanged = row?.revision === todo.revision && row?.createdAt === todo.createdAt;
+      return [todo.id, unchanged ? refreshedAt.get(todo.id) : todo.revision];
+    }));
     confirmed = todos;
     loaded = true;
     changed();
@@ -57,14 +62,6 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
   // (or null for a create) and resolves to the server's row (or null after a delete).
   // `holds(row)`, if given, is the change's assumption about the confirmed row when its turn comes;
   // if it no longer holds (another tab changed the row), the change is refused as a conflict.
-  async function recover(gen, id) {
-    const reloaded = await reloadNow(gen).catch(() => false);
-    if (reloaded && gen === generation) {
-      refreshedAt.set(id, confirmed.find((todo) => todo.id === id)?.revision ?? Infinity);
-    }
-    return reloaded;
-  }
-
   function write({ id, apply, send, needsRow = true, commit, holds }) {
     const gen = generation;
     const seen = needsRow
@@ -86,14 +83,15 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
         changed();
         return { ok: false, skipped: true };
       }
-      if (needsRow && refreshedAt.has(id) && !(seen >= refreshedAt.get(id))) {
+      const refreshed = refreshedAt.get(id);
+      if (needsRow && refreshed !== undefined && !(seen >= refreshed && seen <= row.revision)) {
         settle();
         changed();
         return { ok: false, cancelled: true };
       }
       if (holds && !holds(row)) {
         settle();
-        const reloaded = await recover(gen, id);
+        const reloaded = await reloadNow(gen).catch(() => false);
         if (gen !== generation) return { ok: false, stale: true };
         if (!reloaded) changed();
         return { ok: false, error: { status: 409, code: 'STALE_CHANGE' }, reloaded, revision: row.revision };
@@ -103,13 +101,14 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
         if (gen !== generation) return { ok: false, stale: true };
         settle();
         confirmed = commit(confirmed, result);
+        if (!needsRow || !result) refreshedAt.delete(id);
         changed();
         return { ok: true, todo: result };
       } catch (error) {
         if (gen !== generation || isStale(error)) return { ok: false, stale: true };
         settle();
         changed();
-        const reloaded = needsReload(error) ? await recover(gen, id) : false;
+        const reloaded = needsReload(error) ? await reloadNow(gen).catch(() => false) : false;
         if (gen !== generation) return { ok: false, stale: true };
         // `revision`: the row this change was sent against, so a retry can tell whether anything
         // (this change, or another tab) has touched the row since.

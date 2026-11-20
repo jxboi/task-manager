@@ -90,7 +90,7 @@ const MESSAGES = {
 // Nothing about tasks is kept in browser storage.
 const sync = createSync(api, { onChange: syncChanged, seenRevision: (id) => displayed.get(id) });
 // The revision of each row as it is on screen. A change is made against what the user sees, and
-// sync.js cancels a change made against a row that a conflict reload has since replaced.
+// sync.js cancels a change made against a row that a reload has since replaced.
 const displayed = new Map();
 let state = [];
 let phase = 'signed-out'; // 'loading' | 'ready' | 'error' once signed in
@@ -1203,7 +1203,7 @@ async function saved(id, result, retry) {
   check();
   if (outcome.skipped) return; // the row is gone
   if (outcome.cancelled) {
-    // Made against a row a conflict reload has replaced: the user hasn't seen the current version.
+    // The user acted before seeing the refreshed row.
     showSync('This task changed in another tab or device. The list is up to date now, so try again.');
     return;
   }

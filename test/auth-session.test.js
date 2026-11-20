@@ -10,7 +10,10 @@ const signedOut = { user: null, csrfToken: null };
 test('auth module follows session changes from other tabs', async (t) => {
   // Each /api/session read waits until the test answers it, in any order.
   const reads = [];
+  let signOutStatus = 401;
   const fetch = async (path) => {
+    if (path === '/api/auth/sign-out') return new Response(null, { status: signOutStatus });
+    if (path === '/api/auth/sign-in/email') return new Response('{}', { status: 200 });
     assert.equal(new URL(path, 'http://localhost').pathname, '/api/session');
     const body = await new Promise((resolve) => reads.push(resolve));
     return new Response(JSON.stringify(body), { status: 200 });
@@ -96,5 +99,41 @@ test('auth module follows session changes from other tabs', async (t) => {
     await answer(6, ben);
     assert.equal(sessions.at(-1), 'ben@example.test');
     signedInAs('Ben');
+  });
+
+  await t.test('a delayed signed-out read cannot undo a successful local sign-in', async () => {
+    broadcast(); // read #7 captured the signed-out session in another tab
+    byId('account-sign-out').click(); // returns 401 and shows the form
+    await settle();
+    assert.equal(byId('auth-view').hidden, false);
+
+    byId('auth-email').value = ben.user.email;
+    byId('auth-password').value = 'password';
+    byId('auth-form').dispatchEvent(new Event('submit'));
+    await answer(8, ben);
+    signedInAs('Ben');
+    const before = sessions.length;
+
+    await answer(7, signedOut);
+    signedInAs('Ben');
+    await answer(9, ben);
+    assert.ok(sessions.slice(before).every((session) => session === ben.user.email));
+  });
+
+  await t.test('a delayed signed-in read cannot undo local sign-out', async () => {
+    signOutStatus = 204;
+    const first = reads.length;
+    byId('auth-retry-button').click();
+    await answer(first, ben);
+    broadcast();
+    byId('account-sign-out').click();
+    await settle();
+    assert.equal(byId('auth-view').hidden, false);
+    const before = sessions.length;
+
+    await answer(first + 1, ben);
+    assert.equal(byId('auth-view').hidden, false);
+    await answer(first + 2, signedOut);
+    assert.equal(sessions.length, before);
   });
 });
