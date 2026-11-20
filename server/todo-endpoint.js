@@ -78,7 +78,10 @@ export const todosEndpoint = endpoint(['GET', 'POST', 'PATCH', 'DELETE'], async 
   const { method } = request;
   const mutation = method !== 'GET';
   if (mutation) checkMutation(request, services.origins);
-  const { user: { id: userId } } = await requireSession(request, services, mutation);
+  // Reads carrying X-CSRF-Token are bound to that session too, so a tab left open after an
+  // account switch can't load the new account's list as the old one.
+  const bound = mutation || request.headers.has('x-csrf-token');
+  const { user: { id: userId } } = await requireSession(request, services, bound);
 
   const { pool } = services;
   const query = new URL(request.url).searchParams;

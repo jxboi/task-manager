@@ -1,21 +1,17 @@
 import {
   addTodo,
   toggleTodo,
-  removeTodo,
   addTag,
-  removeTag,
   allTags,
   filterByTags,
-  setReminder,
-  clearReminder,
-  markNotified,
   dueReminders,
   nextFireTime,
   sortByUrgency,
 } from './todos.js';
-import { MAX_TAGS, parseTodoInput, tagColor } from './tags.js';
+import { MAX_TAGS, normalizeTag, parseTodoInput, tagColor } from './tags.js';
 import { isOverdue, parseLocalInput, toLocalInput } from './reminders.js';
-import { load, save } from './storage.js';
+import * as api from './storage.js';
+import { createSync } from './sync.js';
 import { popoverTop } from './popover.js';
 
 const app = document.querySelector('.app');
@@ -59,6 +55,10 @@ const bellIcon = document.getElementById('bell-icon');
 const repeatIcon = document.getElementById('repeat-icon');
 const alertIcon = document.getElementById('alert-icon');
 const infoIcon = document.getElementById('info-icon');
+const syncNote = document.getElementById('sync-note');
+const syncText = document.getElementById('sync-text');
+const syncRetry = document.getElementById('sync-retry');
+const syncDismiss = document.getElementById('sync-dismiss');
 
 const INVALID_FLASH_MS = 400;
 const ROLLOVER_MS = 6000;
@@ -66,6 +66,9 @@ const MAX_DELAY = 2 ** 31 - 1; // setTimeout's limit (about 24.8 days); check() 
 const sheetQuery = window.matchMedia('(max-width: 639px), (hover: none)');
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 const PULSE_MS = 2 * 1200; // the fired row's 2 pulses (styles.css reminder-pulse)
+// A claim the server refused while this tab still sees the occurrence as due (its clock is ahead,
+// say) waits this long before it is tried again. So does a claim that failed to reach the server.
+const CLAIM_RETRY_MS = 30_000;
 const NOTE_DISMISSED_KEY = 'task-manager.blocked-note-dismissed';
 
 const BLOCKED_TEXT = 'Notifications are blocked or unavailable. Due tasks will be highlighted on this page.';
@@ -83,7 +86,30 @@ const MESSAGES = {
   },
 };
 
-let state = load();
+// The signed-in user's todos as shown: the server's rows plus changes still being saved.
+// Nothing about tasks is kept in browser storage.
+const sync = createSync(api, { onChange: syncChanged, seenRevision: (id) => displayed.get(id) });
+// The revision of each row as it is on screen. A change is made against what the user sees, and
+// sync.js cancels a change made against a row that a reload has since replaced.
+const displayed = new Map();
+let state = [];
+let phase = 'signed-out'; // 'loading' | 'ready' | 'error' once signed in
+let sessionToken = null; // the CSRF token of the session this view belongs to
+let sessionEmail = null;
+let revalidating = false; // a CSRF rejection asked the auth module to re-read the session
+let resuming = false;
+let viewSignature = '[]';
+// Creates that may or may not have reached the server: the parsed task (text and every tag it
+// gets, active filter included) -> their IDs, oldest first. Adding exactly the same task again
+// reuses one of those IDs, so a create that did land can't be doubled. A different task (other
+// text, or the same text under another filter) never takes an ID that isn't its own.
+const createDrafts = new Map();
+const draftKey = (text, tags) => JSON.stringify([text, tags]);
+let retryAction = null;
+const claiming = new Set(); // "id:due" occurrences being claimed by this tab
+const claimBackoff = new Map(); // "id:due" -> time before which it isn't claimed again
+let recheckTimer;
+const openNotifications = new Set(); // closed when the session ends
 // View state: never saved, never in the URL.
 let activeTags = []; // A to Z
 let editingId = null; // todo whose "+ tag" field is open
@@ -101,19 +127,27 @@ let pressing = false;
 let timer; // the one reminder timeout
 let bannerTimer;
 
-function update(next, focusKeys) {
-  commit(next);
-  render(focusKeys);
-}
-
-function commit(next) {
-  if (next !== state) {
-    state = next;
-    save(state);
-  }
+// The sync model changed: a local change was applied, or the server answered. Re-render only when
+// something visible changed (a confirmed row replacing its optimistic copy usually changes nothing
+// but the revision), so an answer arriving mid-typing doesn't replace the "+ tag" field.
+function syncChanged() {
+  state = sync.todos;
   // A filter tag drops out once no todo uses it; with none left the view is back to All.
   const inUse = new Set(state.flatMap((todo) => todo.tags));
   activeTags = activeTags.filter((tag) => inUse.has(tag));
+  const signature = JSON.stringify(state.map(({ revision, ...todo }) => todo));
+  if (signature !== viewSignature) {
+    viewSignature = signature;
+    renderSoon(renderPending ? pendingFocus : undefined);
+  } else if (!renderPending) {
+    // Nothing visible changed, so the screen already shows these rows.
+    noteDisplayed();
+  }
+}
+
+function noteDisplayed() {
+  displayed.clear();
+  for (const todo of state) displayed.set(todo.id, todo.revision);
 }
 
 function findTodo(id) {
@@ -402,6 +436,7 @@ function render(focusKeys) {
   const tagDraft = { id: openField?.closest('.todo').dataset.id, value: openField?.value };
 
   rendering = true;
+  noteDisplayed();
   renderPending = false;
   pendingFocus = undefined;
 
@@ -416,7 +451,11 @@ function render(focusKeys) {
   // The todo being edited was deleted: close its editor.
   if (reminderId !== null && !findTodo(reminderId)) closeEditor();
 
-  summary.textContent = summaryText(visible);
+  const ready = phase === 'ready';
+  if (phase === 'loading') summary.textContent = 'Loading your tasks…';
+  else if (phase === 'error') summary.textContent = "Couldn't load your tasks";
+  else summary.textContent = summaryText(visible);
+  summary.setAttribute('aria-busy', String(phase === 'loading'));
   syncAddButton();
   clearFilters.hidden = !filtering;
   hintDefault.hidden = filtering;
@@ -435,7 +474,7 @@ function render(focusKeys) {
 
   list.replaceChildren(...visible.map((todo) => renderTodo(todo, now, tagDraft)));
   list.hidden = visible.length === 0;
-  emptyState.hidden = visible.length > 0;
+  emptyState.hidden = !ready || visible.length > 0;
   footer.hidden = visible.length === 0;
   footer.textContent = footerText(visible);
 
@@ -522,33 +561,66 @@ function rejectTag(field) {
 
 // Same parse as submit: with the active filter tags, which can push a #tag back into the title.
 function syncAddButton() {
-  addButton.disabled = parseTodoInput(input.value, activeTags).text === '';
+  addButton.disabled = phase !== 'ready' || parseTodoInput(input.value, activeTags).text === '';
 }
 
 // --- Reminders: alerting -------------------------------------------------------------------
 
-// Alerts every overdue, un-alerted todo once, then arms the timer for the next one. Never trusts
-// the timer: it compares against the clock, so an early, late or stale wake-up is harmless.
+const occurrence = ({ id, due }) => `${id}:${due}`;
+
+// Claims every overdue, un-alerted todo on the server and alerts the ones this tab won, then arms
+// the timer for the next one. Never trusts the timer: it compares against the clock, so an early,
+// late or stale wake-up is harmless.
 function check() {
+  if (phase !== 'ready') return;
   const now = Date.now();
-  const ready = dueReminders(state, now);
-  if (ready.length > 0) {
-    notify(ready);
-    // The pulse is the whole highlight: with reduced motion the row is simply overdue.
-    if (!reducedMotion.matches) {
-      const started = performance.now();
-      for (const todo of ready) fired.set(todo.id, started);
-    }
-    commit(markNotified(state, ready.map((todo) => todo.id)));
-  }
+  for (const [name, until] of claimBackoff) if (until <= now) claimBackoff.delete(name);
+  const ready = dueReminders(state, now).filter((todo) => {
+    const name = occurrence(todo);
+    return !claiming.has(name) && !claimBackoff.has(name);
+  });
+  if (ready.length > 0) claim(ready);
   // Overdue marks and order depend on the time, so re-render even when nothing fired.
   renderSoon(renderPending ? pendingFocus : undefined);
   rearm(now);
 }
 
+// The claim is made before the alert, so two open tabs alert an occurrence once. If the page
+// closes between the claim and the alert, that occurrence is not alerted again.
+async function claim(ready) {
+  const names = ready.map(occurrence);
+  for (const name of names) claiming.add(name);
+  const result = await sync.claim(ready.map(({ id, due }) => ({ id, due })));
+  for (const name of names) claiming.delete(name);
+  if (result.stale) return;
+  if (result.claimed.length > 0) {
+    const claimed = sortByUrgency(result.claimed, Date.now());
+    notify(claimed);
+    // The pulse is the whole highlight: with reduced motion the row is simply overdue.
+    if (!reducedMotion.matches) {
+      const started = performance.now();
+      for (const todo of claimed) fired.set(todo.id, started);
+    }
+    renderSoon(renderPending ? pendingFocus : undefined);
+  }
+  // Another tab got there first (the reload shows it), or the server doesn't see it as due yet.
+  for (const conflict of result.conflicts) claimBackoff.set(occurrence(conflict), Date.now() + CLAIM_RETRY_MS);
+  // A failed claim waits before it is tried again, whatever the failure, so it can't spin.
+  if (result.error) {
+    for (const name of names) claimBackoff.set(name, Date.now() + CLAIM_RETRY_MS);
+    handleSessionError(result.error);
+  }
+  if (result.conflicts.length > 0 || result.error) {
+    clearTimeout(recheckTimer);
+    recheckTimer = setTimeout(check, CLAIM_RETRY_MS);
+  }
+  check();
+}
+
 // One timer, to the next due time; no polling.
 function rearm(now) {
   clearTimeout(timer);
+  if (phase !== 'ready') return;
   const next = nextFireTime(state, now);
   timer = next === null ? undefined : setTimeout(check, Math.min(next - now, MAX_DELAY));
 }
@@ -568,6 +640,8 @@ function notify(ready) {
       count === 1
         ? new Notification(first.text, { body: 'Reminder', tag: first.id })
         : new Notification(`${count} reminders due`, { body: `${first.text} and ${count - 1} more` });
+    openNotifications.add(notification);
+    notification.onclose = () => openNotifications.delete(notification);
     notification.onclick = () => {
       window.focus();
       notification.close();
@@ -700,18 +774,30 @@ function saveEditor() {
   if (notificationsBlocked() && !noteDismissed) showBanner('note', NOTE_TEXT);
   else if (!banner.hidden && banner.classList.contains('is-note')) hideBanner();
   fired.delete(id);
-  commit(setReminder(state, id, due, repeat));
-  check(); // a time already past alerts right away; otherwise this re-arms the timer
+  saveReminder(id, due, repeat);
   render(openerKeys(id));
+}
+
+function saveReminder(id, due, repeat) {
+  // A time already past alerts right away (once saved); otherwise this re-arms the timer.
+  saved(id, sync.setReminder(id, due, repeat), () => {
+    const todo = findTodo(id);
+    if (todo && (todo.due !== due || todo.repeat !== repeat)) saveReminder(id, due, repeat);
+  });
+  check();
 }
 
 function removeReminder() {
   const id = reminderId;
   closeEditor();
   fired.delete(id);
-  commit(clearReminder(state, id));
-  check();
+  clearSavedReminder(id);
   render(openerKeys(id));
+}
+
+function clearSavedReminder(id) {
+  saved(id, sync.clearReminder(id), () => findTodo(id)?.due != null && clearSavedReminder(id));
+  check();
 }
 
 // The bottom sheet (under 640px, or a touch screen) is modal: the page behind is inert. The popover is not.
@@ -814,14 +900,40 @@ function syncEditor() {
 
 input.addEventListener('input', syncAddButton);
 
-form.addEventListener('submit', (event) => {
+form.addEventListener('submit', async (event) => {
   event.preventDefault();
-  const { text, tags } = parseTodoInput(input.value, activeTags);
-  if (text === '') return;
-  update(addTodo(state, text, tags));
+  const raw = input.value;
+  const { text, tags } = parseTodoInput(raw, activeTags);
+  if (text === '' || phase !== 'ready') return;
+  const [todo] = addTodo([], text, tags);
+  // Re-adding a draft whose save was uncertain sends the same ID: a 409 then means it was saved.
+  const draft = draftKey(todo.text, todo.tags);
+  const retryIds = createDrafts.get(draft);
+  if (retryIds) {
+    todo.id = retryIds.shift();
+    if (retryIds.length === 0) createDrafts.delete(draft);
+  }
+  hideSync();
+  const result = sync.create(todo);
   input.value = '';
   addButton.disabled = true;
+  render();
   input.focus();
+  const outcome = await result;
+  if (outcome.ok || outcome.stale) return;
+  // The draft goes back into the field unless something new was typed meanwhile.
+  if (input.value === '') {
+    input.value = raw;
+    syncAddButton();
+  }
+  // A duplicate ID whose reload failed is uncertain too: keep the ID for the next try.
+  const { status, code } = outcome.error ?? {};
+  const uncertain = !outcome.error || status === 0 || status >= 500 || code === 'DUPLICATE_ID';
+  if (uncertain) createDrafts.set(draft, [...(createDrafts.get(draft) ?? []), todo.id]);
+  if (handleSessionError(outcome.error)) return;
+  showSync(uncertain
+    ? `Couldn't add “${text}”. Check your connection, then press Add to try again.`
+    : `Couldn't add “${text}”. Check it and try again.`);
 });
 
 clearFilters.addEventListener('click', () => {
@@ -838,18 +950,48 @@ filterBar.addEventListener('click', (event) => {
 list.addEventListener('change', (event) => {
   if (!event.target.matches('.todo-checkbox')) return;
   const { id } = event.target.closest('.todo').dataset;
-  const before = findTodo(id);
-  const next = toggleTodo(state, id, Date.now());
-  const after = next.find((todo) => todo.id === id);
-  fired.delete(id);
-  commit(next);
-  // A repeating todo moved to its next time and stays unchecked: say so.
-  if (!after.completed && after.due !== before.due) {
-    showBanner('info', `Done for now. “${after.text}” is next due ${formatDue(after.due, Date.now())}.`, ROLLOVER_MS);
-  }
-  check();
+  toggle(id);
   render([key('checkbox', id)]);
 });
+
+function toggle(id) {
+  const before = findTodo(id);
+  if (!before) return;
+  const now = Date.now();
+  const [after] = toggleTodo([before], id, now);
+  fired.delete(id);
+  saved(id, sync.toggle(id, now, before), () => {
+    const current = findTodo(id);
+    if (current?.completed === before.completed && current.due === before.due) toggle(id);
+  });
+  // A repeating todo moved to its next time and stays unchecked: say so.
+  if (!after.completed && after.due !== before.due) {
+    showBanner('info', `Done for now. “${after.text}” is next due ${formatDue(after.due, now)}.`, ROLLOVER_MS);
+  }
+  check();
+}
+
+function removeRow(id) {
+  saved(id, sync.remove(id), () => findTodo(id) && removeRow(id));
+  check();
+}
+
+function addSavedTag(id, tag) {
+  saved(id, sync.addTag(id, tag), () => findTodo(id) && !findTodo(id).tags.includes(tag) && addSavedTag(id, tag));
+}
+
+function removeSavedTag(id, tag) {
+  saved(id, sync.removeTag(id, tag), () => findTodo(id)?.tags.includes(tag) && removeSavedTag(id, tag));
+}
+
+// Tries a tag from the "+ tag" field. Returns the todo's tags after it, or null if rejected
+// (invalid, a duplicate or over the cap) without asking the server.
+function tryAddTag(id, raw) {
+  const next = addTag(state, id, raw);
+  if (next === state) return null;
+  addSavedTag(id, normalizeTag(raw));
+  return next.find((todo) => todo.id === id).tags;
+}
 
 list.addEventListener('click', (event) => {
   const row = event.target.closest('.todo');
@@ -864,8 +1006,7 @@ list.addEventListener('click', (event) => {
 
   if (button.matches('.todo-delete')) {
     const keys = rowFallbackKeys(id);
-    commit(removeTodo(state, id));
-    check();
+    removeRow(id);
     render(keys);
   } else if (button.matches('.tag-label')) {
     // If the row leaves the view, keep focus on the same tag in the filter bar.
@@ -873,7 +1014,8 @@ list.addEventListener('click', (event) => {
   } else if (button.matches('.tag-remove')) {
     const tags = findTodo(id).tags;
     const nextTag = tags[tags.indexOf(tag) + 1];
-    update(removeTag(state, id, tag), [
+    removeSavedTag(id, tag);
+    render([
       nextTag && key('tag', id, nextTag),
       key('add-tag', id),
       ...rowFallbackKeys(id),
@@ -898,15 +1040,16 @@ list.addEventListener('keydown', (event) => {
   } else if (event.key === 'Enter') {
     event.preventDefault();
     if (field.value.trim() === '') return;
-    const next = addTag(state, id, field.value);
-    if (next === state) {
+    const raw = field.value;
+    field.value = ''; // added: the re-rendered field starts empty
+    const tags = tryAddTag(id, raw);
+    if (tags === null) {
+      field.value = raw;
       rejectTag(field);
-    } else if (next.find((todo) => todo.id === id).tags.length >= MAX_TAGS) {
-      commit(next);
+    } else if (tags.length >= MAX_TAGS) {
       closeTagField(id);
     } else {
-      field.value = ''; // added: the re-rendered field starts empty
-      update(next, [key('tag-field', id)]);
+      render([key('tag-field', id)]);
     }
   }
 });
@@ -917,7 +1060,7 @@ list.addEventListener('focusout', (event) => {
   if (rendering || !field.matches('.tag-field') || field === document.activeElement) return;
   const { id } = field.closest('.todo').dataset;
   if (editingId !== id) return;
-  if (field.value.trim() !== '') commit(addTag(state, id, field.value));
+  if (field.value.trim() !== '') tryAddTag(id, field.value);
   editingId = null;
   // Focus moving to another control stays there; focus moving nowhere goes back to "+ tag".
   renderSoon(event.relatedTarget ? undefined : tagControlKeys(id));
@@ -994,12 +1137,236 @@ sheetQuery.addEventListener('change', () => {
   if (reminderId !== null) placeEditor();
 });
 
-// Catch up after the tab was hidden, the machine slept or the timer was throttled.
+// Coming back to the tab: overdue marks catch up at once. The auth module re-reads the session
+// and then sends `tasks:session`, which reloads the list before any reminder is claimed.
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') check();
+  if (document.visibilityState === 'visible') renderSoon(renderPending ? pendingFocus : undefined);
 });
-window.addEventListener('focus', check);
 
-// Start: missed reminders alert once, then the first render.
-check();
+syncRetry.addEventListener('click', () => {
+  const action = retryAction;
+  hideSync();
+  input.focus();
+  action?.();
+});
+syncDismiss.addEventListener('click', () => {
+  hideSync();
+  input.focus();
+});
+
+// --- Saving and the session ----------------------------------------------------------------
+
+function showSync(text, retry) {
+  syncText.textContent = text;
+  retryAction = retry ?? null;
+  syncRetry.hidden = !retry;
+  syncNote.hidden = false;
+}
+
+function hideSync() {
+  syncNote.hidden = true;
+  syncText.textContent = '';
+  retryAction = null;
+}
+
+// 401: the session is over, back to sign-in. INVALID_CSRF: the session changed in another tab
+// (signed out, or another account signed in), so the auth module re-reads it and this view resets
+// for whoever is signed in now. Returns true when the error was one of those.
+function handleSessionError(error) {
+  if (error?.status === 401) {
+    window.dispatchEvent(new CustomEvent('tasks:expired'));
+    return true;
+  }
+  if (error?.code === 'INVALID_CSRF') {
+    if (revalidating) {
+      showSync('This change was blocked. Reload the page and try again.');
+    } else {
+      hideForRevalidation();
+      revalidating = true;
+      window.dispatchEvent(new CustomEvent('tasks:revalidate'));
+    }
+    return true;
+  }
+  return false;
+}
+
+// Reports a failed save. The change has already dropped out of the list (and a conflict has
+// reloaded it); `retry` repeats the same change if it still applies.
+async function saved(id, result, retry) {
+  const outcome = await result;
+  if (outcome.stale) return;
+  if (outcome.ok) {
+    rearm(Date.now());
+    return;
+  }
+  // The change rolled back (a deleted row came back, say): recheck reminders and re-arm the timer.
+  check();
+  if (outcome.skipped) return; // the row is gone
+  if (outcome.cancelled) {
+    // The user acted before seeing the refreshed row.
+    showSync('This task changed in another tab or device. The list is up to date now, so try again.');
+    return;
+  }
+  const { error } = outcome;
+  if (handleSessionError(error)) return;
+  if (error.status === 409 || error.status === 404) {
+    if (outcome.reloaded) {
+      showSync('This task changed in another tab or device. The list is up to date now, so try again.');
+    } else {
+      showSync("This task changed in another tab or device, and the latest list couldn't be loaded. Try again.", reloadList);
+    }
+  } else if (error.status === 400) {
+    showSync("Couldn't save that change.");
+  } else {
+    const retryNow = () => reconcileThen(id, outcome.revision, retry);
+    showSync("Couldn't save your change. Check your connection and try again.", retryNow);
+  }
+}
+
+// After an uncertain failure the change may have been saved anyway (only the answer was lost),
+// and another tab may have acted on it since. Reload first. Re-send only if the row is still at
+// `revision`, the one the change was sent against: then neither it nor anything else landed.
+// Any other revision means the row moved on (this change, or a later edit elsewhere, such as a
+// recurring reminder that was claimed and advanced). The server's row is kept and shown, and
+// nothing is re-sent or re-alerted.
+async function reconcileThen(id, revision, retry) {
+  const result = await sync.load();
+  if (result.stale) return;
+  if (!result.ok) {
+    if (!handleSessionError(result.error)) {
+      showSync("Couldn't save your change. Check your connection and try again.", () => reconcileThen(id, revision, retry));
+    }
+    return;
+  }
+  const row = findTodo(id);
+  if (row && row.revision === revision) retry?.();
+  else if (row) showSync('This task was updated, possibly by your change. The list is up to date now. Check it and try again if needed.');
+  check();
+}
+
+async function reloadList() {
+  const result = await sync.load();
+  if (result.stale) return;
+  if (result.ok) check();
+  else if (!handleSessionError(result.error)) {
+    showSync("The latest list couldn't be loaded. Check your connection and try again.", reloadList);
+  }
+}
+
+// Leaves nothing of the previous session on the page: rows, filters, editors, drafts, alerts and
+// timers. Answers still on their way for that session are ignored when they arrive.
+function clearView() {
+  sync.reset();
+  state = [];
+  viewSignature = '[]';
+  activeTags = [];
+  editingId = null;
+  if (reminderId !== null) closeEditor();
+  // Nothing of the old account stays in the hidden editor or the live regions.
+  editorFor.textContent = '';
+  editor.removeAttribute('aria-label');
+  whenInput.value = '';
+  repeatSelect.value = 'none';
+  announcer.textContent = '';
+  editorAnnouncer.textContent = '';
+  for (const notification of openNotifications) {
+    try {
+      notification.close();
+    } catch {
+      // Already gone.
+    }
+  }
+  openNotifications.clear();
+  fired.clear();
+  claiming.clear();
+  claimBackoff.clear();
+  clearTimeout(timer);
+  clearTimeout(recheckTimer);
+  hideBanner();
+  hideSync();
+  input.value = '';
+  createDrafts.clear();
+  revalidating = false;
+  resuming = false;
+}
+
+// The session may have changed (another tab signed in or out, or a request was refused): hide
+// the list, drop its pending changes and alerts, and ignore answers still on their way until the
+// auth module has re-read the session and sent `tasks:session`.
+function hideForRevalidation() {
+  if (phase === 'signed-out') return;
+  clearView();
+  phase = 'loading';
+  render();
+}
+
+window.addEventListener('tasks:invalidate', hideForRevalidation);
+
+async function loadList() {
+  const result = await sync.load();
+  if (result.stale) return;
+  if (result.ok) {
+    if (retryAction === startLoading) hideSync();
+    phase = 'ready';
+    render();
+    check(); // missed reminders alert once, after the list is current
+    return;
+  }
+  if (handleSessionError(result.error)) return;
+  if (phase === 'ready') {
+    check(); // keep the list shown; claims still check against the server
+    return;
+  }
+  phase = 'error';
+  showSync("Couldn't load your tasks. Check your connection and try again.", startLoading);
+  render();
+}
+
+function startLoading() {
+  phase = 'loading';
+  render();
+  return loadList();
+}
+
+async function resume() {
+  if (resuming || phase === 'signed-out') return;
+  resuming = true;
+  try {
+    if (phase === 'ready') await loadList();
+    else await startLoading();
+  } finally {
+    resuming = false;
+  }
+}
+
+// From the auth module: `active` is the session now signed in, or null when signed out.
+window.addEventListener('tasks:session', ({ detail: { active } }) => {
+  if (!active) {
+    clearView();
+    phase = 'signed-out';
+    sessionToken = null;
+    sessionEmail = null;
+    render();
+    return;
+  }
+  if (active.csrfToken === sessionToken) {
+    // The same session, re-read on return to the tab or after a blocked request.
+    if (revalidating) {
+      revalidating = false;
+      resume();
+      showSync('This change was blocked. Reload the page and try again.');
+      return;
+    }
+    resume();
+    return;
+  }
+  const switched = sessionEmail !== null && sessionEmail !== active.user.email;
+  clearView();
+  api.setToken(active.csrfToken);
+  sessionToken = active.csrfToken;
+  sessionEmail = active.user.email;
+  startLoading();
+  if (switched) showSync(`You're now signed in as ${active.user.name || active.user.email} in this browser.`);
+});
+
 render();

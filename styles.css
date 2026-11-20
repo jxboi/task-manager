@@ -1377,6 +1377,21 @@ select.reminder-control {
 .auth-signout-note p { margin: 0; }
 .auth-signout-note button { min-width: 44px; min-height: 44px; }
 
+/* A save or load that failed: what happened, and Try again when repeating it makes sense. */
+.sync-note {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 44px;
+  margin: -8px 0 12px;
+  color: var(--color-meta);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.sync-text { flex: 1; margin: 0; }
+.sync-note button { flex: none; min-width: 44px; min-height: 44px; }
+
 @media (max-width: 639px) {
   .app-header { grid-template-columns: minmax(0, 1fr) auto; }
 

@@ -227,6 +227,15 @@ test('auth and todo API against PostgreSQL', {
     const renewed = await authenticated(await post(signinPath, { email: alice.email, password }), alice.name, alice.email);
     assert.notEqual(a.csrfToken, renewed.csrfToken);
     assert.equal((await post('/api/todos', {}, { account: renewed, csrf: a.csrfToken })).data.error.code, 'INVALID_CSRF');
+    // A read that carries a token is bound to it: a tab left on the old session can't load the
+    // list of whoever is signed in now. Reads without the header still work.
+    const staleRead = await request('/api/todos', { account: renewed, csrf: a.csrfToken });
+    assert.equal(staleRead.status, 403);
+    assert.equal(staleRead.data.error.code, 'INVALID_CSRF');
+    assert.equal((await request(`/api/todos?id=${aId}`, { account: renewed, csrf: b.csrfToken })).status, 403);
+    assert.equal((await request('/api/todos', { account: renewed, csrf: 'x'.repeat(43) })).status, 403);
+    assert.equal((await request('/api/todos', { account: renewed })).status, 200);
+    assert.equal((await request('/api/todos', { account: renewed, csrf: null })).status, 200);
     await admin.query('UPDATE "session" SET "expiresAt" = now() - interval \'1 second\' WHERE token = $1', [b.token]);
     assert.deepEqual((await request('/api/session', { account: b })).data, { user: null, csrfToken: null });
     assert.equal((await request('/api/todos', { account: b })).status, 401);

@@ -1,45 +1,106 @@
-import { normalizeTags } from './tags.js';
-import { normalizeReminder } from './reminders.js';
+// The only browser module that talks to the server: session, auth and todo requests.
+// Tasks are never read from or written to localStorage. The old "task-manager.todos.v1" key is
+// left untouched and ignored. The CSRF token lives only in memory.
 
-const KEY = 'task-manager.todos.v1';
-
-function isTodo(value) {
-  return (
-    value !== null &&
-    typeof value === 'object' &&
-    typeof value.id === 'string' &&
-    typeof value.text === 'string' &&
-    value.text.trim() !== '' &&
-    typeof value.completed === 'boolean' &&
-    typeof value.createdAt === 'number'
-  );
-}
-
-// Todos saved before tags existed have no `tags`; their text is left as is, never re-parsed.
-function withTags(todo) {
-  return { ...todo, tags: Array.isArray(todo.tags) ? normalizeTags(todo.tags) : [] };
-}
-
-// Todos saved before reminders existed get no reminder; junk reminder fields are dropped.
-function withReminder(todo) {
-  return { ...todo, ...normalizeReminder(todo) };
-}
-
-export function load() {
-  try {
-    const raw = globalThis.localStorage.getItem(KEY);
-    if (raw === null) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter(isTodo).map(withTags).map(withReminder) : [];
-  } catch {
-    return [];
+export class ApiError extends Error {
+  constructor(status, code, message = code) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = code;
   }
 }
 
-export function save(todos) {
+// The current session's CSRF token. A request started under one token whose response arrives
+// after the token changed (sign-out, expiry, an account switch) is discarded as STALE_SESSION.
+let csrfToken = null;
+
+export function currentToken() {
+  return csrfToken;
+}
+
+export function setToken(token) {
+  csrfToken = token ?? null;
+}
+
+async function send(path, { method = 'GET', body, csrf = false } = {}) {
+  const token = csrfToken;
+  const headers = {};
+  if (method !== 'GET') headers['Content-Type'] = 'application/json';
+  if (csrf && token) headers['X-CSRF-Token'] = token;
+  let response;
   try {
-    globalThis.localStorage.setItem(KEY, JSON.stringify(todos));
+    response = await fetch(path, {
+      method,
+      headers,
+      cache: 'no-store',
+      credentials: 'same-origin',
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
   } catch {
-    // Storage full or unavailable: keep working in memory for this session.
+    throw new ApiError(0, 'NETWORK', "Can't reach the server.");
   }
+  if (csrf && token !== csrfToken) throw new ApiError(0, 'STALE_SESSION', 'The session changed.');
+  if (response.status === 204) return null;
+  const data = await response.json().catch(() => null);
+  if (csrf && token !== csrfToken) throw new ApiError(0, 'STALE_SESSION', 'The session changed.');
+  if (!response.ok) {
+    const error = data?.error ?? data ?? {};
+    throw new ApiError(response.status, error.code ?? 'HTTP_ERROR', error.message ?? 'Request failed.');
+  }
+  return data;
+}
+
+// --- Session and auth --------------------------------------------------------------------------
+
+// {user:{name,email}|null, csrfToken}. Also remembers the token for later requests.
+export async function readSession() {
+  let response;
+  try {
+    response = await fetch('/api/session', { cache: 'no-store', credentials: 'same-origin' });
+  } catch {
+    throw new ApiError(0, 'NETWORK', "Can't reach the server.");
+  }
+  if (response.status === 401) return { user: null, csrfToken: null };
+  if (!response.ok) throw new ApiError(response.status, 'SESSION_CHECK_FAILED', 'Session check failed.');
+  const active = await response.json();
+  return active?.user ? active : { user: null, csrfToken: null };
+}
+
+// Better Auth endpoints. Resolves {ok, status, code}; rejects only on a network failure.
+// Response tokens are ignored: the app reads /api/session afterwards.
+export async function authRequest(path, body, { csrf = false } = {}) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (csrf && csrfToken) headers['X-CSRF-Token'] = csrfToken;
+  const response = await fetch(`/api/auth/${path}`, {
+    method: 'POST',
+    headers,
+    cache: 'no-store',
+    credentials: 'same-origin',
+    body: JSON.stringify(body),
+  });
+  const code = response.ok ? undefined : (await response.json().catch(() => null))?.code;
+  return { ok: response.ok, status: response.status, code };
+}
+
+// --- Todos -------------------------------------------------------------------------------------
+
+const todoPath = (id, extra = '') => `/api/todos?id=${encodeURIComponent(id)}${extra}`;
+
+// The CSRF token is sent on reads too, so a tab can't load another account's list after a switch.
+export async function listTodos() {
+  return (await send('/api/todos', { csrf: true })).todos;
+}
+
+export async function createTodo({ id, text, tags }) {
+  return (await send('/api/todos', { method: 'POST', body: { id, text, tags }, csrf: true })).todo;
+}
+
+export async function patchTodo(id, revision, action, fields = {}) {
+  const body = { ...fields, revision, action };
+  return (await send(todoPath(id), { method: 'PATCH', body, csrf: true })).todo;
+}
+
+export async function deleteTodo(id, revision) {
+  await send(todoPath(id, `&revision=${revision}`), { method: 'DELETE', csrf: true });
 }
