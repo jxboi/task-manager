@@ -660,6 +660,7 @@ function saveEditor() {
     // Save is aria-disabled: a no-op that shows why.
     reminderTouched = true;
     syncEditor();
+    whenInput.focus();
     return;
   }
   const id = reminderId;
@@ -758,10 +759,10 @@ function syncEditor() {
 
   let next = null;
   if (showError) next = MESSAGES.invalid;
-  else if (todo.completed) next = MESSAGES.done;
   else if (!invalid && due <= Date.now()) next = MESSAGES.past;
-  else if (notificationsBlocked()) next = MESSAGES.blocked;
-  else if (Notification.permission === 'default') next = MESSAGES.ask;
+  else if (!invalid && todo.completed) next = MESSAGES.done;
+  else if (typeof Notification !== 'undefined' && Notification.permission === 'default') next = MESSAGES.ask;
+  else if (!invalid && notificationsBlocked()) next = MESSAGES.blocked;
 
   if (next === null) {
     hideMessage();
