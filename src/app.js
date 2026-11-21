@@ -1087,9 +1087,7 @@ form.addEventListener('submit', async (event) => {
   const uncertain = !outcome.error || status === 0 || status >= 500 || code === 'DUPLICATE_ID';
   if (uncertain) createDrafts.set(draft, [...(createDrafts.get(draft) ?? []), todo.id]);
   if (handleSessionError(outcome.error)) return;
-  showSync(uncertain
-    ? `Couldn't add “${text}”. Press Add to try again.`
-    : `Couldn't add “${text}”.`);
+  showSync(`Couldn't add “${text}”.`);
 });
 
 clearFilters.addEventListener('click', () => {

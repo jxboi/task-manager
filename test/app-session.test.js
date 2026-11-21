@@ -150,7 +150,7 @@ test('task view against the server API', async (t) => {
     servers.a.failNext = () => ({ afterWrite: true });
     await add('Call Sam');
     assert.equal(input.value, 'Call Sam');
-    assert.match(byId('sync-text').textContent, /Press Add to try again/);
+    assert.equal(byId('sync-text').textContent, "Couldn't add “Call Sam”.");
     const count = servers.a.rows.length;
     byId('add-form').dispatchEvent(new Event('submit'));
     await settle();

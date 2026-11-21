@@ -223,7 +223,7 @@ p {
   align-items: center;
   gap: 8px;
   height: 48px;
-  padding: 3px 3px 3px 16px;
+  padding: 1px 1px 1px 16px;
   border: 1px solid var(--field);
   border-radius: 12px;
   background: var(--surface);
@@ -262,13 +262,26 @@ p {
   transition: background-color 120ms var(--ease), transform 120ms var(--ease);
 }
 
+/* In the composer the button is a 44x44 hit area; a transparent 2px border keeps the
+   visible fill at 40px, inset 3px from the field like before. */
+.add-field .add-button {
+  height: 44px;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  background-clip: padding-box;
+}
+
+.add-field .add-button:focus-visible {
+  outline-offset: 0;
+}
+
 .add-button:active:not(:disabled) {
-  background: var(--ink-press);
+  background-color: var(--ink-press);
   transform: scale(0.98);
 }
 
 .add-button:disabled {
-  background: var(--raised);
+  background-color: var(--raised);
   color: var(--text-3);
   cursor: default;
 }
@@ -665,6 +678,11 @@ p {
   gap: 4px;
 }
 
+/* A ticked row's stamp flows into the meta line, so "Daily" and the tags can share a line. */
+.todo.is-ticked .stamp {
+  display: contents;
+}
+
 .stamp-lead {
   white-space: nowrap;
 }
@@ -1044,11 +1062,13 @@ p {
 }
 
 .tag-remove {
+  /* A 44x44 hit area that lays out as the old 28x32 slot: negative margins absorb the extra. */
   position: relative;
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 32px;
+  width: 44px;
+  height: 44px;
+  margin: -6px -8px;
   padding: 0;
   border: 0;
   border-radius: 6px;
@@ -1056,10 +1076,8 @@ p {
   color: var(--text-2);
 }
 
-.tag-remove::after {
-  content: "";
-  position: absolute;
-  inset: -6px -4px;
+.tag-remove:focus-visible {
+  outline-offset: -8px;
 }
 
 .tag-add {
@@ -1146,10 +1164,13 @@ p {
   position: relative;
   flex: none;
   width: 52px;
-  height: 32px;
-  margin: 0;
-  border-radius: 16px;
-  background: rgb(31 27 22 / 0.16);
+  height: 44px;
+  margin: -6px 0;
+  border: solid transparent;
+  border-width: 6px 0;
+  /* The 32px track is the padding box; the transparent border makes the hit area 44 tall. */
+  border-radius: 16px / 22px;
+  background: rgb(31 27 22 / 0.16) padding-box;
   cursor: pointer;
   transition: background-color 200ms var(--ease);
 }
@@ -1168,7 +1189,11 @@ p {
 }
 
 .switch:checked {
-  background: var(--ink);
+  background: var(--ink) padding-box;
+}
+
+.switch:focus-visible {
+  outline-offset: -4px;
 }
 
 .switch:checked::after {
@@ -1205,13 +1230,16 @@ p {
 }
 
 .time-input {
-  height: 32px;
+  /* A 44px hit area; the transparent border keeps the visible chip 32px tall. */
+  box-sizing: border-box;
+  height: 44px;
   min-width: 112px;
-  margin-right: -4px;
+  margin: -6px -4px -6px 0;
   padding: 0 12px;
-  border: 0;
-  border-radius: 8px;
-  background: rgb(31 27 22 / 0.06);
+  border: solid transparent;
+  border-width: 6px 0;
+  border-radius: 8px / 14px;
+  background: rgb(31 27 22 / 0.06) padding-box;
   font: 16px/24px var(--mono);
   font-variant-numeric: tabular-nums;
   text-align: center;
@@ -1219,6 +1247,10 @@ p {
 
 .time-input::-webkit-date-and-time-value {
   text-align: center;
+}
+
+.time-input:focus-visible {
+  outline-offset: -4px;
 }
 
 .time-input[aria-invalid="true"] {
@@ -1306,7 +1338,7 @@ p {
   position: relative;
   display: grid;
   place-items: center;
-  height: 40px;
+  height: 44px;
   padding: 0;
   border: 0;
   background: none;
@@ -1316,7 +1348,7 @@ p {
 .cal-day::before {
   content: "";
   position: absolute;
-  top: 4px;
+  top: 6px;
   left: 50%;
   width: 32px;
   height: 32px;
