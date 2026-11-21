@@ -85,18 +85,12 @@ export function monthGrid(year, month) {
   return cells;
 }
 
-// Days before today can't be picked (the selected day always can, so an overdue reminder shows).
-export function isPastDay(str, now) {
-  return str < localDate(now);
-}
+// Any day can be picked, past ones included (an overdue reminder, or one saved to alert at once).
+// Paging back stops at the first month there is a reminder time for: January 1970.
+export const EARLIEST_DAY = '1970-01-01';
 
-// The earliest month the calendar pages back to: this month, or the selected day's if earlier.
-export function canGoBack(year, month, now, selected = '') {
-  const today = new Date(now);
-  const floor = parseDate(selected);
-  const limit = floor && floor.year * 12 + floor.month < today.getFullYear() * 12 + today.getMonth()
-    ? floor : { year: today.getFullYear(), month: today.getMonth() };
-  return year * 12 + month > limit.year * 12 + limit.month;
+export function canGoBack(year, month) {
+  return year * 12 + month > 1970 * 12;
 }
 
 const RELATIVE = new Map([[-1, 'Yesterday'], [0, 'Today'], [1, 'Tomorrow']]);

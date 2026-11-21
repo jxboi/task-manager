@@ -68,6 +68,20 @@ test('task sheet reminder picker', async (t) => {
     Object.defineProperty(event, 'target', { value: target });
     return event;
   };
+  // Picks a day the way a user does: open the calendar, page to its month, press the day.
+  const pickDay = (iso) => {
+    const [year, month] = iso.split('-').map(Number);
+    const label = new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(new Date(year, month - 1, 1));
+    if (byId('calendar').hidden) byId('reminder-date-button').click();
+    for (let guard = 0; byId('cal-month').textContent !== label && guard < 2000; guard += 1) {
+      const shown = byId('cal-days').children.find((cell) => cell.dataset.date)?.dataset.date.slice(0, 7);
+      byId(shown > iso.slice(0, 7) ? 'cal-prev' : 'cal-next').click();
+    }
+    assert.equal(byId('cal-month').textContent, label);
+    const cell = byId('cal-days').children.find((item) => item.dataset.date === iso);
+    assert.ok(!cell.disabled, 'past days can be picked');
+    cell.click();
+  };
   // Saving a new past time re-arms the alert, so the todo fires again (once the server has the
   // reminder and grants the claim): a fresh highlight.
   // Each call saves a different past minute: the sheet sends nothing for an unchanged reminder.
@@ -75,7 +89,13 @@ test('task sheet reminder picker', async (t) => {
   const fireAgain = async (id) => {
     row(id).querySelector('.todo-open').click();
     firings += 1;
-    edit(`2000-01-01T12:${String(firings % 60).padStart(2, '0')}`);
+    if (!on.checked) {
+      on.checked = true;
+      on.dispatchEvent(new Event('change'));
+    }
+    pickDay('2000-01-01');
+    time.value = `12:${String(firings % 60).padStart(2, '0')}`;
+    time.dispatchEvent(new Event('input'));
     save.click();
     await flush();
   };
@@ -191,6 +211,26 @@ test('task sheet reminder picker', async (t) => {
     const when = `${format({ month: 'short', day: 'numeric', year: 'numeric' })}, ${format({ hour: 'numeric', minute: '2-digit' })}`;
     assert.equal(chip.querySelector('.reminder-when').textContent, `Overdue · ${when}`);
     assert.equal(row('late').querySelector('.todo-open').getAttribute('aria-label'), `Late task. Overdue, was due ${when}. Edit task`);
+  });
+
+  await t.test('saving the same already-fired past time re-arms it, so it fires again', async () => {
+    Notification.permission = 'granted';
+    await fireAgain('late');
+    assert.equal(isFired('late'), true);
+    // Let the pulse end: the reminder stays alerted (notified), overdue and quiet.
+    list.dispatchEvent(dispatch(row('late'), 'animationend', { animationName: 'reminder-pulse' }));
+    await settle();
+    assert.equal(isFired('late'), false);
+    const stored = server.rows.find((item) => item.id === ids.late);
+    assert.equal(stored.notified, stored.due, 'the server has it as alerted');
+    const patches = () => server.requests.filter((request) => request.method === 'PATCH' && /setReminder/.test(String(request.body ?? ''))).length;
+    const before = patches();
+    open('late'); // nothing edited: the same time
+    save.click();
+    await flush();
+    assert.equal(isFired('late'), true, 'saved again at the same time, it alerts again');
+    assert.equal(server.rows.find((item) => item.id === ids.late).due, stored.due);
+    assert.equal(patches(), before + 1, 'one setReminder re-arm was sent');
   });
 
   await t.test('a fired row has no "Got it" button', async () => {

@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   CALENDAR_KEYS, DEFAULT_TIME, addDays, addMonths, canGoBack, dayLabel, dayName, defaultReminder,
-  isPastDay, localDate, monthGrid, monthLabel, parseDate, pickerDue, splitDue,
+  localDate, monthGrid, monthLabel, parseDate, pickerDue, splitDue,
 } from '../src/picker.js';
 
 const at = (text) => new Date(text).getTime(); // local time
@@ -80,15 +80,11 @@ test('monthGrid lays out whole Sunday-first weeks with blanks outside the month'
   }
 });
 
-test('past days are not pickable, and paging back stops at this month (or the chosen day)', () => {
-  assert.equal(isPastDay('2026-11-20', now), true);
-  assert.equal(isPastDay('2026-11-21', now), false, 'today is pickable');
-  assert.equal(isPastDay('2026-12-01', now), false);
-  assert.equal(canGoBack(2026, 10, now), false);
-  assert.equal(canGoBack(2026, 11, now), true);
-  // An overdue reminder from an earlier month can be paged back to.
-  assert.equal(canGoBack(2026, 9, now, '2026-09-15'), true);
-  assert.equal(canGoBack(2026, 8, now, '2026-09-15'), false);
+test('paging back stops at January 1970; any later month can be paged to', () => {
+  assert.equal(canGoBack(1970, 0), false);
+  assert.equal(canGoBack(1970, 1), true);
+  assert.equal(canGoBack(2000, 0), true);
+  assert.equal(canGoBack(2026, 10), true, 'this month is not a floor: past days can be picked');
 });
 
 test('dayLabel reads Today / Tomorrow / a short date, and names are full', () => {

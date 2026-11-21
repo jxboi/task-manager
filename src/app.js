@@ -15,7 +15,7 @@ import { createSync } from './sync.js';
 import { readTaskEdit, readTaskInput } from './task-input.js';
 import {
   CALENDAR_KEYS, DEFAULT_TIME, addDays, addMonths, canGoBack, dayLabel, dayName, defaultReminder,
-  isPastDay, localDate, monthGrid, monthLabel, parseDate, pickerDue, splitDue,
+  EARLIEST_DAY, localDate, monthGrid, monthLabel, parseDate, pickerDue, splitDue,
 } from './picker.js';
 
 const app = document.querySelector('.app');
@@ -806,6 +806,8 @@ function rejectTag(field) {
 // Save: one write with the title, tags and reminder, shown at once and rolled back if the server
 // refuses it (a 409 reloads and says the task changed in another tab).
 function saveEditor() {
+  // Save can fire without a blur (Enter in Time, a script click): a tag still typed is kept.
+  if (!tagField.hidden && tagField.value.trim() !== '') addDraftTag(tagField.value);
   const { text, tags, error } = readTaskEdit(textInput.value, draft.text, draftTags);
   const due = editorDue();
   if (error !== null || due === undefined) {
@@ -840,7 +842,21 @@ function saveEditor() {
     hideSync();
     saveEdit(id, fields);
   }
+  // An unchanged reminder that already fired is saved again to re-arm it (it alerts once more).
+  if (due !== null && !reminderChanged && todo.notified === todo.due) {
+    fired.delete(id);
+    hideSync();
+    rearmReminder(id, due, fields.repeat);
+  }
   render(keys);
+}
+
+function rearmReminder(id, due, repeat) {
+  saved(id, sync.setReminder(id, due, repeat), () => {
+    const todo = findTodo(id);
+    if (todo && todo.notified === todo.due && todo.due === due && todo.repeat === repeat) rearmReminder(id, due, repeat);
+  });
+  check();
 }
 
 // `retry` (after an uncertain failure) re-sends only if the row doesn't already match the edit.
@@ -967,11 +983,10 @@ function setCalendarOpen(open) {
   }
 }
 
-// The day that takes the calendar's one tab stop: the chosen day, today, or the first open day.
-function calendarStop(cells, now) {
+// The day that takes the calendar's one tab stop: the chosen day, today, or the first day shown.
+function calendarStop(cells) {
   const days = cells.filter(Boolean).map((cell) => cell.date);
-  const open = days.filter((date) => date === dateInput.value || !isPastDay(date, now));
-  return [dateInput.value, localDate(now)].find((date) => open.includes(date)) ?? open[0];
+  return [dateInput.value, localDate(Date.now())].find((date) => days.includes(date)) ?? days[0];
 }
 
 function renderCalendar() {
@@ -980,11 +995,12 @@ function renderCalendar() {
   const { year, month } = calendarView;
   const today = localDate(now);
   const cells = monthGrid(year, month);
-  const stop = calendarStop(cells, now);
+  const stop = calendarStop(cells);
   // A re-render (a timer, a refresh) keeps focus on the day that had it.
   const focusedDay = calDays.contains(document.activeElement) ? document.activeElement.dataset?.date : undefined;
   calMonth.textContent = monthLabel(year, month);
-  calPrev.disabled = !canGoBack(year, month, now, dateInput.value);
+  const navFocus = [calPrev, calNext].find((control) => control === document.activeElement);
+  calPrev.disabled = !canGoBack(year, month);
   if (calWeekdays.children.length === 0) {
     const format = new Intl.DateTimeFormat(undefined, { weekday: 'short' });
     // 2026-11-22 is a Sunday: the grid starts on Sunday.
@@ -1003,7 +1019,6 @@ function renderCalendar() {
     button.setAttribute('aria-label', dayName(cell.date));
     button.setAttribute('aria-pressed', String(cell.date === dateInput.value));
     if (cell.date === today) button.setAttribute('aria-current', 'date');
-    button.disabled = cell.date !== dateInput.value && isPastDay(cell.date, now);
     button.tabIndex = cell.date === stop ? 0 : -1;
     const number = document.createElement('span');
     number.textContent = String(cell.day);
@@ -1011,6 +1026,13 @@ function renderCalendar() {
     return button;
   }));
   if (focusedDay) focusCalendarDay(focusedDay);
+  // A control that disables itself (Previous month at the first month) must not drop focus out of
+  // the sheet: it goes to the chosen day, else the first day, else Next month.
+  if (navFocus?.disabled) {
+    const target = calDays.querySelector?.(`[data-date="${dateInput.value}"]`) ??
+      calDays.querySelector?.('.cal-day') ?? calNext;
+    target.focus();
+  }
 }
 
 function focusCalendarDay(date) {
@@ -1066,8 +1088,8 @@ form.addEventListener('submit', async (event) => {
   if (uncertain) createDrafts.set(draft, [...(createDrafts.get(draft) ?? []), todo.id]);
   if (handleSessionError(outcome.error)) return;
   showSync(uncertain
-    ? `Couldn't add “${text}”. Check your connection, then press Add to try again.`
-    : `Couldn't add “${text}”. Check it and try again.`);
+    ? `Couldn't add “${text}”. Press Add to try again.`
+    : `Couldn't add “${text}”.`);
 });
 
 clearFilters.addEventListener('click', () => {
@@ -1189,14 +1211,14 @@ calDays.addEventListener('click', (event) => {
   chooseDay(day.dataset.date);
   focusCalendarDay(day.dataset.date);
 });
-// Arrow keys move a day or a week (into the next or previous month), skipping past days.
+// Arrow keys move a day or a week (into the next or previous month).
 calDays.addEventListener('keydown', (event) => {
   const day = event.target.closest?.('.cal-day');
   const delta = CALENDAR_KEYS[event.key];
   if (!day || delta === undefined) return;
   event.preventDefault();
   const date = addDays(day.dataset.date, delta);
-  if (date !== dateInput.value && isPastDay(date, Date.now())) return;
+  if (date < EARLIEST_DAY) return;
   const target = parseDate(date);
   if (target.year !== calendarView.year || target.month !== calendarView.month) {
     calendarView = { year: target.year, month: target.month };
@@ -1354,7 +1376,7 @@ async function saved(id, result, retry) {
     showSync("Couldn't save that change.");
   } else {
     const retryNow = () => reconcileThen(id, outcome.revision, retry);
-    showSync("Couldn't save your change. Check your connection and try again.", retryNow);
+    showSync("Couldn't save your change.", retryNow);
   }
 }
 
@@ -1369,7 +1391,7 @@ async function reconcileThen(id, revision, retry) {
   if (result.stale) return;
   if (!result.ok) {
     if (!handleSessionError(result.error)) {
-      showSync("Couldn't save your change. Check your connection and try again.", () => reconcileThen(id, revision, retry));
+      showSync("Couldn't save your change.", () => reconcileThen(id, revision, retry));
     }
     return;
   }
@@ -1384,7 +1406,7 @@ async function reloadList() {
   if (result.stale) return;
   if (result.ok) check();
   else if (!handleSessionError(result.error)) {
-    showSync("The latest list couldn't be loaded. Check your connection and try again.", reloadList);
+    showSync("The latest list couldn't be loaded.", reloadList);
   }
 }
 

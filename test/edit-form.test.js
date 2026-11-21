@@ -5,7 +5,7 @@ import { createFakeApi, settle } from './fake-api.js';
 import { installDom } from './dom.js';
 
 const changedElsewhere = 'This task changed in another tab or device. The list is up to date now, so try again.';
-const couldNotSave = "Couldn't save your change. Check your connection and try again.";
+const couldNotSave = "Couldn't save your change.";
 
 test('edit form', async (t) => {
   const { byId, list } = installDom(t, { fetch: (...args) => server.fetch(...args) });
@@ -423,7 +423,46 @@ test('edit form', async (t) => {
     assert.deepEqual(serverRow('rent').tags, saved.map((tag) => tag.slice(1)));
   });
 
-  await t.test('the calendar picks a day; the time starts at 9:00 AM; past days are disabled', async () => {
+  await t.test('Save keeps a tag still typed in the focused Add tag field', async () => {
+    open('rent');
+    const before = serverRow('rent').tags;
+    byId('edit-tag-add').click();
+    const field = byId('edit-tag-field');
+    field.value = 'Pending';
+    assert.equal(document.activeElement, field);
+    save.click(); // no blur first
+    await settle();
+    assert.deepEqual(serverRow('rent').tags, [...before, 'pending']);
+    open('rent');
+    byId('edit-tags').querySelectorAll('.tag-remove').find((button) => button.dataset.tag === 'pending').click();
+    save.click();
+    await settle();
+    assert.deepEqual(serverRow('rent').tags, before);
+  });
+
+  await t.test('focus stays in the sheet when Previous month disables itself', async () => {
+    open('plants');
+    byId('reminder-date-button').click();
+    const prev = byId('cal-prev');
+    // Page to February 1970 by choosing a day there (the native input holds the date), then close and reopen.
+    date.value = '1970-02-10';
+    date.dispatchEvent(new Event('input'));
+    byId('reminder-date-button').click();
+    byId('reminder-date-button').click();
+    assert.equal(byId('cal-month').textContent,
+      new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(new Date(1970, 1, 1)));
+    assert.equal(prev.disabled, false);
+    prev.focus();
+    assert.equal(document.activeElement, prev);
+    prev.click(); // January 1970: the first month, so Previous month disables itself
+    assert.equal(prev.disabled, true);
+    assert.notEqual(document.activeElement, prev);
+    assert.ok(byId('cal-days').children.includes(document.activeElement), 'focus moved to a day in the calendar');
+    assert.equal(document.activeElement.dataset.date, '1970-01-01', 'the first available day');
+    byId('reminder-cancel').click();
+  });
+
+  await t.test('the calendar picks a day; the time starts at 9:00 AM; any day can be picked, past ones too', async () => {
     const today = new Date();
     const pad = (value) => String(value).padStart(2, '0');
     const iso = (day) => `${day.getFullYear()}-${pad(day.getMonth() + 1)}-${pad(day.getDate())}`;
@@ -439,13 +478,13 @@ test('edit form', async (t) => {
     const selected = days().filter((cell) => cell.getAttribute('aria-pressed') === 'true');
     assert.deepEqual(selected.map((cell) => cell.dataset.date), [date.value]);
     assert.equal(selected[0].tabIndex, 0, 'the chosen day holds the one tab stop');
-    // Today is marked; earlier days in the month can't be picked.
+    // Today is marked; earlier days in the month can be picked too.
     const todayCell = days().find((cell) => cell.dataset.date === iso(today));
     if (todayCell) assert.equal(todayCell.getAttribute('aria-current'), 'date');
     for (const cell of days()) {
-      if (cell.dataset.date < iso(today)) assert.equal(cell.disabled, true, cell.dataset.date);
+      assert.ok(!cell.disabled, cell.dataset.date);
     }
-    assert.equal(byId('cal-prev').disabled, true, 'no paging back before this month');
+    assert.equal(byId('cal-prev').disabled, false, 'paging back is open');
     // Next month, the 15th, at the default time, then repeat daily.
     byId('cal-next').click();
     const fifteenth = days().find((cell) => cell.dataset.date.endsWith('-15'));
