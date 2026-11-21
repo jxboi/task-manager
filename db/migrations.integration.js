@@ -171,7 +171,7 @@ test('position migration preserves per-user creation order and accepts legacy in
   await runMigrations(options);
   await client.query(`
     INSERT INTO "user" (id, name, email, "createdAt", "updatedAt") VALUES
-      ('a', 'A', 'a@example.test', now(), now()), ('b', 'B', 'b@example.test', now());
+      ('a', 'A', 'a@example.test', now(), now()), ('b', 'B', 'b@example.test', now(), now());
     INSERT INTO todos (user_id, id, text, created_at, due, revision) VALUES
       ('a', '00000000-0000-0000-0000-000000000003', 'Later', 10, 1, 7),
       ('a', '00000000-0000-0000-0000-000000000002', 'Tie B', 2, NULL, 1),
