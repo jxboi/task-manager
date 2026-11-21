@@ -466,20 +466,37 @@ function render(focusKeys) {
 }
 
 // Pressing a control can blur a field (and so re-render) before that control gets its click. Rendering in between would replace the pressed control and swallow the
-// click, so a render requested during a press waits until the button is released (click comes first).
-// A press can end without mouseup (a drag, or the window losing focus), so those release it too.
-// The row losing focus keeps its revealed controls until the press ends: collapsing it on mousedown
+// click, so a render requested during a press waits until the press has had its click.
+// The press is tracked with pointer events: a touch fires pointerdown when the finger lands, well
+// before the browser synthesizes mousedown/mouseup/click after the finger lifts. On pointerup the
+// press stays held until the click (a touch's click can come in a later task); if no click comes
+// (released elsewhere), a short fallback releases it. A cancelled press (scroll, drag) or the
+// window losing focus releases it at once.
+// The row losing focus keeps its revealed controls until the press ends: collapsing it on press
 // would shift the pressed control (in a row below) out from under the pointer and lose the click.
-document.addEventListener('mousedown', (event) => {
-  if (event.button !== 0) return;
+const CLICK_WAIT_MS = 400;
+let releaseTimer = null;
+document.addEventListener('pointerdown', (event) => {
+  if (event.isPrimary === false || event.button !== 0) return;
+  clearTimeout(releaseTimer);
   pressing = true;
   document.activeElement?.closest('.todo')?.classList.add('is-held');
 }, true);
-document.addEventListener('mouseup', release, true);
+document.addEventListener('pointerup', () => {
+  if (!pressing) return;
+  clearTimeout(releaseTimer);
+  releaseTimer = setTimeout(release, CLICK_WAIT_MS);
+}, true);
+// Capture: released before the control's own click handler runs; the held updates flush after it.
+document.addEventListener('click', () => {
+  if (pressing) release();
+}, true);
+document.addEventListener('pointercancel', release, true);
 document.addEventListener('dragend', release, true);
 window.addEventListener('blur', release);
 
 function release() {
+  clearTimeout(releaseTimer);
   pressing = false;
   for (const row of list.querySelectorAll('.is-held')) row.classList.remove('is-held');
   setTimeout(() => {

@@ -309,7 +309,7 @@ p {
   justify-content: flex-end;
   min-width: 44px;
   min-height: 44px;
-  margin-right: -4px; /* the label's right edge lines up with the list's */
+  padding-right: 0; /* the label's right edge lines up with the list's */
   font-size: 13px;
   line-height: 20px;
 }

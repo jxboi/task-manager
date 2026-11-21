@@ -117,6 +117,36 @@ test('profile menu', async (t) => {
     await settle();
   });
 
+  const switchAccount = async (user, csrfToken) => {
+    ana.user = user;
+    ana.csrfToken = csrfToken;
+    dispatch(globalThis.window ?? document, 'focus');
+    await settle();
+  };
+  const restoreAna = () => switchAccount({ name: 'Ana', email: 'ana@example.test' }, 'token-a');
+
+  await t.test('an account switch after the name tap dropped focus to the body restores it to the button', async () => {
+    button.click();
+    document.activeElement = document.body ?? null; // the name label took focus from Sign out
+    dispatch(menu, 'focusout', { relatedTarget: null });
+    assert.equal(isOpen(), true);
+    await switchAccount({ name: 'Bo', email: 'bo@example.test' }, 'token-b');
+    assert.equal(isOpen(), false);
+    assert.equal(document.activeElement, button);
+    await restoreAna();
+  });
+
+  await t.test('an account switch leaves focus on a control the user moved to', async () => {
+    button.click();
+    const other = byId('new-todo');
+    other.focus(); // no focusin yet: the menu is still open when the switch lands
+    assert.equal(isOpen(), true);
+    await switchAccount({ name: 'Bo', email: 'bo@example.test' }, 'token-b');
+    assert.equal(isOpen(), false);
+    assert.equal(document.activeElement, other);
+    await restoreAna();
+  });
+
   await t.test('keyboard: Down on the button opens it; arrows keep focus on the item', () => {
     dispatch(button, 'keydown', { key: 'ArrowDown' });
     assert.equal(isOpen(), true);
@@ -346,12 +376,52 @@ test('profile menu', async (t) => {
     byId('auth-dismiss-note').click();
   });
 
+  await t.test('a sign-out failure after the name tap dropped focus to the body restores it to the button', async () => {
+    signOutStatus = 500;
+    button.click();
+    signOut.click();
+    document.activeElement = document.body ?? null; // the name label took focus from Sign out
+    dispatch(menu, 'focusout', { relatedTarget: null });
+    assert.equal(isOpen(), true);
+    await settle();
+    assert.equal(byId('auth-signout-note').hidden, false);
+    assert.equal(isOpen(), false);
+    assert.equal(document.activeElement, button);
+    byId('auth-dismiss-note').click();
+  });
+
+  await t.test('a sign-out failure leaves focus on a control the user moved to while the menu was open', async () => {
+    signOutStatus = 500;
+    button.click();
+    signOut.click();
+    const other = byId('new-todo');
+    other.focus(); // no focusin yet: the menu is still open when the failure lands
+    await settle();
+    assert.equal(isOpen(), false);
+    assert.equal(document.activeElement, other);
+    byId('auth-dismiss-note').click();
+  });
+
+  await t.test('a sign-out failure with the menu already closed and focus on the body leaves focus alone', async () => {
+    signOutStatus = 500;
+    button.click();
+    signOut.click();
+    document.activeElement = document.body ?? null;
+    menu.hidden = true; // dismissed (e.g. by Tab out) before the failure lands
+    button.setAttribute('aria-expanded', 'false');
+    await settle();
+    assert.equal(isOpen(), false);
+    assert.equal(document.activeElement, document.body ?? null);
+    byId('auth-dismiss-note').click();
+  });
+
   await t.test('Sign out from the menu signs out and hides the header controls', async () => {
     signOutStatus = 204;
+    const before = signOuts.length;
     button.click();
     signOut.click();
     await settle();
-    assert.equal(signOuts.length, 3);
+    assert.equal(signOuts.length, before + 1);
     assert.equal(byId('auth-view').hidden, false);
     assert.equal(byId('task-view').hidden, true);
     assert.equal(account.hidden, true);

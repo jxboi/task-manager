@@ -131,7 +131,7 @@ function setAccount(active) {
   // Another tab switched accounts: the open menu's Sign out would now act on the new account.
   const switched = currentSession && (currentSession.csrfToken !== active.csrfToken || currentSession.user.email !== active.user.email);
   if (switched && !profileMenu.hidden) {
-    const owned = profileMenu.contains(document.activeElement);
+    const owned = menuOwnsFocus();
     setMenuOpen(false);
     if (owned) profileButton.focus();
   }
@@ -401,8 +401,9 @@ signOut.addEventListener('click', async () => {
   } catch {
     // The note is in the task view; the menu closes so it isn't covered, and Sign out is one tap
     // away again under the profile button.
-    // Focus goes back to the button only if the menu still owns it; the user may have moved on.
-    const owned = profileMenu.contains(document.activeElement);
+    // Focus goes back to the button only if the menu still owns it (or it fell to the body from
+    // the menu); the user may have moved on.
+    const owned = !profileMenu.hidden && menuOwnsFocus();
     signOutNote.hidden = false;
     setMenuOpen(false);
     if (owned) profileButton.focus();
@@ -414,6 +415,13 @@ signOut.addEventListener('click', async () => {
 });
 
 // --- The profile menu: the account's name and Sign out, under the header's profile button ---
+
+// Whether focus belongs to the open menu: in it, or on the body, where a tap on the name label
+// (which blurs Sign out) leaves it. Focus on any other control is the user's.
+function menuOwnsFocus() {
+  const active = document.activeElement;
+  return !active || active === document.body || profileMenu.contains(active);
+}
 
 function setMenuOpen(open) {
   profileMenu.hidden = !open;
@@ -486,15 +494,13 @@ document.addEventListener('pointerdown', (event) => {
   if (profileMenu.hidden || account.contains(event.target)) return;
   // Focus on the body while the menu is open came from the menu too (a click on the name label
   // blurred Sign out), so it is restored the same way.
-  const active = document.activeElement;
-  const owned = !active || active === document.body || profileMenu.contains(active);
+  const owned = menuOwnsFocus();
   setMenuOpen(false);
   // Let the press move focus to the control it landed on; if the menu had focus and nothing took
   // it (blank space), put it back on the profile button rather than the document body.
   if (owned) {
     setTimeout(() => {
-      const active = document.activeElement;
-      if (!active || active === document.body || profileMenu.contains(active)) profileButton.focus();
+      if (menuOwnsFocus()) profileButton.focus();
     }, 0);
   }
 });

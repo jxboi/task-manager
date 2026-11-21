@@ -106,10 +106,18 @@ test('the + button opens the new-task field', async (t) => {
     assert.equal(document.activeElement, input);
   });
 
-  const press = (type) => {
+  const press = (type, pointerType = 'mouse') => {
     const event = new Event(type);
     event.button = 0;
+    event.isPrimary = true;
+    event.pointerType = pointerType;
     document.dispatchEvent(event);
+  };
+  // A mouse press: pointerdown … pointerup, then mousedown/mouseup and click in the same task.
+  const mouseRelease = () => {
+    press('pointerup');
+    press('mouseup');
+    press('click');
   };
 
   await t.test('a failed add arriving mid-press waits for the release before reopening', async () => {
@@ -118,17 +126,58 @@ test('the + button opens the new-task field', async (t) => {
     server.failNext = (method) => (method === 'POST' ? new Response('{}', { status: 500 }) : undefined);
     form.dispatchEvent(new Event('submit'));
     toggle.click(); // closed while the save is on its way
-    press('mousedown'); // the user is pressing a task control when the failure arrives
+    press('pointerdown'); // the user is pressing a task control when the failure arrives
     await settle();
     assert.equal(form.hidden, true, 'the composer does not move the list mid-press');
     assert.equal(byId('sync-note').hidden, true);
     assert.equal(input.value, '');
-    press('mouseup');
+    mouseRelease();
     await settle();
     assert.equal(form.hidden, false);
     assert.equal(input.value, 'Call Ana');
     assert.equal(byId('sync-text').textContent, "Couldn't add “Call Ana”.");
     assert.equal(byId('sync-note').hidden, false);
+    byId('sync-dismiss').click();
+    type('');
+  });
+
+  await t.test('a failed add arriving during a touch waits for its click, not the finger landing', async () => {
+    type('Call Cy');
+    server.failNext = (method) => (method === 'POST' ? new Response('{}', { status: 500 }) : undefined);
+    form.dispatchEvent(new Event('submit'));
+    toggle.click();
+    press('pointerdown', 'touch'); // the finger lands on a task control: no mouse events yet
+    await settle();
+    assert.equal(form.hidden, true, 'the composer does not move the list under the finger');
+    assert.equal(byId('sync-note').hidden, true);
+    press('pointerup', 'touch'); // the finger lifts; the synthesized mouse events and click follow later
+    await settle();
+    assert.equal(form.hidden, true, 'still held between pointerup and the synthesized click');
+    assert.equal(byId('sync-note').hidden, true);
+    press('mousedown');
+    press('mouseup');
+    press('click');
+    await settle();
+    assert.equal(form.hidden, false);
+    assert.equal(input.value, 'Call Cy');
+    assert.equal(byId('sync-text').textContent, "Couldn't add “Call Cy”.");
+    assert.equal(byId('sync-note').hidden, false);
+    byId('sync-dismiss').click();
+    type('');
+  });
+
+  await t.test('a cancelled touch (a scroll) releases the held failure at once', async () => {
+    type('Call Di');
+    server.failNext = (method) => (method === 'POST' ? new Response('{}', { status: 500 }) : undefined);
+    form.dispatchEvent(new Event('submit'));
+    toggle.click();
+    press('pointerdown', 'touch');
+    await settle();
+    assert.equal(form.hidden, true);
+    press('pointercancel', 'touch');
+    await settle();
+    assert.equal(form.hidden, false);
+    assert.equal(input.value, 'Call Di');
     byId('sync-dismiss').click();
     type('');
   });
@@ -148,11 +197,11 @@ test('the + button opens the new-task field', async (t) => {
     server.failNext = (method) => (method === 'POST' ? new Response('{}', { status: 500 }) : undefined);
     form.dispatchEvent(new Event('submit'));
     toggle.click();
-    press('mousedown');
+    press('pointerdown');
     await settle();
     window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: null } }));
     await settle();
-    press('mouseup');
+    mouseRelease();
     await settle();
     assert.equal(form.hidden, true);
     assert.equal(input.value, '');
