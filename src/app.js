@@ -2,19 +2,21 @@ import {
   addTodo,
   editTodo,
   toggleTodo,
-  addTag,
   allTags,
   filterByTags,
   dueReminders,
   nextFireTime,
   sortByUrgency,
 } from './todos.js';
-import { MAX_TAGS, normalizeTag, parseTodoInput, tagColor } from './tags.js';
-import { isCompleted, isOverdue, parseLocalInput, toLocalInput } from './reminders.js';
+import { MAX_TAGS, normalizeTag, tagColor } from './tags.js';
+import { isCompleted, isOverdue } from './reminders.js';
 import * as api from './storage.js';
 import { createSync } from './sync.js';
 import { readTaskEdit, readTaskInput } from './task-input.js';
-import { popoverTop } from './popover.js';
+import {
+  CALENDAR_KEYS, DEFAULT_TIME, addDays, addMonths, canGoBack, dayLabel, dayName, defaultReminder,
+  isPastDay, localDate, monthGrid, monthLabel, parseDate, pickerDue, splitDue,
+} from './picker.js';
 
 const app = document.querySelector('.app');
 const form = document.getElementById('add-form');
@@ -38,27 +40,32 @@ const editorAnnouncer = document.getElementById('reminder-announcer');
 const layer = document.getElementById('reminder-layer');
 const scrim = document.getElementById('reminder-scrim');
 const editor = document.getElementById('reminder-editor');
-const editorFor = document.getElementById('reminder-for');
-const editorTitle = document.getElementById('reminder-title');
-const textField = document.getElementById('edit-text-field');
 const textInput = document.getElementById('edit-text');
 const editTags = document.getElementById('edit-tags');
-const whenLabel = document.getElementById('reminder-when-label');
-const whenInput = document.getElementById('reminder-when');
+const tagAdd = document.getElementById('edit-tag-add');
+const tagField = document.getElementById('edit-tag-field');
+const reminderOn = document.getElementById('reminder-on');
+const pickerDetail = document.getElementById('picker-detail');
+const dateButton = document.getElementById('reminder-date-button');
+const dateValue = document.getElementById('reminder-date-value');
+const dateInput = document.getElementById('reminder-date');
+const calendar = document.getElementById('calendar');
+const calMonth = document.getElementById('cal-month');
+const calPrev = document.getElementById('cal-prev');
+const calNext = document.getElementById('cal-next');
+const calWeekdays = document.getElementById('cal-weekdays');
+const calDays = document.getElementById('cal-days');
+const timeInput = document.getElementById('reminder-time');
 const repeatSelect = document.getElementById('reminder-repeat');
-const repeatHelp = document.getElementById('reminder-repeat-help');
 const message = document.getElementById('reminder-message');
 const messageIcon = document.getElementById('reminder-message-icon');
 const messageText = document.getElementById('reminder-message-text');
-const actions = document.getElementById('reminder-actions');
 const editorStart = document.getElementById('reminder-start');
 const editorEnd = document.getElementById('reminder-end');
-const removeButton = document.getElementById('reminder-remove');
+const deleteButton = document.getElementById('task-delete');
 const cancelButton = document.getElementById('reminder-cancel');
 const saveButton = document.getElementById('reminder-save');
-const trashIcon = document.getElementById('trash-icon');
 const xIcon = document.getElementById('x-icon');
-const bellIcon = document.getElementById('bell-icon');
 const repeatIcon = document.getElementById('repeat-icon');
 const alertIcon = document.getElementById('alert-icon');
 const infoIcon = document.getElementById('info-icon');
@@ -70,7 +77,6 @@ const syncDismiss = document.getElementById('sync-dismiss');
 
 const INVALID_FLASH_MS = 400;
 const MAX_DELAY = 2 ** 31 - 1; // setTimeout's limit (about 24.8 days); check() re-arms when it fires
-const sheetQuery = window.matchMedia('(max-width: 639px), (hover: none)');
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 const PULSE_MS = 2 * 1200; // the fired row's 2 pulses (styles.css reminder-pulse)
 // A claim the server refused while this tab still sees the occurrence as due (its clock is ahead,
@@ -78,25 +84,20 @@ const PULSE_MS = 2 * 1200; // the fired row's 2 pulses (styles.css reminder-puls
 const CLAIM_RETRY_MS = 30_000;
 const NOTE_DISMISSED_KEY = 'task-manager.blocked-note-dismissed';
 
-const BLOCKED_TEXT = 'Notifications are blocked or unavailable. Due tasks will be highlighted on this page.';
 const CHANGED_ELSEWHERE = 'This task changed in another tab or device. The list is up to date now, so try again.';
 
 // The list-level notice (permission denied or unsupported).
 const NOTE_TEXT = 'Notifications off';
 const SKELETON_ROWS = 3;
+// The sheet's one message line. Short: no helper text.
 const MESSAGES = {
   invalid: { kind: 'error', icon: alertIcon, text: 'Enter a valid date and time.' },
-  // The edit form's title, by readTaskInput's error (the rule that also disables Add).
+  // The title, by readTaskInput's error (the rule that also disables Add).
   empty: { kind: 'error', icon: alertIcon, text: 'Enter a task title.' },
   long: { kind: 'error', icon: alertIcon, text: 'Keep the title to 2,000 characters or fewer.' },
-  done: { kind: 'warn', icon: infoIcon, text: "This task is done, so its reminder won't alert. Uncheck it to turn alerts back on." },
-  past: { kind: 'warn', icon: infoIcon, text: 'That time has passed. Saving will mark this task overdue and alert right away.' },
-  blocked: { kind: 'warn', icon: infoIcon, text: BLOCKED_TEXT },
-  ask: {
-    kind: 'info',
-    icon: bellIcon,
-    text: 'When you save, your browser will ask to allow notifications. If you say no, due tasks are still highlighted on this page.',
-  },
+  past: { kind: 'warn', icon: infoIcon, text: 'That time has passed' },
+  done: { kind: 'warn', icon: infoIcon, text: 'This task is done' },
+  blocked: { kind: 'info', icon: infoIcon, text: NOTE_TEXT },
 };
 
 // The signed-in user's todos as shown: the server's rows plus changes still being saved.
@@ -125,21 +126,16 @@ let recheckTimer;
 const openNotifications = new Set(); // closed when the session ends
 // View state: never saved, never in the URL.
 let activeTags = []; // A to Z
-let reminderId = null; // todo whose editor is open
-let draft = null; // the edit form's starting point: { text, tags, due, repeat } of that todo
-let draftTags = []; // the tags the edit form will save (a copy of the todo's, edited by its chips)
-// 'reminder': the reminder editor (date and repeat). 'task': the edit form, the same editor with
-// the task's title and tags field above, where an empty date means no reminder.
-let editorMode = 'reminder';
+let reminderId = null; // todo whose task sheet is open
+let draft = null; // the sheet's starting point: { text, tags, due, repeat } of that todo
+let draftTags = []; // the tags the sheet will save (a copy of the todo's, edited by its chips)
 let reminderTouched = false; // a field was changed, or Save tried: show its error
-let sheetMode = null; // editor layout last applied: true = bottom sheet, false = popover
 const fired = new Map(); // todo id -> when its "just fired" pulse started (performance.now())
 let noteDismissed = readNoteDismissed(); // the blocked-notifications note, for this session
 
 let rendering = false;
 let renderPending = false;
 let pendingFocus; // focus keys for the deferred render
-let returnFocus = null; // where focus goes if a press that closed the editor left nothing focused
 let pressing = false;
 let timer; // the one reminder timeout
 let bannerTimer;
@@ -491,8 +487,7 @@ function render(focusKeys) {
   }
 }
 
-// Pressing a control blurs an open "+ tag" field (or closes the reminder editor) before that
-// control gets its click. Rendering in between would replace the pressed control and swallow the
+// Pressing a control can blur a field (and so re-render) before that control gets its click. Rendering in between would replace the pressed control and swallow the
 // click, so a render requested during a press waits until the button is released (click comes first).
 // A press can end without mouseup (a drag, or the window losing focus), so those release it too.
 // The row losing focus keeps its revealed controls until the press ends: collapsing it on mousedown
@@ -520,11 +515,6 @@ function renderSoon(focusKeys) {
 
 function flushRender() {
   if (renderPending) render(pendingFocus);
-  if (returnFocus && !pressing) {
-    const keys = returnFocus;
-    returnFocus = null;
-    if (document.activeElement === document.body || !document.activeElement) render(keys);
-  }
 }
 
 // Neighbouring rows in the current view, for when the acted-on row leaves it.
@@ -702,84 +692,51 @@ function dismissAllFired() {
   for (const id of [...fired.keys()]) dismissFired(id);
 }
 
-// --- Reminders: editor ---------------------------------------------------------------------
+// --- Task sheet ----------------------------------------------------------------------------
 
-// `mode` 'task' opens the edit form: the same editor, prefilled with the task's title and tags
-// (as the add field would take them), its reminder and its repeat.
-function openEditor(id, mode = 'reminder') {
+// Opens the task sheet, prefilled with the task's title, tags, reminder and repeat.
+function openEditor(id) {
   const todo = findTodo(id);
-  const task = mode === 'task';
   reminderId = id;
-  editorMode = mode;
   reminderTouched = false;
   draft = { text: todo.text, tags: [...todo.tags], due: todo.due, repeat: todo.repeat };
   draftTags = [...todo.tags];
-  editorTitle.textContent = task ? 'Edit task' : 'Reminder';
-  editorFor.textContent = todo.text;
-  editorFor.hidden = task; // the Task field shows it
-  editor.setAttribute('aria-label', task ? `Edit “${todo.text}”` : `Reminder for “${todo.text}”`);
-  textField.hidden = !task;
-  textInput.value = task ? todo.text : '';
+  editor.setAttribute('aria-label', `Edit “${todo.text}”`);
+  textInput.value = todo.text;
+  closeTagField();
   renderDraftTags();
-  whenLabel.textContent = task ? 'Reminder' : 'Date and time';
-  whenInput.value = todo.due === null ? '' : toLocalInput(todo.due);
+  const fields = splitDue(todo.due);
+  reminderOn.checked = fields.on;
+  dateInput.value = fields.date;
+  timeInput.value = fields.time;
   repeatSelect.value = todo.repeat;
-  // In the edit form an emptied date removes the reminder on Save, so there is no Remove button.
-  removeButton.hidden = task || todo.due === null;
+  setCalendarOpen(false);
   layer.hidden = false;
-  render(); // the opener shows aria-expanded; render places the editor
+  render(); // the opener shows aria-expanded; the page behind goes inert
   syncEditor();
-  // The popover is placed to fit; focusing it never scrolls the page.
-  const first = task ? textInput : whenInput;
-  first.focus({ preventScroll: true });
-  if (task) first.setSelectionRange?.(first.value.length, first.value.length);
+  textInput.focus({ preventScroll: true });
+  textInput.setSelectionRange?.(textInput.value.length, textInput.value.length);
 }
 
-// Hides the editor without rendering; callers render (or renderSoon) with their focus.
+// Hides the sheet without rendering; callers render (or renderSoon) with their focus.
 function closeEditor() {
   reminderId = null;
   layer.hidden = true;
   app.inert = false;
   editorAnnouncer.textContent = '';
+  closeTagField();
+  setCalendarOpen(false);
   hideMessage();
 }
 
-// Where focus goes back to when the editor closes: the control that opened it, in its row.
-function openerKeys(id, mode = editorMode) {
-  const todo = findTodo(id);
-  if (mode === 'task') return [key('open', id), key('checkbox', id)];
-  return todo && todo.due !== null ? [key('reminder', id)] : [key('add-reminder', id), key('checkbox', id)];
+// Where focus goes back to when the sheet closes: the row's body button.
+function openerKeys(id) {
+  return [key('open', id), key('checkbox', id)];
 }
 
 function cancelEditor() {
   const id = reminderId;
-  const mode = editorMode;
   closeEditor();
-  render(openerKeys(id, mode));
-}
-
-function saveEditor() {
-  if (editorMode === 'task') {
-    saveTaskEditor();
-    return;
-  }
-  const due = editorDue();
-  if (due === null) {
-    // Save is aria-disabled: a no-op that shows why.
-    reminderTouched = true;
-    syncEditor();
-    whenInput.focus();
-    return;
-  }
-  const id = reminderId;
-  const repeat = repeatSelect.value;
-  requestPermission();
-  closeEditor(); // first: the sheet makes the status line inert
-  // The blocked note, until dismissed: then it stays hidden for the session, even on later Saves.
-  if (notificationsBlocked() && !noteDismissed) showBanner('note', NOTE_TEXT);
-  else if (!banner.hidden && banner.classList.contains('is-note')) hideBanner();
-  fired.delete(id);
-  saveReminder(id, due, repeat);
   render(openerKeys(id));
 }
 
@@ -788,7 +745,7 @@ function editedElsewhere(todo, opened) {
     todo.tags.length !== opened.tags.length || todo.tags.some((tag, index) => tag !== opened.tags[index]);
 }
 
-// The edit form's tags: the same chips as on the row, each with its ×, for the draft's tags.
+// The sheet's tags: chips with a ×, for the draft's tags. "Add tag" hides at the cap.
 function renderDraftTags() {
   editTags.replaceChildren(...draftTags.map((tag) => {
     const chip = document.createElement('span');
@@ -796,6 +753,7 @@ function renderDraftTags() {
     chip.dataset.color = tagColor(tag);
     const label = document.createElement('span');
     label.className = 'tag-label';
+    label.dataset.tag = tag;
     label.textContent = `#${tag}`;
     const remove = document.createElement('button');
     remove.type = 'button';
@@ -806,36 +764,72 @@ function renderDraftTags() {
     chip.append(label, remove);
     return chip;
   }));
-  editTags.hidden = draftTags.length === 0;
+  tagAdd.hidden = !tagField.hidden || draftTags.length >= MAX_TAGS;
 }
 
-// The edit form's Save: one write with the title, tags and reminder, shown at once and rolled back
-// if the server refuses it (a 409 reloads and says the task changed in another tab).
-function saveTaskEditor() {
+// "Add tag" becomes an inline field: Enter adds and stays open, Esc closes.
+function openTagField() {
+  tagField.hidden = false;
+  tagField.value = '';
+  tagAdd.hidden = true;
+  tagField.focus();
+}
+
+function closeTagField() {
+  tagField.hidden = true;
+  tagField.value = '';
+  tagField.removeAttribute('aria-invalid');
+  tagAdd.hidden = draftTags.length >= MAX_TAGS;
+}
+
+// The same rules as "+ tag" (normalized, no duplicates, at most MAX_TAGS), against the draft.
+// Returns false when the tag is refused.
+function addDraftTag(raw) {
+  const tag = normalizeTag(raw);
+  if (tag === null || draftTags.includes(tag) || draftTags.length >= MAX_TAGS) return false;
+  draftTags = [...draftTags, tag];
+  renderDraftTags();
+  syncEditor();
+  return true;
+}
+
+// Clears the rejected text after the flash, unless the user has typed something new since.
+function rejectTag(field) {
+  const rejected = field.value;
+  field.setAttribute('aria-invalid', 'true');
+  setTimeout(() => {
+    field.removeAttribute('aria-invalid');
+    if (field.value === rejected) field.value = '';
+  }, INVALID_FLASH_MS);
+}
+
+// Save: one write with the title, tags and reminder, shown at once and rolled back if the server
+// refuses it (a 409 reloads and says the task changed in another tab).
+function saveEditor() {
   const { text, tags, error } = readTaskEdit(textInput.value, draft.text, draftTags);
   const due = editorDue();
   if (error !== null || due === undefined) {
     reminderTouched = true;
     syncEditor();
-    (error !== null ? textInput : whenInput).focus();
+    (error !== null ? textInput : invalidPickerField()).focus();
     return;
   }
   const id = reminderId;
   const todo = findTodo(id);
   if (!todo || editedElsewhere(todo, draft)) {
-    // An editable field changed (another tab, or a refresh) after the form opened: its prefilled
+    // An editable field changed (another tab, or a refresh) after the sheet opened: its prefilled
     // values are stale, and saving them would overwrite that change. Show the conflict instead.
     // A reminder firing here (`notified`, the revision) touches none of them, so it keeps the draft.
     closeEditor();
     showSync(CHANGED_ELSEWHERE);
-    render(todo ? openerKeys(id, 'task') : undefined);
+    render(todo ? openerKeys(id) : undefined);
     return;
   }
   const fields = { text, tags, due, repeat: due === null ? 'none' : repeatSelect.value };
   const reminderChanged = fields.due !== todo.due || fields.repeat !== todo.repeat;
   // The edited row can leave the view (a filter tag removed): focus then goes to a neighbour.
-  const keys = [...openerKeys(id, 'task'), ...rowFallbackKeys(id)];
-  if (due !== null) requestPermission(); // as the reminder editor does; "ask" said it would
+  const keys = [...openerKeys(id), ...rowFallbackKeys(id)];
+  if (due !== null) requestPermission(); // the browser's own prompt does the asking
   closeEditor();
   if (due !== null && reminderChanged) {
     if (notificationsBlocked() && !noteDismissed) showBanner('note', NOTE_TEXT);
@@ -858,74 +852,36 @@ function saveEdit(id, fields) {
   check();
 }
 
-function saveReminder(id, due, repeat) {
-  // A time already past alerts right away (once saved); otherwise this re-arms the timer.
-  saved(id, sync.setReminder(id, due, repeat), () => {
-    const todo = findTodo(id);
-    if (todo && (todo.due !== due || todo.repeat !== repeat)) saveReminder(id, due, repeat);
-  });
-  check();
-}
-
-function removeReminder() {
+// Delete task: at once, no confirm. Focus goes to the next row's checkbox, or the composer.
+function deleteFromEditor() {
   const id = reminderId;
+  const keys = rowFallbackKeys(id);
   closeEditor();
-  fired.delete(id);
-  clearSavedReminder(id);
-  render(openerKeys(id));
+  removeRow(id);
+  render(keys);
 }
 
-function clearSavedReminder(id) {
-  saved(id, sync.clearReminder(id), () => findTodo(id)?.due != null && clearSavedReminder(id));
-  check();
-}
-
-// The bottom sheet (under 640px, or a touch screen) is modal: the page behind is inert. The popover is not.
+// The sheet is modal: the page behind is inert.
 function placeEditor() {
-  const sheet = sheetQuery.matches;
-  if (sheet !== sheetMode) {
-    sheetMode = sheet;
-    layer.classList.toggle('is-sheet', sheet);
-    if (sheet) editor.setAttribute('aria-modal', 'true');
-    else editor.removeAttribute('aria-modal');
-    // DOM order is focus order: the sheet stacks Save first, then Cancel and Remove.
-    const focused = document.activeElement;
-    actions.replaceChildren(...(sheet ? [saveButton, cancelButton, removeButton] : [removeButton, cancelButton, saveButton]));
-    if (actions.contains(focused)) focused.focus();
-  }
-  app.inert = sheet;
-  if (sheet) {
-    editor.style.left = '';
-    editor.style.top = '';
-    return;
-  }
-  const row = [...list.children].find((item) => item.dataset.id === reminderId);
-  if (!row) return;
-  // The edit form opens under the task's text and chips, so it doesn't cover what it edits.
-  const anchor = '.todo-open';
-  const opener = row.querySelector(anchor) ?? row;
-  const rect = opener.getBoundingClientRect();
-  const viewport = document.documentElement.clientWidth;
-  const left = Math.max(8, Math.min(rect.left, viewport - editor.offsetWidth - 8));
-  editor.style.left = `${left + window.scrollX}px`;
-  const top = popoverTop(rect.top, rect.bottom, editor.offsetHeight, window.innerHeight);
-  editor.style.top = `${top + window.scrollY}px`;
+  app.inert = true;
 }
 
+// Tab wraps inside the sheet (see the edge guards).
 function editorFocusables() {
-  const removes = textField.hidden ? [] : editTags.querySelectorAll('.tag-remove');
-  return [textInput, ...removes, whenInput, repeatSelect, ...actions.children].filter(
-    (element) => !element.hidden && !(element === textInput && textField.hidden),
+  return [...editor.querySelectorAll('button, input, select')].filter(
+    (element) => !element.disabled && element.tabIndex >= 0 && !element.closest('[hidden]') &&
+      !element.classList.contains('reminder-edge'),
   );
 }
 
-// `describedBy`: the field's own description, kept alongside the message.
-function markInvalid(field, invalid, describedBy) {
-  const ids = [invalid && 'reminder-message', describedBy].filter(Boolean).join(' ');
-  if (invalid) field.setAttribute('aria-invalid', 'true');
-  else field.removeAttribute('aria-invalid');
-  if (ids) field.setAttribute('aria-describedby', ids);
-  else field.removeAttribute('aria-describedby');
+function markInvalid(field, invalid) {
+  if (invalid) {
+    field.setAttribute('aria-invalid', 'true');
+    field.setAttribute('aria-describedby', 'reminder-message');
+  } else {
+    field.removeAttribute('aria-invalid');
+    field.removeAttribute('aria-describedby');
+  }
 }
 
 function hideMessage() {
@@ -934,56 +890,54 @@ function hideMessage() {
   messageText.textContent = '';
 }
 
-// The instant in the date field. An unchanged field keeps the saved instant: in the repeated hour
-// when clocks go back, its text ("01:30") would read back as the other 01:30.
-// In the reminder editor null means invalid. In the edit form an empty field is null (no
-// reminder) and undefined means invalid (a half-typed date also reads as '', so badInput is checked).
-function editorDue() {
-  const todo = findTodo(reminderId);
-  if (editorMode === 'task' && whenInput.value === '') return whenInput.validity?.badInput ? undefined : null;
-  const due = todo.due !== null && whenInput.value === toLocalInput(todo.due) ? todo.due : parseLocalInput(whenInput.value);
-  return editorMode === 'task' && due === null ? undefined : due;
+function pickerFields() {
+  return {
+    on: reminderOn.checked,
+    date: dateInput.value,
+    time: timeInput.value,
+    badInput: Boolean(dateInput.validity?.badInput || timeInput.validity?.badInput),
+  };
 }
 
-// Save state, field validity, the repeat helper and the one message, from the current inputs.
+// The instant the picker describes: null for no reminder, undefined when invalid.
+function editorDue() {
+  return pickerDue(pickerFields(), findTodo(reminderId).due);
+}
+
+// The picker control an invalid reminder points at: the date when it is missing, else the time.
+function invalidPickerField() {
+  return dateInput.value === '' ? dateButton : timeInput;
+}
+
+// Save state, field validity, the picker's rows and the one message, from the current inputs.
 function syncEditor() {
   const todo = findTodo(reminderId);
-  const task = editorMode === 'task';
   const rawDue = editorDue();
-  // From here `due` is the instant or null; `invalid` is about the date field only.
-  const invalid = task ? rawDue === undefined : rawDue === null;
+  const invalid = rawDue === undefined;
   const due = invalid ? null : rawDue;
   const showError = invalid && reminderTouched;
-  const titleError = task ? readTaskEdit(textInput.value, draft.text, draftTags).error : null;
+  const titleError = readTaskEdit(textInput.value, draft.text, draftTags).error;
   const showTitleError = titleError !== null && reminderTouched;
+  const now = Date.now();
 
   saveButton.setAttribute('aria-disabled', String(invalid || titleError !== null));
   // One message at a time, title first: only the field it is about points at it.
-  markInvalid(textInput, showTitleError, 'edit-text-hint');
-  markInvalid(whenInput, showError && !showTitleError);
+  markInvalid(textInput, showTitleError);
+  markInvalid(timeInput, showError && !showTitleError && dateInput.value !== '');
+  markInvalid(dateButton, showError && !showTitleError && dateInput.value === '');
 
-  const repeat = repeatSelect.value;
-  repeatHelp.hidden = due === null || repeat === 'none';
-  // Emptied when hidden: it is the select's description, and hidden text is still read from there.
-  repeatHelp.textContent = '';
-  if (!repeatHelp.hidden) {
-    const date = new Date(due);
-    const { longWeekday, time } = getFormats();
-    const day = repeat === 'daily' ? 'day' : longWeekday.format(date);
-    repeatHelp.textContent = `Repeats every ${day} at ${time.format(date)}`;
-  }
+  reminderOn.setAttribute('aria-checked', String(reminderOn.checked));
+  pickerDetail.hidden = !reminderOn.checked;
+  dateValue.textContent = dateInput.value ? dayLabel(dateInput.value, now) : 'None';
+  renderCalendar();
 
-  // In the edit form the reminder notes only apply with a date set, and "has passed" only to a
-  // newly chosen time (an overdue task whose title is being edited stays as it is).
-  const reminderNotes = !task || due !== null;
-  const newTime = !task || due !== todo.due;
+  // "Has passed" only for a newly chosen time (an overdue task being renamed stays as it is).
   let next = null;
   if (showTitleError) next = MESSAGES[titleError === 'empty' ? 'empty' : 'long'];
   else if (showError) next = MESSAGES.invalid;
-  else if (!invalid && due !== null && newTime && due <= Date.now()) next = MESSAGES.past;
-  else if (!invalid && reminderNotes && todo.completedUntil == null && todo.completed) next = MESSAGES.done;
-  else if (reminderNotes && typeof Notification !== 'undefined' && Notification.permission === 'default') next = MESSAGES.ask;
-  else if (!invalid && reminderNotes && notificationsBlocked()) next = MESSAGES.blocked;
+  else if (due !== null && due !== todo.due && due <= now) next = MESSAGES.past;
+  else if (due !== null && todo.completedUntil == null && todo.completed) next = MESSAGES.done;
+  else if (due !== null && notificationsBlocked()) next = MESSAGES.blocked;
 
   if (next === null) {
     hideMessage();
@@ -996,8 +950,84 @@ function syncEditor() {
     messageText.textContent = next.text;
     message.hidden = false;
   }
-  // The message and helper change the editor's height, which its placement depends on.
   placeEditor();
+}
+
+// --- Task sheet: the inline month calendar -------------------------------------------------
+
+let calendarView = null; // { year, month } on show
+
+function setCalendarOpen(open) {
+  calendar.hidden = !open;
+  dateButton.setAttribute('aria-expanded', String(open));
+  if (open) {
+    const shown = parseDate(dateInput.value) ?? parseDate(localDate(Date.now()));
+    calendarView = { year: shown.year, month: shown.month };
+    renderCalendar();
+  }
+}
+
+// The day that takes the calendar's one tab stop: the chosen day, today, or the first open day.
+function calendarStop(cells, now) {
+  const days = cells.filter(Boolean).map((cell) => cell.date);
+  const open = days.filter((date) => date === dateInput.value || !isPastDay(date, now));
+  return [dateInput.value, localDate(now)].find((date) => open.includes(date)) ?? open[0];
+}
+
+function renderCalendar() {
+  if (calendar.hidden || !calendarView) return;
+  const now = Date.now();
+  const { year, month } = calendarView;
+  const today = localDate(now);
+  const cells = monthGrid(year, month);
+  const stop = calendarStop(cells, now);
+  // A re-render (a timer, a refresh) keeps focus on the day that had it.
+  const focusedDay = calDays.contains(document.activeElement) ? document.activeElement.dataset?.date : undefined;
+  calMonth.textContent = monthLabel(year, month);
+  calPrev.disabled = !canGoBack(year, month, now, dateInput.value);
+  if (calWeekdays.children.length === 0) {
+    const format = new Intl.DateTimeFormat(undefined, { weekday: 'short' });
+    // 2026-11-22 is a Sunday: the grid starts on Sunday.
+    calWeekdays.replaceChildren(...Array.from({ length: 7 }, (_, index) => {
+      const name = document.createElement('span');
+      name.textContent = format.format(new Date(2026, 10, 22 + index));
+      return name;
+    }));
+  }
+  calDays.replaceChildren(...cells.map((cell) => {
+    if (cell === null) return document.createElement('span');
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'cal-day';
+    button.dataset.date = cell.date;
+    button.setAttribute('aria-label', dayName(cell.date));
+    button.setAttribute('aria-pressed', String(cell.date === dateInput.value));
+    if (cell.date === today) button.setAttribute('aria-current', 'date');
+    button.disabled = cell.date !== dateInput.value && isPastDay(cell.date, now);
+    button.tabIndex = cell.date === stop ? 0 : -1;
+    const number = document.createElement('span');
+    number.textContent = String(cell.day);
+    button.append(number);
+    return button;
+  }));
+  if (focusedDay) focusCalendarDay(focusedDay);
+}
+
+function focusCalendarDay(date) {
+  calDays.querySelector?.(`[data-date="${date}"]`)?.focus();
+}
+
+// A day chosen in the calendar: the hidden native date input holds it; a time starts at 9:00 AM.
+function chooseDay(date) {
+  dateInput.value = date;
+  if (timeInput.value === '') timeInput.value = DEFAULT_TIME;
+  reminderTouched = true;
+  syncEditor();
+}
+
+function showMonth(delta) {
+  calendarView = addMonths(calendarView.year, calendarView.month, delta);
+  renderCalendar();
 }
 
 // --- Events --------------------------------------------------------------------------------
@@ -1092,7 +1122,7 @@ list.addEventListener('click', (event) => {
   const button = event.target.closest('.todo-open');
   if (!button) return;
   if (reminderId === id) cancelEditor();
-  else openEditor(id, 'task');
+  else openEditor(id);
 });
 
 // Focus landing on a just-fired row (by Tab or click) ends its highlight.
@@ -1122,24 +1152,103 @@ bannerDismiss.addEventListener('click', () => {
   input.focus();
 });
 
-for (const field of [textInput, whenInput]) {
+for (const field of [textInput, timeInput, dateInput]) {
   field.addEventListener('input', () => {
     reminderTouched = true;
     syncEditor();
   });
 }
+// Safari's time field reports its value on change.
+timeInput.addEventListener('change', () => {
+  reminderTouched = true;
+  syncEditor();
+});
 repeatSelect.addEventListener('change', syncEditor);
+
+// The Reminder switch: on with no date starts at today 9:00 AM (or tomorrow) and opens the
+// calendar; off keeps the fields, so turning it back on restores them.
+reminderOn.addEventListener('change', () => {
+  if (reminderOn.checked && dateInput.value === '') {
+    const start = defaultReminder(Date.now());
+    dateInput.value = start.date;
+    if (timeInput.value === '') timeInput.value = start.time;
+    setCalendarOpen(true);
+  }
+  if (!reminderOn.checked) setCalendarOpen(false);
+  syncEditor();
+});
+
+dateButton.addEventListener('click', () => {
+  setCalendarOpen(calendar.hidden);
+});
+calPrev.addEventListener('click', () => showMonth(-1));
+calNext.addEventListener('click', () => showMonth(1));
+calDays.addEventListener('click', (event) => {
+  const day = event.target.closest?.('.cal-day');
+  if (!day || day.disabled) return;
+  chooseDay(day.dataset.date);
+  focusCalendarDay(day.dataset.date);
+});
+// Arrow keys move a day or a week (into the next or previous month), skipping past days.
+calDays.addEventListener('keydown', (event) => {
+  const day = event.target.closest?.('.cal-day');
+  const delta = CALENDAR_KEYS[event.key];
+  if (!day || delta === undefined) return;
+  event.preventDefault();
+  const date = addDays(day.dataset.date, delta);
+  if (date !== dateInput.value && isPastDay(date, Date.now())) return;
+  const target = parseDate(date);
+  if (target.year !== calendarView.year || target.month !== calendarView.month) {
+    calendarView = { year: target.year, month: target.month };
+  }
+  renderCalendar();
+  for (const button of calDays.children) if (button.dataset?.date) button.tabIndex = button.dataset.date === date ? 0 : -1;
+  focusCalendarDay(date);
+});
+
 editTags.addEventListener('click', (event) => {
   const button = event.target.closest?.('.tag-remove');
   if (!button) return;
+  const removed = draftTags.indexOf(button.dataset.tag);
   draftTags = draftTags.filter((tag) => tag !== button.dataset.tag);
   renderDraftTags();
   syncEditor();
-  (editTags.querySelector('.tag-remove') ?? textInput).focus();
+  const removes = editTags.querySelectorAll('.tag-remove');
+  (removes[Math.min(removed, removes.length - 1)] ?? (tagAdd.hidden ? textInput : tagAdd)).focus();
 });
+tagAdd.addEventListener('click', openTagField);
+tagField.addEventListener('keydown', (event) => {
+  if (event.isComposing) return;
+  if (event.key === 'Escape') {
+    // Closes the field only; the sheet stays open.
+    event.preventDefault();
+    event.stopPropagation();
+    closeTagField();
+    tagAdd.focus();
+  } else if (event.key === 'Enter') {
+    event.preventDefault();
+    event.stopPropagation();
+    if (tagField.value.trim() === '') return;
+    if (!addDraftTag(tagField.value)) {
+      rejectTag(tagField);
+    } else if (draftTags.length >= MAX_TAGS) {
+      closeTagField();
+      textInput.focus();
+    } else {
+      tagField.value = '';
+    }
+  }
+});
+// Leaving the field adds what was typed (if it is a valid tag) and closes it.
+tagField.addEventListener('blur', () => {
+  if (tagField.hidden) return;
+  if (tagField.value.trim() !== '') addDraftTag(tagField.value);
+  closeTagField();
+});
+
 saveButton.addEventListener('click', saveEditor);
 cancelButton.addEventListener('click', cancelEditor);
-removeButton.addEventListener('click', removeReminder);
+deleteButton.addEventListener('click', deleteFromEditor);
 scrim.addEventListener('click', cancelEditor);
 
 editor.addEventListener('keydown', (event) => {
@@ -1147,35 +1256,21 @@ editor.addEventListener('keydown', (event) => {
     if (event.isComposing) return; // Esc cancels the IME composition, not the draft
     event.preventDefault();
     cancelEditor();
-  } else if (event.key === 'Enter' && !event.isComposing && (event.target === whenInput || event.target === textInput)) {
+  } else if (event.key === 'Enter' && !event.isComposing && (event.target === timeInput || event.target === textInput)) {
     event.preventDefault();
     saveButton.click(); // the same path as clicking Save (the only place permission is asked)
   }
 });
 
-// Tab stays inside the editor and wraps: focus reaching an edge guard goes round to the other end.
-// Guards rather than a Tab key handler, because Tab also moves between the date field's parts.
-editorStart.addEventListener('focus', () => editorFocusables().at(-1).focus());
-editorEnd.addEventListener('focus', () => editorFocusables()[0].focus());
-
-// A press outside the popover cancels it (no blur-commit). The press itself goes on as usual, so
-// the render waits for the click (see `pressing`). Pressing the control that opened it toggles it shut.
-document.addEventListener('mousedown', (event) => {
-  if (reminderId === null || layer.contains(event.target)) return;
-  const opener = event.target.closest?.(editorMode === 'task' ? '.todo-open' : '.reminder-chip, .reminder-add');
-  if (opener && opener.closest('.todo').dataset.id === reminderId) return;
-  // Focus stays on a control the press lands on; otherwise it goes back to the opener.
-  returnFocus = openerKeys(reminderId);
-  closeEditor();
-  renderSoon();
-}, true);
-
-window.addEventListener('resize', () => {
-  if (reminderId !== null) placeEditor();
+// A focused field scrolls into view inside the sheet (above the iOS keyboard).
+editor.addEventListener('focusin', (event) => {
+  event.target.scrollIntoView?.({ block: 'nearest' });
 });
-sheetQuery.addEventListener('change', () => {
-  if (reminderId !== null) placeEditor();
-});
+
+// Tab stays inside the sheet and wraps: focus reaching an edge guard goes round to the other end.
+// Guards rather than a Tab key handler, because Tab also moves between the time field's parts.
+editorStart.addEventListener('focus', () => editorFocusables().at(-1)?.focus());
+editorEnd.addEventListener('focus', () => editorFocusables()[0]?.focus());
 
 // Coming back to the tab: overdue marks catch up at once. The auth module re-reads the session
 // and then sends `tasks:session`, which reloads the list before any reminder is claimed.
@@ -1301,11 +1396,14 @@ function clearView() {
   viewSignature = '[]';
   activeTags = [];
   if (reminderId !== null) closeEditor();
-  // Nothing of the old account stays in the hidden editor or the live regions.
-  editorFor.textContent = '';
+  // Nothing of the old account stays in the hidden sheet or the live regions.
   editor.removeAttribute('aria-label');
   textInput.value = '';
-  whenInput.value = '';
+  draftTags = [];
+  editTags.replaceChildren();
+  reminderOn.checked = false;
+  dateInput.value = '';
+  timeInput.value = '';
   repeatSelect.value = 'none';
   announcer.textContent = '';
   editorAnnouncer.textContent = '';

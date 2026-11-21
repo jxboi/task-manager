@@ -4,17 +4,17 @@ import { test } from 'node:test';
 import { createFakeApi, settle as flush } from './fake-api.js';
 import { installDom } from './dom.js';
 
-const permissionInfo = 'When you save, your browser will ask to allow notifications. If you say no, due tasks are still highlighted on this page.';
+// The sheet's short messages (no helper text: the permission explainer is gone).
 const invalidDate = 'Enter a valid date and time.';
-const pastTime = 'That time has passed. Saving will mark this task overdue and alert right away.';
-const doneTask = "This task is done, so its reminder won't alert. Uncheck it to turn alerts back on.";
-const notificationsBlocked = 'Notifications are blocked or unavailable. Due tasks will be highlighted on this page.';
-const blockedNote = 'Notifications off. Reminders show only here.';
+const pastTime = 'That time has passed';
+const doneTask = 'This task is done';
+const notificationsBlocked = 'Notifications off';
+const blockedNote = 'Notifications off';
 const styles = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
 const future = '2099-01-01T12:00';
 const past = '2000-01-01T12:00';
 
-test('reminder editor', async (t) => {
+test('task sheet reminder picker', async (t) => {
   const { byId, list, matchMedia, session } = installDom(t, { fetch: (...args) => server.fetch(...args) });
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
   const lateDue = Date.parse('2001-01-01T09:00:00');
@@ -36,15 +36,28 @@ test('reminder editor', async (t) => {
   window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: server.session } }));
   await flush();
 
-  const date = byId('reminder-when');
+  const on = byId('reminder-on');
+  const date = byId('reminder-date');
+  const time = byId('reminder-time');
   const save = byId('reminder-save');
   const message = byId('reminder-message');
   const messageText = byId('reminder-message-text');
-  const open = (id) => list.children.find((row) => row.dataset.id === ids[id]).querySelector('.reminder-add').click();
+  const open = (id) => list.children.find((row) => row.dataset.id === ids[id]).querySelector('.todo-open').click();
   const cancel = () => byId('reminder-cancel').click();
+  // "YYYY-MM-DDTHH:MM" turns the Reminder switch on and sets Date and Time; '' turns it off.
   const edit = (value) => {
-    date.value = value;
-    date.dispatchEvent(new Event('input'));
+    const [day = '', clock = ''] = value.split('T');
+    if (on.checked !== (value !== '')) {
+      on.checked = value !== '';
+      on.dispatchEvent(new Event('change'));
+    }
+    date.value = day;
+    time.value = clock;
+    time.dispatchEvent(new Event('input'));
+  };
+  const clearTime = () => {
+    time.value = '';
+    time.dispatchEvent(new Event('input'));
   };
   const visibleMessage = () => message.hidden ? null : messageText.textContent;
   const row = (id) => list.children.find((item) => item.dataset.id === ids[id]);
@@ -55,32 +68,32 @@ test('reminder editor', async (t) => {
     Object.defineProperty(event, 'target', { value: target });
     return event;
   };
-  // Saving a past time re-arms the alert, so the todo fires again (once the server has the
+  // Saving a new past time re-arms the alert, so the todo fires again (once the server has the
   // reminder and grants the claim): a fresh highlight.
+  // Each call saves a different past minute: the sheet sends nothing for an unchanged reminder.
+  let firings = 0;
   const fireAgain = async (id) => {
-    row(id).querySelector('.reminder-chip').click();
-    edit(past);
+    row(id).querySelector('.todo-open').click();
+    firings += 1;
+    edit(`2000-01-01T12:${String(firings % 60).padStart(2, '0')}`);
     save.click();
     await flush();
   };
 
-  await t.test('opens empty with permission info when applicable and no invalid state or alert', () => {
-    const cases = [
-      ['open', 'default', permissionInfo],
-      ['done', 'default', permissionInfo],
-      ['open', 'granted', null],
-      ['open', 'denied', null],
-    ];
-    for (const [id, permission, expected] of cases) {
+  await t.test('opens with the switch off, no invalid state and no message', () => {
+    for (const permission of ['default', 'granted', 'denied']) {
       Notification.permission = permission;
-      open(id);
+      open('open');
       try {
+        assert.equal(on.checked, false);
+        assert.equal(byId('picker-detail').hidden, true);
         assert.equal(date.value, '');
-        assert.equal(date.getAttribute('aria-invalid'), null);
-        assert.equal(date.getAttribute('aria-describedby'), null);
+        assert.equal(time.value, '');
+        assert.equal(time.getAttribute('aria-invalid'), null);
+        assert.equal(time.getAttribute('aria-describedby'), null);
         assert.equal(message.getAttribute('role'), null);
-        assert.equal(save.getAttribute('aria-disabled'), 'true');
-        assert.equal(visibleMessage(), expected, `${id}, ${permission}`);
+        assert.equal(save.getAttribute('aria-disabled'), 'false', 'no reminder is a valid choice');
+        assert.equal(visibleMessage(), null, permission);
         if (permission === 'denied') {
           edit(future);
           assert.equal(visibleMessage(), notificationsBlocked);
@@ -91,22 +104,44 @@ test('reminder editor', async (t) => {
     }
   });
 
-  await t.test('clearing an edited date shows an alert until the value parses', () => {
+  await t.test('turning the switch on starts at 9:00 AM on a day that has not passed, with the calendar open', () => {
+    Notification.permission = 'granted';
+    open('open');
+    on.checked = true;
+    on.dispatchEvent(new Event('change'));
+    assert.equal(byId('picker-detail').hidden, false);
+    assert.equal(byId('calendar').hidden, false);
+    assert.equal(byId('reminder-date-button').getAttribute('aria-expanded'), 'true');
+    assert.equal(time.value, '09:00');
+    assert.match(date.value, /^\d{4}-\d{2}-\d{2}$/);
+    assert.ok(Date.parse(`${date.value}T09:00:00`) > Date.now(), 'the default is still ahead');
+    assert.ok(['Today', 'Tomorrow'].includes(byId('reminder-date-value').textContent));
+    assert.equal(visibleMessage(), null);
+    assert.equal(save.getAttribute('aria-disabled'), 'false');
+    // Off again: no reminder, and the calendar closes.
+    on.checked = false;
+    on.dispatchEvent(new Event('change'));
+    assert.equal(byId('picker-detail').hidden, true);
+    assert.equal(byId('calendar').hidden, true);
+    cancel();
+  });
+
+  await t.test('a reminder without a time shows an alert until it parses', () => {
     Notification.permission = 'default';
     open('open');
     edit(future);
-    assert.equal(visibleMessage(), permissionInfo);
-    edit('');
+    assert.equal(visibleMessage(), null);
+    clearTime();
     assert.equal(visibleMessage(), invalidDate);
     assert.equal(message.getAttribute('role'), 'alert');
-    assert.equal(date.getAttribute('aria-invalid'), 'true');
-    assert.equal(date.getAttribute('aria-describedby'), 'reminder-message');
+    assert.equal(time.getAttribute('aria-invalid'), 'true');
+    assert.equal(time.getAttribute('aria-describedby'), 'reminder-message');
     assert.equal(save.getAttribute('aria-disabled'), 'true');
     edit(future);
-    assert.equal(visibleMessage(), permissionInfo);
+    assert.equal(visibleMessage(), null);
     assert.equal(message.getAttribute('role'), null);
-    assert.equal(date.getAttribute('aria-invalid'), null);
-    assert.equal(date.getAttribute('aria-describedby'), null);
+    assert.equal(time.getAttribute('aria-invalid'), null);
+    assert.equal(time.getAttribute('aria-describedby'), null);
     assert.equal(save.getAttribute('aria-disabled'), 'false');
     cancel();
   });
@@ -115,46 +150,47 @@ test('reminder editor', async (t) => {
     Notification.permission = 'default';
     open('done');
     try {
-      assert.equal(visibleMessage(), permissionInfo);
+      assert.equal(visibleMessage(), null);
       edit(future);
       assert.equal(visibleMessage(), doneTask);
       edit(past);
       assert.equal(visibleMessage(), pastTime);
       assert.equal(save.getAttribute('aria-disabled'), 'false');
-      edit('');
+      clearTime();
       assert.equal(visibleMessage(), invalidDate);
     } finally {
       cancel();
     }
   });
 
-  await t.test('pressing aria-disabled Save reveals the error and focuses the empty input', () => {
+  await t.test('pressing aria-disabled Save reveals the error and focuses the empty time', () => {
     Notification.permission = 'default';
     open('open');
-    assert.equal(visibleMessage(), permissionInfo);
-    assert.equal(save.getAttribute('aria-disabled'), 'true');
+    on.checked = true;
+    on.dispatchEvent(new Event('change'));
+    time.value = ''; // emptied without an input event: nothing shown yet
     save.focus();
     assert.equal(document.activeElement, save);
     save.click();
     assert.equal(visibleMessage(), invalidDate);
-    assert.equal(document.activeElement, date);
+    assert.equal(document.activeElement, time);
     assert.equal(save.getAttribute('aria-disabled'), 'true');
     assert.equal(byId('reminder-layer').hidden, false);
     cancel();
     open('open');
-    assert.equal(visibleMessage(), permissionInfo);
-    assert.equal(date.getAttribute('aria-invalid'), null);
+    assert.equal(visibleMessage(), null);
+    assert.equal(time.getAttribute('aria-invalid'), null);
     cancel();
   });
 
-  await t.test('an overdue chip is one chip reading "Overdue · {due}" with a sensible name', () => {
-    const chip = row('late').querySelector('.reminder-chip');
+  await t.test('an overdue stamp is one chip reading "Overdue · {due}" with a sensible name', () => {
+    const chip = row('late').querySelector('.stamp');
     assert.match(chip.className, /\bis-overdue\b/);
     // Another year: "{short date with year}, {time}", in the runtime's locale, as the app formats it.
     const format = (options) => new Intl.DateTimeFormat(undefined, options).format(new Date(lateDue));
     const when = `${format({ month: 'short', day: 'numeric', year: 'numeric' })}, ${format({ hour: 'numeric', minute: '2-digit' })}`;
     assert.equal(chip.querySelector('.reminder-when').textContent, `Overdue · ${when}`);
-    assert.equal(chip.getAttribute('aria-label'), `Overdue, was due ${when}. Edit reminder for “Late task”`);
+    assert.equal(row('late').querySelector('.todo-open').getAttribute('aria-label'), `Late task. Overdue, was due ${when}. Edit task`);
   });
 
   await t.test('a fired row has no "Got it" button', async () => {
@@ -167,7 +203,7 @@ test('reminder editor', async (t) => {
   await t.test('a tap or click anywhere in a fired row clears it', async () => {
     await fireAgain('late');
     assert.equal(isFired('late'), true);
-    list.dispatchEvent(dispatch(row('late').querySelector('.todo-text'), 'click'));
+    list.dispatchEvent(dispatch(row('late'), 'click'));
     await settle();
     assert.equal(isFired('late'), false);
     assert.match(row('late').className, /\bis-overdue\b/); // still overdue, just settled
@@ -199,42 +235,47 @@ test('reminder editor', async (t) => {
     assert.equal(isFired('late'), false);
   });
 
-  await t.test('the pulse ending updates the row in place and keeps an open "+ tag" field', async () => {
+  await t.test('the pulse ending updates the row in place and keeps the sheet\'s open "Add tag" field', async () => {
     await fireAgain('late');
-    row('open').querySelector('.tag-add').click();
-    const field = row('open').querySelector('.tag-field');
+    open('open');
+    byId('edit-tag-add').click();
+    const field = byId('edit-tag-field');
     const lateRow = row('late');
-    assert.ok(field);
+    assert.equal(field.hidden, false);
+    assert.equal(document.activeElement, field);
     assert.equal(isFired('late'), true);
     list.dispatchEvent(dispatch(lateRow, 'animationend', { animationName: 'reminder-pulse' }));
     await settle();
     assert.equal(row('late'), lateRow, 'the row was not re-rendered');
     assert.equal(lateRow.style.animationDelay, '');
     assert.equal(isFired('late'), false);
-    assert.equal(row('open').querySelector('.tag-field'), field, 'the tag field was not replaced');
+    assert.equal(field.hidden, false, 'the tag field stays open');
     assert.equal(document.activeElement, field);
-    list.dispatchEvent(dispatch(field, 'keydown', { key: 'Escape', preventDefault() {} }));
+    cancel();
   });
 
   // The real handler runs in the capture phase, before the field's own Esc handler.
-  await t.test('Esc in an open "+ tag" field clears the pulses and still closes the field', async () => {
+  await t.test('Esc in the sheet\'s "Add tag" field clears the pulses and closes only the field', async () => {
     await fireAgain('late');
-    row('open').querySelector('.tag-add').click();
-    const field = row('open').querySelector('.tag-field');
+    open('open');
+    byId('edit-tag-add').click();
+    const field = byId('edit-tag-field');
     const escape = dispatch(field, 'keydown', { key: 'Escape', preventDefault() { this.prevented = true; } });
     document.dispatchEvent(escape);
-    list.dispatchEvent(escape);
+    field.dispatchEvent(escape);
     await settle();
     assert.equal(isFired('late'), false);
     assert.equal(escape.prevented, true);
-    assert.equal(row('open').querySelector('.tag-field'), null);
+    assert.equal(field.hidden, true);
+    assert.equal(byId('reminder-layer').hidden, false, 'the sheet stays open');
+    cancel();
   });
 
-  await t.test('Esc in the reminder editor clears the pulses and still closes the editor', async () => {
+  await t.test('Esc in the task sheet clears the pulses and still closes the sheet', async () => {
     await fireAgain('late');
-    row('open').querySelector('.reminder-add').click();
+    open('open');
     assert.equal(byId('reminder-layer').hidden, false);
-    const escape = dispatch(date, 'keydown', { key: 'Escape', preventDefault() {} });
+    const escape = dispatch(time, 'keydown', { key: 'Escape', preventDefault() {} });
     document.dispatchEvent(escape);
     byId('reminder-editor').dispatchEvent(escape);
     await settle();
@@ -267,7 +308,7 @@ test('reminder editor', async (t) => {
   await t.test('editing the todo clears a fired row', async () => {
     await fireAgain('late');
     assert.equal(isFired('late'), true);
-    row('late').querySelector('.reminder-chip').click();
+    row('late').querySelector('.todo-open').click();
     edit(future);
     save.click();
     assert.equal(isFired('late'), false);
