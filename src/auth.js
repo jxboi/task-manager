@@ -484,7 +484,10 @@ document.addEventListener('keydown', (event) => {
 });
 document.addEventListener('pointerdown', (event) => {
   if (profileMenu.hidden || account.contains(event.target)) return;
-  const owned = profileMenu.contains(document.activeElement);
+  // Focus on the body while the menu is open came from the menu too (a click on the name label
+  // blurred Sign out), so it is restored the same way.
+  const active = document.activeElement;
+  const owned = !active || active === document.body || profileMenu.contains(active);
   setMenuOpen(false);
   // Let the press move focus to the control it landed on; if the menu had focus and nothing took
   // it (blank space), put it back on the profile button rather than the document body.

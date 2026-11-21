@@ -106,6 +106,33 @@ test('the + button opens the new-task field', async (t) => {
     assert.equal(document.activeElement, input);
   });
 
+  const press = (type) => {
+    const event = new Event(type);
+    event.button = 0;
+    document.dispatchEvent(event);
+  };
+
+  await t.test('a failed add arriving mid-press waits for the release before reopening', async () => {
+    byId('sync-dismiss').click();
+    type('Call Ana');
+    server.failNext = (method) => (method === 'POST' ? new Response('{}', { status: 500 }) : undefined);
+    form.dispatchEvent(new Event('submit'));
+    toggle.click(); // closed while the save is on its way
+    press('mousedown'); // the user is pressing a task control when the failure arrives
+    await settle();
+    assert.equal(form.hidden, true, 'the composer does not move the list mid-press');
+    assert.equal(byId('sync-note').hidden, true);
+    assert.equal(input.value, '');
+    press('mouseup');
+    await settle();
+    assert.equal(form.hidden, false);
+    assert.equal(input.value, 'Call Ana');
+    assert.equal(byId('sync-text').textContent, "Couldn't add “Call Ana”.");
+    assert.equal(byId('sync-note').hidden, false);
+    byId('sync-dismiss').click();
+    type('');
+  });
+
   await t.test('the too-long hint only shows while the field is open', () => {
     type('x'.repeat(2001));
     assert.equal(byId('hint-limit').hidden, false);
@@ -114,6 +141,22 @@ test('the + button opens the new-task field', async (t) => {
     toggle.click();
     assert.equal(byId('hint-limit').hidden, false);
     type('');
+  });
+
+  await t.test('a held add failure is dropped if the session ends before the release', async () => {
+    type('Call Bo');
+    server.failNext = (method) => (method === 'POST' ? new Response('{}', { status: 500 }) : undefined);
+    form.dispatchEvent(new Event('submit'));
+    toggle.click();
+    press('mousedown');
+    await settle();
+    window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: null } }));
+    await settle();
+    press('mouseup');
+    await settle();
+    assert.equal(form.hidden, true);
+    assert.equal(input.value, '');
+    assert.equal(byId('sync-note').hidden, true);
   });
 
   await t.test('signing out closes the field', async () => {

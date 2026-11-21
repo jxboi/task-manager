@@ -288,6 +288,29 @@ test('profile menu', async (t) => {
     assert.equal(document.activeElement, other);
   });
 
+  await t.test('after a click on the name drops focus to the body, a tap on blank space restores it', async () => {
+    const body = document.body ?? null;
+    button.click();
+    assert.equal(document.activeElement, signOut);
+    dispatch(document, 'pointerdown', { target: name }); // inside the menu: stays open
+    document.activeElement = body; // the name label took focus from Sign out, to no one
+    dispatch(menu, 'focusout', { relatedTarget: null });
+    assert.equal(isOpen(), true);
+    dispatch(document, 'pointerdown', { target: byId('todo-list') }); // blank space
+    assert.equal(isOpen(), false);
+    await settle(1);
+    assert.equal(document.activeElement, button);
+    // The same, but the tap lands on a control, which keeps the focus it gets.
+    button.click();
+    document.activeElement = body;
+    const other = byId('new-todo');
+    dispatch(document, 'pointerdown', { target: other });
+    other.focus();
+    await settle(1);
+    assert.equal(isOpen(), false);
+    assert.equal(document.activeElement, other);
+  });
+
   await t.test('a tap outside closes it; a tap inside does not', () => {
     button.click();
     dispatch(document, 'pointerdown', { target: name });

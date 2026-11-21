@@ -136,6 +136,8 @@ let rendering = false;
 let renderPending = false;
 let pendingFocus; // focus keys for the deferred render
 let pressing = false;
+const afterPress = []; // updates that would move the list, held until the press is released
+let viewEpoch = 0; // bumped whenever the view is cleared for another (or a re-read) session
 let timer; // the one reminder timeout
 let bannerTimer;
 
@@ -480,7 +482,22 @@ window.addEventListener('blur', release);
 function release() {
   pressing = false;
   for (const row of list.querySelectorAll('.is-held')) row.classList.remove('is-held');
-  setTimeout(flushRender);
+  setTimeout(() => {
+    flushRender();
+    flushAfterPress();
+  });
+}
+
+// Like renders, layout-moving updates (reopening the composer, the sync note) wait for a press
+// to be released, so the pressed control stays under the pointer until its click.
+function whenReleased(update) {
+  if (pressing) afterPress.push(update);
+  else update();
+}
+
+function flushAfterPress() {
+  if (pressing) return;
+  for (const update of afterPress.splice(0)) update();
 }
 
 function renderSoon(focusKeys) {
@@ -1081,19 +1098,24 @@ form.addEventListener('submit', async (event) => {
   input.focus();
   const outcome = await result;
   if (outcome.ok || outcome.stale) return;
-  // The draft goes back into the field unless something new was typed meanwhile, and the field
-  // reopens if it was closed, so the draft can be retried.
-  if (input.value === '') {
-    input.value = raw;
-    syncAddButton();
-  }
-  if (form.hidden) setComposerOpen(true);
   // A duplicate ID whose reload failed is uncertain too: keep the ID for the next try.
   const { status, code } = outcome.error ?? {};
   const uncertain = !outcome.error || status === 0 || status >= 500 || code === 'DUPLICATE_ID';
   if (uncertain) createDrafts.set(draft, [...(createDrafts.get(draft) ?? []), todo.id]);
-  if (handleSessionError(outcome.error)) return;
-  showSync(`Couldn't add “${text}”.`);
+  const sessionError = handleSessionError(outcome.error);
+  // The draft goes back into the field unless something new was typed meanwhile, and the field
+  // reopens if it was closed, so the draft can be retried. Not mid-press (that would move the
+  // pressed control), and not if the view has since been cleared for another session.
+  const epoch = viewEpoch;
+  whenReleased(() => {
+    if (epoch !== viewEpoch || phase !== 'ready') return;
+    if (input.value === '') {
+      input.value = raw;
+      syncAddButton();
+    }
+    if (form.hidden) setComposerOpen(true);
+    if (!sessionError) showSync(`Couldn't add “${text}”.`);
+  });
 });
 
 clearFilters.addEventListener('click', () => {
@@ -1417,6 +1439,8 @@ async function reloadList() {
 // Leaves nothing of the previous session on the page: rows, filters, editors, drafts, alerts and
 // timers. Answers still on their way for that session are ignored when they arrive.
 function clearView() {
+  viewEpoch += 1;
+  afterPress.length = 0;
   sync.reset();
   state = [];
   viewSignature = '[]';
