@@ -472,18 +472,17 @@ function render(focusKeys) {
 // press stays held until the click (a touch's click can come in a later task); if no click comes
 // (released elsewhere), a short fallback releases it. A cancelled press (scroll, drag) or the
 // window losing focus releases it at once.
-// The row losing focus keeps its revealed controls until the press ends: collapsing it on press
-// would shift the pressed control (in a row below) out from under the pointer and lose the click.
 const CLICK_WAIT_MS = 400;
 let releaseTimer = null;
+let pressPointerId = null;
 document.addEventListener('pointerdown', (event) => {
   if (event.isPrimary === false || event.button !== 0) return;
   clearTimeout(releaseTimer);
   pressing = true;
-  document.activeElement?.closest('.todo')?.classList.add('is-held');
+  pressPointerId = event.pointerId;
 }, true);
-document.addEventListener('pointerup', () => {
-  if (!pressing) return;
+document.addEventListener('pointerup', (event) => {
+  if (!pressing || event.pointerId !== pressPointerId) return;
   clearTimeout(releaseTimer);
   releaseTimer = setTimeout(release, CLICK_WAIT_MS);
 }, true);
@@ -491,14 +490,16 @@ document.addEventListener('pointerup', () => {
 document.addEventListener('click', () => {
   if (pressing) release();
 }, true);
-document.addEventListener('pointercancel', release, true);
+document.addEventListener('pointercancel', (event) => {
+  if (event.pointerId === pressPointerId) release();
+}, true);
 document.addEventListener('dragend', release, true);
 window.addEventListener('blur', release);
 
 function release() {
   clearTimeout(releaseTimer);
   pressing = false;
-  for (const row of list.querySelectorAll('.is-held')) row.classList.remove('is-held');
+  pressPointerId = null;
   setTimeout(() => {
     flushRender();
     flushAfterPress();
@@ -1520,8 +1521,10 @@ async function loadList() {
   if (result.stale) return;
   if (result.ok) {
     if (retryAction === startLoading) hideSync();
+    const wasReady = phase === 'ready';
     phase = 'ready';
-    render();
+    if (wasReady) renderSoon(); // a press may be in progress: don't replace the row under it
+    else render();
     check(); // missed reminders alert once, after the list is current
     return;
   }

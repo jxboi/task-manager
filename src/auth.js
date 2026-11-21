@@ -137,7 +137,6 @@ function setAccount(active) {
   accountName.textContent = label;
   accountName.title = label;
   profileButton.setAttribute('aria-label', `Account, ${label}`);
-  signOut.setAttribute('aria-label', `Sign out ${label}`);
 }
 
 function showSignedIn(active, focus = false) {
@@ -159,7 +158,6 @@ function showSignedOut({ focus = false, expired = false } = {}) {
   accountName.textContent = '';
   accountName.removeAttribute('title');
   profileButton.setAttribute('aria-label', 'Account');
-  signOut.removeAttribute('aria-label');
   authView.hidden = false;
   setMode(false, { keepEmail: false });
   if (expired) info.textContent = 'Your session ended. Sign in again to continue.';
@@ -460,8 +458,24 @@ profileMenu.addEventListener('keydown', (event) => {
   event.preventDefault();
   signOut.focus();
 });
+// An outside press closes it without moving focus; once the tap's click has landed, focus that
+// the hidden item dropped to the body goes back to the profile button (a control the tap focused
+// keeps it).
+let closedByOutsidePress = false;
 document.addEventListener('pointerdown', (event) => {
-  if (!profileMenu.hidden && !account.contains(event.target)) setMenuOpen(false);
+  closedByOutsidePress = false;
+  if (profileMenu.hidden || account.contains(event.target)) return;
+  setMenuOpen(false);
+  closedByOutsidePress = true;
+});
+document.addEventListener('pointercancel', () => {
+  closedByOutsidePress = false;
+});
+document.addEventListener('click', () => {
+  if (!closedByOutsidePress) return;
+  closedByOutsidePress = false;
+  const active = document.activeElement;
+  if (!active || active === document.body) profileButton.focus();
 });
 // Focus leaving the menu closes it: Tab or Shift+Tab (onto the profile button, which is outside
 // the menu), or out to the browser's own controls (no relatedTarget). Focus stays where it went.

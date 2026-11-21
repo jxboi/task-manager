@@ -201,14 +201,15 @@ test('profile menu', async (t) => {
     assert.equal(isOpen(), false);
     assert.equal(document.activeElement, signOut, 'the press itself moves no focus');
     document.activeElement = null; // the hidden item dropped focus; blank space takes none
-    await settle();
-    assert.equal(document.activeElement, null, 'no later focus jump to the header');
+    dispatch(document, 'click', { target: byId('todo-list') });
+    assert.equal(document.activeElement, button, 'focus returns to the profile button');
     button.click();
     const other = byId('new-todo');
     dispatch(document, 'pointerdown', { target: other });
     other.focus();
+    dispatch(document, 'click', { target: other });
     await settle();
-    assert.equal(document.activeElement, other);
+    assert.equal(document.activeElement, other, 'a control the tap focused keeps focus');
   });
 
   await t.test('a failed sign-out keeps the session, closes the menu and says so', async () => {

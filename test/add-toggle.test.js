@@ -106,8 +106,9 @@ test('the + button opens the new-task field', async (t) => {
     assert.equal(document.activeElement, input);
   });
 
-  const press = (type, pointerType = 'mouse') => {
+  const press = (type, pointerType = 'mouse', pointerId = 1) => {
     const event = new Event(type);
+    event.pointerId = pointerId;
     event.button = 0;
     event.isPrimary = true;
     event.pointerType = pointerType;
@@ -178,6 +179,23 @@ test('the + button opens the new-task field', async (t) => {
     await settle();
     assert.equal(form.hidden, false);
     assert.equal(input.value, 'Call Di');
+    byId('sync-dismiss').click();
+    type('');
+  });
+
+  await t.test('only the pressing pointer releases the press', async () => {
+    type('Call Ev');
+    server.failNext = (method) => (method === 'POST' ? new Response('{}', { status: 500 }) : undefined);
+    form.dispatchEvent(new Event('submit'));
+    toggle.click();
+    press('pointerdown', 'touch', 1);
+    press('pointercancel', 'touch', 2); // a second finger's cancel
+    press('pointerup', 'touch', 2); // and its lift start nothing
+    await new Promise((resolve) => setTimeout(resolve, 500)); // past the release fallback
+    assert.equal(form.hidden, true, 'still held by the first finger');
+    press('pointercancel', 'touch', 1);
+    await settle();
+    assert.equal(form.hidden, false);
     byId('sync-dismiss').click();
     type('');
   });
