@@ -14,7 +14,7 @@
   </head>
   <body>
     <main class="app">
-      <header class="app-header">
+      <header class="app-header" id="app-header">
         <div class="title-row">
           <h1 class="title" id="app-title" tabindex="-1">Tasks</h1>
           <button class="icon-button add-toggle" id="add-toggle" type="button" aria-label="Add task" aria-expanded="false"
@@ -136,6 +136,7 @@ Clear</button>
 
         <ul class="todo-list" id="todo-list" hidden></ul>
         <span class="visually-hidden" id="reorder-hint">Drag to move, or use the up and down arrow keys.</span>
+        <p class="drag-status" id="drag-status" aria-hidden="true" hidden></p>
 
         <div class="empty-state" id="empty-state" hidden>
           <div class="empty-page" aria-hidden="true"><i></i><i></i><i></i></div>
