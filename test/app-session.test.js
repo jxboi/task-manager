@@ -64,9 +64,13 @@ test('task view against the server API', async (t) => {
     return value;
   };
   const add = async (value) => {
+    const form = byId('add-form');
+    if (form.hidden) byId('add-toggle').click();
+    assert.equal(form.hidden, false, 'the composer is visible');
     input.value = value;
     input.dispatchEvent(new Event('input'));
-    byId('add-form').dispatchEvent(new Event('submit'));
+    assert.equal(byId('add-button').disabled, false, 'Add is enabled');
+    form.dispatchEvent(new Event('submit'));
     await settle();
   };
   const toggle = async (text) => {
@@ -94,7 +98,9 @@ test('task view against the server API', async (t) => {
     open();
     await settle();
     assert.deepEqual(texts(), ['Existing']);
-    assert.equal(summary.textContent, '1 to do');
+    // No count text once the list is shown: the unfiltered summary row is empty and collapsed.
+    assert.equal(summary.textContent, '');
+    assert.equal(byId('summary-row').className.split(' ').includes('is-quiet'), true);
     assert.equal(servers.a.requests[0].headers['X-CSRF-Token'], 'token-a');
   });
 
@@ -111,6 +117,10 @@ test('task view against the server API', async (t) => {
     const chip = byId('filter-bar').children.find((item) => item.dataset.tag === 'home');
     chip.click();
     assert.deepEqual(texts(), ['Existing']);
+    // Filtering shows only Clear in the summary row, no "N to do in #home".
+    assert.equal(byId('summary-row').className.split(' ').includes('is-quiet'), false);
+    assert.equal(byId('clear-filters').hidden, false);
+    assert.equal(summary.textContent, '');
     await add('Fix tap');
     assert.deepEqual(servers.a.rows.at(-1).tags, ['home']);
     assert.deepEqual(texts(), ['Existing', 'Fix tap']);
@@ -427,10 +437,22 @@ test('task view against the server API', async (t) => {
     await settle();
     assert.deepEqual(texts(), []);
     assert.equal(byId('empty-state').hidden, false);
-    assert.equal(summary.textContent, '0 to do');
+    // The empty state has no count (no "0 to do").
+    assert.equal(summary.textContent, '');
+    assert.equal(byId('summary-row').className.split(' ').includes('is-quiet'), true);
     await add('Ben only');
     assert.deepEqual(texts(), ['Ben only']);
     assert.equal(servers.a.rows.some((item) => item.text === 'Ben only'), false);
+  });
+
+  await t.test('resetting a focused composer moves focus to the + button', async () => {
+    if (byId('add-form').hidden) byId('add-toggle').click();
+    input.focus();
+    assert.equal(document.activeElement, input);
+    window.dispatchEvent(new CustomEvent('tasks:invalidate'));
+    assert.equal(byId('add-form').hidden, true);
+    assert.equal(document.activeElement, byId('add-toggle'));
+    await settle();
   });
 
   await t.test('a stale tab switched to another account resets and says so', async () => {

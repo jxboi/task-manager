@@ -22,6 +22,7 @@ const app = document.querySelector('.app');
 const form = document.getElementById('add-form');
 const input = document.getElementById('new-todo');
 const addButton = document.getElementById('add-button');
+const addToggle = document.getElementById('add-toggle');
 const list = document.getElementById('todo-list');
 const emptyState = document.getElementById('empty-state');
 const summary = document.getElementById('summary');
@@ -30,7 +31,6 @@ const clearFilters = document.getElementById('clear-filters');
 const hintLimit = document.getElementById('hint-limit');
 const filterWrap = document.getElementById('filter-wrap');
 const filterBar = document.getElementById('filter-bar');
-const footer = document.getElementById('footer');
 const banner = document.getElementById('banner');
 const bannerIcon = document.getElementById('banner-icon');
 const bannerText = document.getElementById('banner-text');
@@ -69,7 +69,6 @@ const xIcon = document.getElementById('x-icon');
 const repeatIcon = document.getElementById('repeat-icon');
 const alertIcon = document.getElementById('alert-icon');
 const infoIcon = document.getElementById('info-icon');
-const clockIcon = document.getElementById('clock-icon');
 const syncNote = document.getElementById('sync-note');
 const syncText = document.getElementById('sync-text');
 const syncRetry = document.getElementById('sync-retry');
@@ -137,6 +136,8 @@ let rendering = false;
 let renderPending = false;
 let pendingFocus; // focus keys for the deferred render
 let pressing = false;
+const afterPress = []; // updates that would move the list, held until the press is released
+let viewEpoch = 0; // bumped whenever the view is cleared for another (or a re-read) session
 let timer; // the one reminder timeout
 let bannerTimer;
 
@@ -167,8 +168,8 @@ function findTodo(id) {
   return state.find((todo) => todo.id === id);
 }
 
-// The list as shown: the tag filter, then overdue todos on top. Used by the list, the footer and
-// fallback focus, so they always agree.
+// The list as shown: the tag filter, then overdue todos on top. Used by the list and fallback
+// focus, so they always agree.
 function visibleTodos(now) {
   return sortByUrgency(filterByTags(state, activeTags), now);
 }
@@ -201,28 +202,6 @@ function icon(template) {
 
 function plural(count, word) {
   return `${count} ${word}${count === 1 ? '' : 's'}`;
-}
-
-function hashtags(tags, conjunction) {
-  const names = tags.map((tag) => `#${tag}`);
-  return names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} ${conjunction} ${names.at(-1)}`;
-}
-
-function filterPhrase() {
-  return activeTags.length >= 3 ? plural(activeTags.length, 'tag') : hashtags(activeTags, 'or');
-}
-
-// Counts only: "4 to do", "0 to do", "All done", "4 to do in #home".
-function summaryText(todos, now) {
-  const remaining = todos.filter((todo) => !isCompleted(todo, now)).length;
-  const text = remaining === 0 && todos.length > 0 ? 'All done' : `${remaining} to do`;
-  return activeTags.length === 0 ? text : `${text} in ${filterPhrase()}`;
-}
-
-function footerText(todos, now) {
-  const completed = todos.filter((todo) => isCompleted(todo, now)).length;
-  const text = `${completed} of ${todos.length} completed`;
-  return activeTags.length === 0 ? text : `${text} in ${filterPhrase()}`;
 }
 
 // Due text in the browser's locale and zone: "Today 5:30 PM", "Tomorrow 9:00 AM", "Mon 7:00 PM"
@@ -313,8 +292,9 @@ function isTicked(todo, now) {
   return todo.completedUntil != null && isCompleted(todo, now);
 }
 
-// The time stamp, in words and mono: "◷ Today 5:30 PM · ⟳ Daily", "Overdue · Today 8:30 AM",
-// "Done today · next ◷ Tomorrow 8:00 AM · ⟳ Daily". Overdue is said in words, not only by color.
+// The time stamp, in words and mono: "Today 5:30 PM · ⟳ Daily", "Overdue · Today 8:30 AM",
+// "Done today · next Tomorrow 8:00 AM · ⟳ Daily". Overdue is said in words, not only by color;
+// the due time has no icon, an overdue one keeps its alert mark.
 function renderStamp(todo, overdue, ticked, now) {
   const stamp = document.createElement('span');
   stamp.className = overdue ? 'stamp is-overdue' : 'stamp';
@@ -329,7 +309,8 @@ function renderStamp(todo, overdue, ticked, now) {
   const text = document.createElement('span');
   text.className = 'reminder-when';
   text.textContent = overdue ? `Overdue · ${formatDue(todo.due, now)}` : formatDue(todo.due, now);
-  when.append(icon(overdue ? alertIcon : clockIcon), text);
+  if (overdue) when.append(icon(alertIcon));
+  when.append(text);
   stamp.append(when);
   if (todo.repeat !== 'none' && !overdue) {
     const repeat = document.createElement('span');
@@ -444,12 +425,11 @@ function render(focusKeys) {
 
   const ready = phase === 'ready';
   const loading = phase === 'loading';
-  // Counts only, and only once the list is shown. While loading the row collapses and the live
-  // region says "Loading your tasks" to screen readers alone.
-  if (loading) summary.textContent = 'Loading your tasks';
-  else summary.textContent = ready ? summaryText(visible, now) : '';
+  // No counts: the row shows only Clear while a filter is on. While loading, its live region says
+  // "Loading your tasks" to screen readers alone.
+  summary.textContent = loading ? 'Loading your tasks' : '';
   summary.setAttribute('aria-busy', String(loading));
-  summaryRow.classList.toggle('is-quiet', !ready);
+  summaryRow.classList.toggle('is-quiet', !ready || !filtering);
   syncAddButton();
   clearFilters.hidden = !filtering || !ready;
   // A load error is a card in the list slot; other sync notes are a line above the list.
@@ -469,15 +449,13 @@ function render(focusKeys) {
   list.setAttribute('aria-busy', String(loading));
   list.hidden = !loading && visible.length === 0;
   emptyState.hidden = !ready || visible.length > 0;
-  footer.hidden = !ready || visible.length === 0;
-  footer.textContent = footerText(visible, now);
 
   const controls = new Map(
     [...app.querySelectorAll('[data-focus-key]')].map((element) => [element.dataset.focusKey, element]),
   );
   const target = keys.map((focusKey) => controls.get(focusKey)).find(Boolean);
   if (target) target.focus();
-  else if (focusKeys) input.focus();
+  else if (focusKeys) focusComposer();
   // Focus moved by the render itself is not the user's: focus handlers ignore it.
   rendering = false;
 
@@ -488,33 +466,67 @@ function render(focusKeys) {
 }
 
 // Pressing a control can blur a field (and so re-render) before that control gets its click. Rendering in between would replace the pressed control and swallow the
-// click, so a render requested during a press waits until the button is released (click comes first).
-// A press can end without mouseup (a drag, or the window losing focus), so those release it too.
-// The row losing focus keeps its revealed controls until the press ends: collapsing it on mousedown
-// would shift the pressed control (in a row below) out from under the pointer and lose the click.
-document.addEventListener('mousedown', (event) => {
-  if (event.button !== 0) return;
+// click, so a render requested during a press waits until the press has had its click.
+// The press is tracked with pointer events: a touch fires pointerdown when the finger lands, well
+// before the browser synthesizes mousedown/mouseup/click after the finger lifts. On pointerup the
+// press stays held until the click (a touch's click can come in a later task); if no click comes
+// (released elsewhere), a short fallback releases it. A cancelled press (scroll, drag) or the
+// window losing focus releases it at once.
+const CLICK_WAIT_MS = 400;
+let releaseTimer = null;
+let pressPointerId = null;
+document.addEventListener('pointerdown', (event) => {
+  if (event.isPrimary === false || event.button !== 0) return;
+  clearTimeout(releaseTimer);
   pressing = true;
-  document.activeElement?.closest('.todo')?.classList.add('is-held');
+  pressPointerId = event.pointerId;
 }, true);
-document.addEventListener('mouseup', release, true);
+document.addEventListener('pointerup', (event) => {
+  if (!pressing || event.pointerId !== pressPointerId) return;
+  clearTimeout(releaseTimer);
+  releaseTimer = setTimeout(release, CLICK_WAIT_MS);
+}, true);
+// Capture: released before the control's own click handler runs; the held updates flush after it.
+document.addEventListener('click', () => {
+  if (pressing) release();
+}, true);
+document.addEventListener('pointercancel', (event) => {
+  if (event.pointerId === pressPointerId) release();
+}, true);
 document.addEventListener('dragend', release, true);
 window.addEventListener('blur', release);
 
 function release() {
+  clearTimeout(releaseTimer);
   pressing = false;
-  for (const row of list.querySelectorAll('.is-held')) row.classList.remove('is-held');
-  setTimeout(flushRender);
+  pressPointerId = null;
+  setTimeout(() => {
+    flushRender();
+    flushAfterPress();
+  });
+}
+
+// Like renders, layout-moving updates (reopening the composer, the sync note) wait for a press
+// to be released, so the pressed control stays under the pointer until its click.
+function whenReleased(update) {
+  if (pressing) afterPress.push(update);
+  else update();
+}
+
+function flushAfterPress() {
+  if (pressing) return;
+  for (const update of afterPress.splice(0)) update();
 }
 
 function renderSoon(focusKeys) {
   renderPending = true;
   pendingFocus = focusKeys;
-  if (!pressing) setTimeout(flushRender);
+  setTimeout(flushRender);
 }
 
+// Checked when it runs, not when queued: a press may have started since. release() flushes it.
 function flushRender() {
-  if (renderPending) render(pendingFocus);
+  if (renderPending && !pressing) render(pendingFocus);
 }
 
 // Neighbouring rows in the current view, for when the acted-on row leaves it.
@@ -533,7 +545,7 @@ function syncAddButton() {
   addButton.disabled = phase !== 'ready' || error !== null;
   // Say why Add is disabled when it is the length (the one reason that isn't obvious).
   const tooLong = error === 'invalid';
-  hintLimit.hidden = !tooLong;
+  hintLimit.hidden = !tooLong || form.hidden;
   hintLimit.textContent = tooLong ? MESSAGES.long.text : '';
 }
 
@@ -695,8 +707,10 @@ function dismissAllFired() {
 // --- Task sheet ----------------------------------------------------------------------------
 
 // Opens the task sheet, prefilled with the task's title, tags, reminder and repeat.
+// The row can outlive its task until the pending render (a failed add rolled it back mid-press).
 function openEditor(id) {
   const todo = findTodo(id);
+  if (!todo) return;
   reminderId = id;
   reminderTouched = false;
   draft = { text: todo.text, tags: [...todo.tags], due: todo.due, repeat: todo.repeat };
@@ -1052,6 +1066,34 @@ function showMonth(delta) {
   renderCalendar();
 }
 
+// --- Composer: the + button by the title reveals the new-task field --------------------------
+
+function setComposerOpen(open) {
+  form.hidden = !open;
+  addToggle.setAttribute('aria-expanded', String(open));
+  syncAddButton();
+}
+
+// Where focus goes back to after an action: the field while it is open, else the + button.
+function focusComposer() {
+  (form.hidden ? addToggle : input).focus();
+}
+
+// + opens the field and focuses it (on a phone, the keyboard comes up); pressed again it closes,
+// keeping what was typed.
+addToggle.addEventListener('click', () => {
+  setComposerOpen(form.hidden);
+  focusComposer();
+});
+
+// On the form, so Escape works from the Add button too; not while an IME composition is open.
+form.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing) return;
+  event.preventDefault();
+  setComposerOpen(false);
+  addToggle.focus();
+});
+
 // --- Events --------------------------------------------------------------------------------
 
 input.addEventListener('input', syncAddButton);
@@ -1077,17 +1119,24 @@ form.addEventListener('submit', async (event) => {
   input.focus();
   const outcome = await result;
   if (outcome.ok || outcome.stale) return;
-  // The draft goes back into the field unless something new was typed meanwhile.
-  if (input.value === '') {
-    input.value = raw;
-    syncAddButton();
-  }
   // A duplicate ID whose reload failed is uncertain too: keep the ID for the next try.
   const { status, code } = outcome.error ?? {};
   const uncertain = !outcome.error || status === 0 || status >= 500 || code === 'DUPLICATE_ID';
   if (uncertain) createDrafts.set(draft, [...(createDrafts.get(draft) ?? []), todo.id]);
-  if (handleSessionError(outcome.error)) return;
-  showSync(`Couldn't add “${text}”.`);
+  const sessionError = handleSessionError(outcome.error);
+  // The draft goes back into the field unless something new was typed meanwhile, and the field
+  // reopens if it was closed, so the draft can be retried. Not mid-press (that would move the
+  // pressed control), and not if the view has since been cleared for another session.
+  const epoch = viewEpoch;
+  whenReleased(() => {
+    if (epoch !== viewEpoch || phase !== 'ready') return;
+    if (input.value === '') {
+      input.value = raw;
+      syncAddButton();
+    }
+    if (form.hidden) setComposerOpen(true);
+    if (!sessionError) showSync(`Couldn't add “${text}”.`);
+  });
 });
 
 clearFilters.addEventListener('click', () => {
@@ -1169,7 +1218,7 @@ list.addEventListener('animationend', (event) => {
 bannerDismiss.addEventListener('click', () => {
   if (banner.classList.contains('is-note')) dismissNote();
   else hideBanner();
-  input.focus();
+  focusComposer();
 });
 
 for (const field of [textInput, timeInput, dateInput]) {
@@ -1301,12 +1350,12 @@ document.addEventListener('visibilitychange', () => {
 syncRetry.addEventListener('click', () => {
   const action = retryAction;
   hideSync();
-  input.focus();
+  focusComposer();
   action?.();
 });
 syncDismiss.addEventListener('click', () => {
   hideSync();
-  input.focus();
+  focusComposer();
 });
 
 // --- Saving and the session ----------------------------------------------------------------
@@ -1411,6 +1460,8 @@ async function reloadList() {
 // Leaves nothing of the previous session on the page: rows, filters, editors, drafts, alerts and
 // timers. Answers still on their way for that session are ignored when they arrive.
 function clearView() {
+  viewEpoch += 1;
+  afterPress.length = 0;
   sync.reset();
   state = [];
   viewSignature = '[]';
@@ -1419,6 +1470,11 @@ function clearView() {
   // Nothing of the old account stays in the hidden sheet or the live regions.
   editor.removeAttribute('aria-label');
   textInput.value = '';
+  // Hiding the composer would drop focus to the page; the + button keeps it. The auth flow may
+  // still move it on to sign-in or retry.
+  const composerFocused = [input, addButton].includes(document.activeElement);
+  setComposerOpen(false);
+  if (composerFocused) addToggle.focus();
   draftTags = [];
   editTags.replaceChildren();
   reminderOn.checked = false;
@@ -1465,8 +1521,10 @@ async function loadList() {
   if (result.stale) return;
   if (result.ok) {
     if (retryAction === startLoading) hideSync();
+    const wasReady = phase === 'ready';
     phase = 'ready';
-    render();
+    if (wasReady) renderSoon(); // a press may be in progress: don't replace the row under it
+    else render();
     check(); // missed reminders alert once, after the list is current
     return;
   }

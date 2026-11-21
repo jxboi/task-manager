@@ -24,8 +24,12 @@ const errorSlot = byId('auth-error');
 const errorText = byId('auth-error-text');
 const errorButton = byId('auth-error-action');
 const alertIcon = byId('alert-icon');
+const account = byId('account');
+const profileButton = byId('profile-button');
+const profileMenu = byId('profile-menu');
 const accountName = byId('account-name');
 const signOut = byId('account-sign-out');
+const addToggle = byId('add-toggle');
 const signOutNote = byId('auth-signout-note');
 const touch = matchMedia('(hover: none)');
 const inputs = [name, email, password];
@@ -124,21 +128,24 @@ function announceSession(active) {
 }
 
 function setAccount(active) {
+  // Another tab switched accounts: the open menu's Sign out would now act on the new account.
+  const switched = currentSession && (currentSession.csrfToken !== active.csrfToken || currentSession.user.email !== active.user.email);
+  if (switched) closeMenu();
   currentSession = active;
   setToken(active.csrfToken);
   const label = active.user.name || active.user.email;
   accountName.textContent = label;
   accountName.title = label;
-  signOut.setAttribute('aria-label', `Sign out ${label}`);
+  profileButton.setAttribute('aria-label', `Account, ${label}`);
 }
 
 function showSignedIn(active, focus = false) {
   setAccount(active);
-  for (const element of [accountName, signOut, taskView]) element.hidden = false;
+  for (const element of [account, addToggle, taskView]) element.hidden = false;
   for (const element of [authView, loading, retry]) element.hidden = true;
   setMode(false, { keepEmail: false });
   announceSession(active);
-  if (focus) (touch.matches ? title : byId('new-todo')).focus();
+  if (focus) (touch.matches ? title : addToggle).focus();
 }
 
 function showSignedOut({ focus = false, expired = false } = {}) {
@@ -146,10 +153,11 @@ function showSignedOut({ focus = false, expired = false } = {}) {
   setToken(null);
   announceSession(null);
   if (!byId('reminder-layer').hidden) byId('reminder-cancel').click();
-  for (const element of [accountName, signOut, taskView, loading, retry, signOutNote]) element.hidden = true;
+  setMenuOpen(false);
+  for (const element of [account, addToggle, taskView, loading, retry, signOutNote]) element.hidden = true;
   accountName.textContent = '';
   accountName.removeAttribute('title');
-  signOut.removeAttribute('aria-label');
+  profileButton.setAttribute('aria-label', 'Account');
   authView.hidden = false;
   setMode(false, { keepEmail: false });
   if (expired) info.textContent = 'Your session ended. Sign in again to continue.';
@@ -215,7 +223,8 @@ async function followSession() {
         currentSession = null;
         setToken(null);
         announceSession(null);
-        for (const element of [accountName, signOut, taskView, signOutNote]) element.hidden = true;
+        setMenuOpen(false);
+        for (const element of [account, addToggle, taskView, signOutNote]) element.hidden = true;
       }
       showRetry();
     } else if (active.user) {
@@ -323,7 +332,7 @@ errorButton.addEventListener('click', () => errorAction?.());
 retryButton.addEventListener('click', () => loadSession({ focus: true }));
 byId('auth-dismiss-note').addEventListener('click', () => {
   signOutNote.hidden = true;
-  signOut.focus();
+  profileButton.focus();
 });
 
 form.addEventListener('submit', async (event) => {
@@ -384,13 +393,94 @@ signOut.addEventListener('click', async () => {
     broadcastAuthChange();
     announce('Signed out.');
   } catch {
+    // The note is in the task view; the menu closes so it isn't covered, and Sign out is one tap
+    // away again under the profile button.
+    // Focus goes back to the button only if it is still in the menu; the user may have moved on.
     signOutNote.hidden = false;
-    signOut.focus();
+    closeMenu();
   } finally {
     signOut.textContent = 'Sign out';
     signOut.removeAttribute('aria-disabled');
     busy = false;
   }
+});
+
+// --- The profile menu: the account's name and Sign out, under the header's profile button ---
+// A plain disclosure menu: the button toggles it, Escape closes it (focus back to the button), a
+// press outside closes it without moving focus, and focus leaving it closes it. While it is open
+// focus stays on Sign out: presses on the rest of the menu, or on the button, don't move focus.
+
+function setMenuOpen(open) {
+  profileMenu.hidden = !open;
+  profileButton.setAttribute('aria-expanded', String(open));
+}
+
+// Closing returns focus to the profile button when it was in the menu.
+function closeMenu() {
+  if (profileMenu.hidden) return;
+  const inside = profileMenu.contains(document.activeElement);
+  setMenuOpen(false);
+  if (inside) profileButton.focus();
+}
+
+function openMenu() {
+  setMenuOpen(true);
+  signOut.focus();
+}
+
+// Pressing the name label (or the menu's padding) would blur Sign out to the body, and pressing
+// the button while open would move focus out of the menu (closing it) before the click toggles.
+// Keeping focus where it is makes both cases ordinary.
+profileMenu.addEventListener('mousedown', (event) => {
+  if (!signOut.contains(event.target)) event.preventDefault();
+});
+profileButton.addEventListener('mousedown', (event) => {
+  if (!profileMenu.hidden) event.preventDefault();
+});
+profileButton.addEventListener('click', () => {
+  if (profileMenu.hidden) openMenu();
+  else closeMenu();
+});
+
+// The menu button pattern: Down or Up on the button opens it, on the one item keeps focus there.
+profileButton.addEventListener('keydown', (event) => {
+  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+  event.preventDefault();
+  openMenu();
+});
+profileMenu.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    closeMenu();
+    return;
+  }
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+  event.preventDefault();
+  signOut.focus();
+});
+// An outside press closes it without moving focus; once the tap's click has landed, focus that
+// the hidden item dropped to the body goes back to the profile button (a control the tap focused
+// keeps it).
+let closedByOutsidePress = false;
+document.addEventListener('pointerdown', (event) => {
+  closedByOutsidePress = false;
+  if (profileMenu.hidden || account.contains(event.target)) return;
+  setMenuOpen(false);
+  closedByOutsidePress = true;
+});
+document.addEventListener('pointercancel', () => {
+  closedByOutsidePress = false;
+});
+document.addEventListener('click', () => {
+  if (!closedByOutsidePress) return;
+  closedByOutsidePress = false;
+  const active = document.activeElement;
+  if (!active || active === document.body) profileButton.focus();
+});
+// Focus leaving the menu closes it: Tab or Shift+Tab (onto the profile button, which is outside
+// the menu), or out to the browser's own controls (no relatedTarget). Focus stays where it went.
+profileMenu.addEventListener('focusout', (event) => {
+  if (!profileMenu.contains(event.relatedTarget)) setMenuOpen(false);
 });
 
 // From the task view: its session ended (401), or a request was refused because the session
