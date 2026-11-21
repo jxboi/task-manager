@@ -19,16 +19,15 @@
         </div>
       </header>
       <p class="visually-hidden" id="auth-status" role="status"></p>
-      <div class="auth-loading" id="auth-loading" aria-busy="true"><p hidden>Loading…</p></div>
+      <div class="auth-loading" id="auth-loading" aria-busy="true"><p class="visually-hidden" hidden>Loading</p></div>
       <section class="auth-card" id="auth-retry" hidden>
-        <p>Can't reach the server. Check your connection and try again.</p>
+        <p>Can't reach the server</p>
         <button class="auth-primary add-button" id="auth-retry-button" type="button">Try again</button>
       </section>
 
       <section id="auth-view" hidden>
-        <p class="summary auth-subtitle">Sign in to see your tasks.</p>
         <div class="auth-card">
-          <div class="auth-modes" role="radiogroup" aria-label="Account">
+          <div class="auth-modes seg" role="radiogroup" aria-label="Account">
             <label><input type="radio" name="account-mode" value="signin" checked><span>Sign in</span></label>
             <label><input type="radio" name="account-mode" value="signup"><span>Create account</span></label>
           </div>
@@ -57,7 +56,7 @@
                   autocapitalize="none" enterkeyhint="go" maxlength="128">
                 <button class="auth-show" id="auth-show" type="button" aria-label="Show password" aria-pressed="false">Show</button>
               </div>
-              <p class="auth-password-hint" id="auth-password-hint" hidden>At least 12 characters.</p>
+              <p class="visually-hidden" id="auth-password-hint" hidden>At least 12 characters</p>
               <p class="auth-field-error" id="auth-password-error" hidden></p>
             </div>
             <button class="auth-primary add-button" id="auth-submit" type="submit">

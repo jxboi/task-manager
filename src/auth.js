@@ -87,7 +87,11 @@ function setMode(signup, { keepEmail = true, announceMode = false } = {}) {
   radios[1].checked = signup;
   byId('auth-name-field').hidden = !signup;
   name.disabled = !signup;
+  // The rule is screen-reader only (no helper text on screen): the hint is referenced by the
+  // password field's aria-describedby while creating an account.
   hint.hidden = !signup;
+  if (signup) password.setAttribute('minlength', '12');
+  else password.removeAttribute('minlength');
   password.autocomplete = signup ? 'new-password' : 'current-password';
   name.value = '';
   password.value = '';
