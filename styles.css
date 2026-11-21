@@ -2514,3 +2514,87 @@ body {
   background: var(--ink);
   color: #fff;
 }
+
+/* --- Shelves: full-screen edit -----------------------------------------------------------------
+   On a phone the sheet fills the visual viewport (above the keyboard, via src/viewport.js), the
+   title reads as a heading, other tags are one tap away and Repeat is three tiles. */
+@media (max-width: 639px) {
+  .reminder-editor {
+    height: calc(var(--vvh, 100dvh) - var(--sheet-gutter) / 2);
+    max-height: none;
+  }
+}
+
+.reminder-control#edit-text {
+  min-height: 64px;
+  padding: 0 16px;
+  font-size: 26px;
+  line-height: 32px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.tag-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.tag-suggestion {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 20px;
+  background: rgb(255 255 255 / 0.55);
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.tag-suggestion::before {
+  content: "+";
+  font-weight: 400;
+}
+
+.tag-suggestion:active {
+  transform: scale(0.97);
+}
+
+.repeat-row {
+  display: none;
+}
+
+.repeat-tiles-row {
+  flex-wrap: wrap;
+}
+
+.repeat-tiles {
+  display: grid;
+  flex: 1 1 100%;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 4px 0 8px;
+}
+
+.repeat-tile {
+  min-height: 52px;
+  border: 1.5px solid var(--ink);
+  border-radius: 16px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.repeat-tile[aria-pressed="true"] {
+  background: var(--ink);
+  color: #fff;
+}
+
+.repeat-tile:active {
+  transform: scale(0.97);
+}

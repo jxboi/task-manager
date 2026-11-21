@@ -66,6 +66,8 @@ const calWeekdays = document.getElementById('cal-weekdays');
 const calDays = document.getElementById('cal-days');
 const timeInput = document.getElementById('reminder-time');
 const repeatSelect = document.getElementById('reminder-repeat');
+const repeatTiles = document.getElementById('repeat-tiles');
+const tagSuggestions = document.getElementById('edit-tag-suggestions');
 const message = document.getElementById('reminder-message');
 const messageIcon = document.getElementById('reminder-message-icon');
 const messageText = document.getElementById('reminder-message-text');
@@ -822,10 +824,68 @@ function renderDraftTags() {
     return chip;
   }));
   tagAdd.hidden = !tagField.hidden || draftTags.length >= MAX_TAGS;
+  renderTagSuggestions();
   // The sheet is tinted with its first tag's shelf color, like the task's card.
   if (draftTags.length > 0) editor.dataset.color = tagColor(draftTags[0]);
   else delete editor.dataset.color;
 }
+
+const MAX_SUGGESTIONS = 8;
+
+// The user's other tags, most used first, as one-tap chips under the task's own.
+function renderTagSuggestions() {
+  const room = draftTags.length < MAX_TAGS;
+  const tags = room
+    ? allTags(state).filter(({ tag }) => !draftTags.includes(tag))
+      .sort((a, b) => b.count - a.count || (a.tag < b.tag ? -1 : 1))
+      .slice(0, MAX_SUGGESTIONS)
+    : [];
+  tagSuggestions.hidden = tags.length === 0;
+  tagSuggestions.replaceChildren(...tags.map(({ tag }) => {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'tag-suggestion';
+    chip.dataset.tag = tag;
+    chip.dataset.color = tagColor(tag);
+    chip.setAttribute('aria-label', `Add tag ${tag}`);
+    chip.textContent = `#${tag}`;
+    return chip;
+  }));
+}
+
+tagSuggestions.addEventListener('click', (event) => {
+  const chip = event.target.closest('.tag-suggestion');
+  if (!chip) return;
+  const index = tagSuggestions.children.indexOf(chip);
+  if (!addDraftTag(chip.dataset.tag)) return;
+  // Focus stays in the row: the chip that took this one's place, else the one before, else Add tag.
+  const next = tagSuggestions.children[index] ?? tagSuggestions.children[index - 1];
+  (next && !tagSuggestions.hidden ? next : tagAdd).focus();
+});
+
+const REPEAT_CHOICES = [['none', 'Never'], ['daily', 'Daily'], ['weekly', 'Weekly']];
+
+// Repeat as three tiles that set the (hidden) select, so the save path reads one value.
+function renderRepeatTiles() {
+  const focused = document.activeElement?.closest?.('.repeat-tile')?.dataset.repeat;
+  repeatTiles.replaceChildren(...REPEAT_CHOICES.map(([value, label]) => {
+    const tile = document.createElement('button');
+    tile.type = 'button';
+    tile.className = 'repeat-tile';
+    tile.dataset.repeat = value;
+    tile.setAttribute('aria-pressed', String(repeatSelect.value === value));
+    tile.textContent = label;
+    return tile;
+  }));
+  if (focused) repeatTiles.children.find((tile) => tile.dataset.repeat === focused)?.focus();
+}
+
+repeatTiles.addEventListener('click', (event) => {
+  const tile = event.target.closest('.repeat-tile');
+  if (!tile) return;
+  repeatSelect.value = tile.dataset.repeat;
+  syncEditor();
+});
 
 // "Add tag" becomes an inline field: Enter adds and stays open, Esc closes.
 function openTagField() {
@@ -1004,6 +1064,7 @@ function syncEditor() {
 
   reminderOn.setAttribute('aria-checked', String(reminderOn.checked));
   pickerDetail.hidden = !reminderOn.checked;
+  renderRepeatTiles();
   dateValue.textContent = dateInput.value ? dayLabel(dateInput.value, now) : 'None';
   renderCalendar();
 
