@@ -157,6 +157,8 @@ test('drag handle reorder', async (t) => {
     assert.equal(row('delta').style.transform, `translateY(${ROW}px)`);
     assert.equal(row('alpha').style.transform, '');
     assert.equal(slot.style.top, `${312 - LIST_TOP}px`, 'the gap is where bravo was');
+    assert.equal(byId('drag-status').hidden, false);
+    assert.equal(byId('drag-status').textContent, 'Moving to position 2 of 4');
 
     // Far up: clamped below the overdue row, the row lands first.
     pointer(grip, 'pointermove', -500);
@@ -166,6 +168,7 @@ test('drag handle reorder', async (t) => {
     assert.equal(lifted.classList.contains('is-lifted'), false);
     assert.equal(list.classList.contains('is-reordering'), false);
     assert.equal(slot.isConnected, false);
+    assert.equal(byId('drag-status').hidden, true, 'the status bar goes away on drop');
     assert.ok(rows().every((item) => !item.style.transform));
     assert.deepEqual(shown(), ['late', 'alpha', 'charlie', 'bravo', 'delta']);
     assert.equal(announcer.textContent, 'Moved “Charlie” to position 2 of 4.');
@@ -210,6 +213,8 @@ test('drag handle reorder', async (t) => {
     const chip = byId('filter-bar').children.find((item) => item.dataset.tag === 'work');
     chip.click();
     assert.deepEqual(shown(), ['bravo', 'delta']);
+    assert.equal(byId('app-title').textContent, 'work', 'one tag on: the title names the shelf');
+    assert.ok(byId('app-header').dataset.color !== undefined, 'and the header takes its color');
     const hiddenBefore = serverOrder().filter((name) => !['bravo', 'delta'].includes(name));
     press(handle('bravo'), 'ArrowDown');
     assert.deepEqual(shown(), ['delta', 'bravo']);
@@ -225,6 +230,8 @@ test('drag handle reorder', async (t) => {
     assert.deepEqual(serverOrder().filter((name) => !['bravo', 'delta'].includes(name)), hiddenBefore);
     byId('clear-filters').click();
     assert.deepEqual(shown(), ['late', 'alpha', 'charlie', 'bravo', 'delta']);
+    assert.equal(byId('app-title').textContent, 'Tasks');
+    assert.equal(byId('app-header').dataset.color, undefined);
   });
 
   await t.test('a new task appears last and can be reordered', async () => {

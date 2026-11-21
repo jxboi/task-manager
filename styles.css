@@ -2405,3 +2405,112 @@ body {
 .auth-input {
   border-radius: 14px;
 }
+
+/* One shelf: the header becomes a band in the shelf's color, full bleed, rounded at the bottom.
+   The band is drawn behind the header so the title and buttons keep their places. */
+.app-header {
+  position: relative;
+}
+
+.app-header[data-color]::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  top: calc(-8px - env(safe-area-inset-top) - 200px);
+  right: calc(-1 * var(--side));
+  bottom: -16px;
+  left: calc(-1 * var(--side));
+  border-radius: 0 0 28px 28px;
+  background: var(--shelf);
+}
+
+.app:has(.app-header[data-color]) .filter-wrap {
+  margin-top: 28px;
+}
+
+@media (min-width: 640px) {
+  .app-header[data-color]::before {
+    right: -20px;
+    left: -20px;
+  }
+}
+
+/* While dragging: where the row will land, in words, in place of the New task button. */
+.drag-status {
+  position: fixed;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  left: max(16px, env(safe-area-inset-left));
+  z-index: 4;
+  max-width: 528px;
+  margin: 0 auto;
+  padding: 16px 20px;
+  border-radius: 28px;
+  background: var(--ink);
+  color: #fff;
+  font-size: 15px;
+  line-height: 24px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.is-reordering .add-toggle {
+  display: none;
+}
+
+.app-header[data-color] .title::first-letter {
+  text-transform: uppercase;
+}
+
+/* One shelf: the All tab already clears it, so the Clear row collapses as when unfiltered
+   (its live region stays for screen readers). */
+.app:has(.app-header[data-color]) .summary-row {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+/* Composer options: the shelf it adds to, a quick reminder, and how it repeats. */
+.add-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.add-shelf {
+  color: var(--text-2);
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+}
+
+.add-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.add-chip {
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1.5px solid var(--ink);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 600;
+  transition: transform 120ms var(--ease);
+}
+
+.add-chip:active {
+  transform: scale(0.97);
+}
+
+.add-chip[aria-pressed="true"] {
+  background: var(--ink);
+  color: #fff;
+}
