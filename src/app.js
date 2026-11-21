@@ -520,11 +520,12 @@ function flushAfterPress() {
 function renderSoon(focusKeys) {
   renderPending = true;
   pendingFocus = focusKeys;
-  if (!pressing) setTimeout(flushRender);
+  setTimeout(flushRender);
 }
 
+// Checked when it runs, not when queued: a press may have started since. release() flushes it.
 function flushRender() {
-  if (renderPending) render(pendingFocus);
+  if (renderPending && !pressing) render(pendingFocus);
 }
 
 // Neighbouring rows in the current view, for when the acted-on row leaves it.
@@ -705,8 +706,10 @@ function dismissAllFired() {
 // --- Task sheet ----------------------------------------------------------------------------
 
 // Opens the task sheet, prefilled with the task's title, tags, reminder and repeat.
+// The row can outlive its task until the pending render (a failed add rolled it back mid-press).
 function openEditor(id) {
   const todo = findTodo(id);
+  if (!todo) return;
   reminderId = id;
   reminderTouched = false;
   draft = { text: todo.text, tags: [...todo.tags], due: todo.due, repeat: todo.repeat };

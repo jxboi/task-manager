@@ -130,11 +130,7 @@ function announceSession(active) {
 function setAccount(active) {
   // Another tab switched accounts: the open menu's Sign out would now act on the new account.
   const switched = currentSession && (currentSession.csrfToken !== active.csrfToken || currentSession.user.email !== active.user.email);
-  if (switched && !profileMenu.hidden) {
-    const owned = menuOwnsFocus();
-    setMenuOpen(false);
-    if (owned) profileButton.focus();
-  }
+  if (switched) closeMenu();
   currentSession = active;
   setToken(active.csrfToken);
   const label = active.user.name || active.user.email;
@@ -401,12 +397,9 @@ signOut.addEventListener('click', async () => {
   } catch {
     // The note is in the task view; the menu closes so it isn't covered, and Sign out is one tap
     // away again under the profile button.
-    // Focus goes back to the button only if the menu still owns it (or it fell to the body from
-    // the menu); the user may have moved on.
-    const owned = !profileMenu.hidden && menuOwnsFocus();
+    // Focus goes back to the button only if it is still in the menu; the user may have moved on.
     signOutNote.hidden = false;
-    setMenuOpen(false);
-    if (owned) profileButton.focus();
+    closeMenu();
   } finally {
     signOut.textContent = 'Sign out';
     signOut.removeAttribute('aria-disabled');
@@ -415,13 +408,9 @@ signOut.addEventListener('click', async () => {
 });
 
 // --- The profile menu: the account's name and Sign out, under the header's profile button ---
-
-// Whether focus belongs to the open menu: in it, or on the body, where a tap on the name label
-// (which blurs Sign out) leaves it. Focus on any other control is the user's.
-function menuOwnsFocus() {
-  const active = document.activeElement;
-  return !active || active === document.body || profileMenu.contains(active);
-}
+// A plain disclosure menu: the button toggles it, Escape closes it (focus back to the button), a
+// press outside closes it without moving focus, and focus leaving it closes it. While it is open
+// focus stays on Sign out: presses on the rest of the menu, or on the button, don't move focus.
 
 function setMenuOpen(open) {
   profileMenu.hidden = !open;
@@ -441,25 +430,18 @@ function openMenu() {
   signOut.focus();
 }
 
-// A pointer press on the button moves focus to it, which closes the open menu (focus left it)
-// before the click arrives; remember whether it was open at the press so the click closes it
-// rather than reopening it. The memory belongs to that press only: a cancelled press, or one
-// released elsewhere (dragged off the button), clears it, and a keyboard click never reads it.
-let openAtPress = null;
-const forgetPress = () => {
-  openAtPress = null;
-};
-profileButton.addEventListener('pointerdown', () => {
-  openAtPress = !profileMenu.hidden;
+// Pressing the name label (or the menu's padding) would blur Sign out to the body, and pressing
+// the button while open would move focus out of the menu (closing it) before the click toggles.
+// Keeping focus where it is makes both cases ordinary.
+profileMenu.addEventListener('mousedown', (event) => {
+  if (!signOut.contains(event.target)) event.preventDefault();
 });
-profileButton.addEventListener('pointercancel', forgetPress);
-// The click, when there is one, follows the release; clear after it has had its turn.
-document.addEventListener('pointerup', () => setTimeout(forgetPress, 0));
-profileButton.addEventListener('click', (event) => {
-  const wasOpen = openAtPress !== null && event.detail !== 0 ? openAtPress : !profileMenu.hidden;
-  openAtPress = null;
-  if (wasOpen) closeMenu();
-  else openMenu();
+profileButton.addEventListener('mousedown', (event) => {
+  if (!profileMenu.hidden) event.preventDefault();
+});
+profileButton.addEventListener('click', () => {
+  if (profileMenu.hidden) openMenu();
+  else closeMenu();
 });
 
 // The menu button pattern: Down or Up on the button opens it, on the one item keeps focus there.
@@ -469,50 +451,22 @@ profileButton.addEventListener('keydown', (event) => {
   openMenu();
 });
 profileMenu.addEventListener('keydown', (event) => {
-  // Tab or Shift+Tab always leaves the one-item menu, possibly for the browser's own controls
-  // (Sign out is last when the composer is closed), which fires no focusin and a focusout with
-  // no relatedTarget. Let the browser move focus, then close without moving it.
-  if (event.key === 'Tab') {
-    setTimeout(() => setMenuOpen(false), 0);
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    closeMenu();
     return;
   }
   if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
   event.preventDefault();
   signOut.focus();
 });
-
-// Escape closes it from anywhere; so does a tap or click outside, or Tab moving focus out of it.
-document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && !profileMenu.hidden) {
-    event.preventDefault();
-    // Focus may be on the body (a click on the name label blurred Sign out); Escape returns it.
-    setMenuOpen(false);
-    profileButton.focus();
-  }
-});
 document.addEventListener('pointerdown', (event) => {
-  if (profileMenu.hidden || account.contains(event.target)) return;
-  // Focus on the body while the menu is open came from the menu too (a click on the name label
-  // blurred Sign out), so it is restored the same way.
-  const owned = menuOwnsFocus();
-  setMenuOpen(false);
-  // Let the press move focus to the control it landed on; if the menu had focus and nothing took
-  // it (blank space), put it back on the profile button rather than the document body.
-  if (owned) {
-    setTimeout(() => {
-      if (menuOwnsFocus()) profileButton.focus();
-    }, 0);
-  }
+  if (!profileMenu.hidden && !account.contains(event.target)) setMenuOpen(false);
 });
-// Focus leaving the menu for anywhere else closes it, including Shift+Tab back onto the profile
-// button: the test is the menu, not the account wrapper that also holds the button.
+// Focus leaving the menu closes it: Tab or Shift+Tab (onto the profile button, which is outside
+// the menu), or out to the browser's own controls (no relatedTarget). Focus stays where it went.
 profileMenu.addEventListener('focusout', (event) => {
-  if (event.relatedTarget && !profileMenu.contains(event.relatedTarget)) setMenuOpen(false);
-});
-// A blur with no destination (a click on the name label) sends no useful focusout later, so
-// check where focus lands next. Focus stays where it went.
-document.addEventListener('focusin', (event) => {
-  if (!profileMenu.hidden && !profileMenu.contains(event.target)) setMenuOpen(false);
+  if (!profileMenu.contains(event.relatedTarget)) setMenuOpen(false);
 });
 
 // From the task view: its session ended (401), or a request was refused because the session

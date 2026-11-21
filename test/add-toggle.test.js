@@ -182,6 +182,61 @@ test('the + button opens the new-task field', async (t) => {
     type('');
   });
 
+  const rowOf = (text) => list.children.find((item) => item.querySelector('.todo-text').textContent === text);
+  // Holds the next POST until the returned function is called with its response.
+  const holdNextPost = () => {
+    const realFetch = server.fetch;
+    let answer;
+    const answered = new Promise((resolve) => { answer = resolve; });
+    server.fetch = async (path, init = {}) => {
+      if ((init.method ?? 'GET') !== 'POST') return realFetch(path, init);
+      server.fetch = realFetch;
+      const response = await answered;
+      return response ?? realFetch(path, init);
+    };
+    return answer;
+  };
+
+  await t.test('a render queued just before a press waits for the release', async () => {
+    if (form.hidden) toggle.click();
+    type('Call Fay');
+    form.dispatchEvent(new Event('submit'));
+    await settle();
+    const row = rowOf('Call Fay');
+    document.visibilityState = 'visible';
+    document.dispatchEvent(new Event('visibilitychange')); // queues a render
+    press('pointerdown', 'touch'); // a touch starts before that render runs
+    await settle();
+    assert.equal(rowOf('Call Fay'), row, 'the pressed row is not replaced under the finger');
+    press('pointerup', 'touch');
+    press('click');
+    await settle();
+    assert.notEqual(rowOf('Call Fay'), row, 'the held render runs after the release');
+  });
+
+  await t.test('pressing an optimistic row whose add fails mid-press does not open the sheet', async () => {
+    if (form.hidden) toggle.click();
+    const answer = holdNextPost();
+    type('Call Gil');
+    form.dispatchEvent(new Event('submit'));
+    await settle();
+    const row = rowOf('Call Gil');
+    assert.ok(row, 'the optimistic row is shown');
+    press('pointerdown', 'touch'); // the user presses the row
+    answer(new Response('{}', { status: 500 })); // the add fails before the release
+    await settle();
+    assert.equal(rowOf('Call Gil'), row, 'the rolled-back row stays until the release');
+    press('pointerup', 'touch');
+    assert.doesNotThrow(() => row.querySelector('.todo-open').click());
+    assert.equal(byId('reminder-layer').hidden, true);
+    press('click'); // the click reaching the document releases the press
+    await settle();
+    assert.equal(rowOf('Call Gil'), undefined, 'the pending render removes the row');
+    assert.equal(input.value, 'Call Gil');
+    byId('sync-dismiss').click();
+    type('');
+  });
+
   await t.test('the too-long hint only shows while the field is open', () => {
     type('x'.repeat(2001));
     assert.equal(byId('hint-limit').hidden, false);
