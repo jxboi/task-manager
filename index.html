@@ -182,6 +182,7 @@ Clear</button>
               <input class="tag-field" id="edit-tag-field" type="text" autocomplete="off" autocapitalize="none"
                 enterkeyhint="done" aria-label="New tag" hidden>
             </div>
+            <div class="tag-suggestions" id="edit-tag-suggestions" role="group" aria-label="Your tags" hidden></div>
           </div>
           <div class="sheet-section">
             <div class="picker" id="picker">
@@ -214,8 +215,14 @@ Clear</button>
                   <label class="picker-key" for="reminder-time">Time</label>
                   <input class="time-input" id="reminder-time" type="time">
                 </div>
-                <div class="picker-row">
+                <div class="picker-row repeat-tiles-row">
                   <span class="picker-icon" aria-hidden="true"><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg></span>
+                  <span class="picker-key" id="repeat-tiles-label">Repeat</span>
+                  <div class="repeat-tiles" id="repeat-tiles" role="group" aria-labelledby="repeat-tiles-label"></div>
+                </div>
+                <!-- The select holds the value; the tiles above set it. Hidden from view and from
+                     assistive tech (display: none), so there is one Repeat control. -->
+                <div class="picker-row repeat-row">
                   <label class="picker-key" for="reminder-repeat">Repeat</label>
                   <select class="repeat-select" id="reminder-repeat">
                     <option value="none">Never</option>
