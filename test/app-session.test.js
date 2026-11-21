@@ -445,6 +445,16 @@ test('task view against the server API', async (t) => {
     assert.equal(servers.a.rows.some((item) => item.text === 'Ben only'), false);
   });
 
+  await t.test('resetting a focused composer moves focus to the + button', async () => {
+    if (byId('add-form').hidden) byId('add-toggle').click();
+    input.focus();
+    assert.equal(document.activeElement, input);
+    window.dispatchEvent(new CustomEvent('tasks:invalidate'));
+    assert.equal(byId('add-form').hidden, true);
+    assert.equal(document.activeElement, byId('add-toggle'));
+    await settle();
+  });
+
   await t.test('a stale tab switched to another account resets and says so', async () => {
     cookie = 'a';
     signIn(sessionA);

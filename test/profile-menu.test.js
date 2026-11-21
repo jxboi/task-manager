@@ -118,6 +118,51 @@ test('profile menu', async (t) => {
     button.click();
   });
 
+  await t.test('focusin outside the menu closes it, in both Tab directions, without moving focus', () => {
+    button.click();
+    signOut.focus();
+    button.focus();
+    dispatch(document, 'focusin', { target: button });
+    assert.equal(isOpen(), false);
+    assert.equal(document.activeElement, button);
+    button.click();
+    const next = byId('todo-list');
+    next.focus();
+    dispatch(document, 'focusin', { target: next });
+    assert.equal(isOpen(), false);
+    assert.equal(document.activeElement, next);
+  });
+
+  await t.test('a blur with no destination (the name label) still closes on the next focusin', () => {
+    button.click();
+    dispatch(menu, 'focusout', { relatedTarget: null });
+    assert.equal(isOpen(), true);
+    dispatch(document, 'focusin', { target: signOut });
+    assert.equal(isOpen(), true);
+    const task = byId('new-todo');
+    task.focus();
+    dispatch(document, 'focusin', { target: task });
+    assert.equal(isOpen(), false);
+    assert.equal(document.activeElement, task);
+  });
+
+  await t.test('a cancelled or dragged-off press does not swallow the next keyboard activation', async () => {
+    button.click();
+    dispatch(button, 'pointerdown');
+    dispatch(button, 'pointercancel');
+    button.click();
+    assert.equal(isOpen(), false, 'keyboard activation closes the open menu');
+    button.click();
+    dispatch(button, 'pointerdown');
+    dispatch(document, 'pointerup');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    button.click();
+    assert.equal(isOpen(), false);
+    button.click();
+    assert.equal(isOpen(), true);
+    button.click();
+  });
+
   await t.test('a press on the button while open closes it instead of reopening', () => {
     button.click();
     dispatch(button, 'pointerdown');

@@ -428,13 +428,20 @@ function openMenu() {
 
 // A pointer press on the button moves focus to it, which closes the open menu (focus left it)
 // before the click arrives; remember whether it was open at the press so the click closes it
-// rather than reopening it.
+// rather than reopening it. The memory belongs to that press only: a cancelled press, or one
+// released elsewhere (dragged off the button), clears it, and a keyboard click never reads it.
 let openAtPress = null;
+const forgetPress = () => {
+  openAtPress = null;
+};
 profileButton.addEventListener('pointerdown', () => {
   openAtPress = !profileMenu.hidden;
 });
-profileButton.addEventListener('click', () => {
-  const wasOpen = openAtPress ?? !profileMenu.hidden;
+profileButton.addEventListener('pointercancel', forgetPress);
+// The click, when there is one, follows the release; clear after it has had its turn.
+document.addEventListener('pointerup', () => setTimeout(forgetPress, 0));
+profileButton.addEventListener('click', (event) => {
+  const wasOpen = openAtPress !== null && event.detail !== 0 ? openAtPress : !profileMenu.hidden;
   openAtPress = null;
   if (wasOpen) closeMenu();
   else openMenu();
@@ -475,6 +482,11 @@ document.addEventListener('pointerdown', (event) => {
 // Focus leaving the menu for anywhere else (Tab, Shift+Tab onto the button) closes it.
 profileMenu.addEventListener('focusout', (event) => {
   if (event.relatedTarget && !profileMenu.contains(event.relatedTarget)) setMenuOpen(false);
+});
+// A blur with no destination (a click on the name label) sends no useful focusout later, so
+// check where focus lands next. Focus stays where it went.
+document.addEventListener('focusin', (event) => {
+  if (!profileMenu.hidden && !profileMenu.contains(event.target)) setMenuOpen(false);
 });
 
 // From the task view: its session ended (401), or a request was refused because the session

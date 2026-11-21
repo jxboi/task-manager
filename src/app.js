@@ -1425,7 +1425,11 @@ function clearView() {
   // Nothing of the old account stays in the hidden sheet or the live regions.
   editor.removeAttribute('aria-label');
   textInput.value = '';
+  // Hiding the composer would drop focus to the page; the + button keeps it. The auth flow may
+  // still move it on to sign-in or retry.
+  const composerFocused = [input, addButton].includes(document.activeElement);
   setComposerOpen(false);
+  if (composerFocused) addToggle.focus();
   draftTags = [];
   editTags.replaceChildren();
   reminderOn.checked = false;
