@@ -86,6 +86,7 @@ test('auth module follows session changes from other tabs', async (t) => {
     await answer(3, signedOut);
     assert.equal(byId('auth-view').hidden, false);
     assert.equal(byId('auth-demo').hidden, true);
+    assert.equal(byId('auth-alt').hidden, true);
     assert.equal(sessions.at(-1), null);
     // This tab is now on the sign-in form: a later sign-in elsewhere leaves the form alone.
     broadcast();
@@ -150,17 +151,25 @@ test('auth module follows session changes from other tabs', async (t) => {
     byId('auth-retry-button').click();
     await answer(first, { ...signedOut, demoLoginEnabled: true });
     assert.equal(demoButton.hidden, false);
+    assert.equal(byId('auth-alt').hidden, false);
     radios[1].dispatchEvent(new Event('change'));
     assert.equal(demoButton.hidden, true);
+    assert.equal(byId('auth-alt').hidden, true);
     demoButton.click();
     assert.equal(demoPosts.length, 0);
     radios[0].dispatchEvent(new Event('change'));
     assert.equal(demoButton.hidden, false);
     demoButton.click();
+    assert.equal(demoButton.getAttribute('aria-busy'), 'true');
+    assert.equal(byId('auth-demo-spinner').hidden, false);
+    assert.equal(byId('auth-demo-text').textContent, 'Signing in…');
+    assert.equal(byId('auth-submit').getAttribute('aria-busy'), 'false');
     demoButton.click();
     await answer(first + 1, { ...demo, demoLoginEnabled: true });
     assert.deepEqual(demoPosts, [{ method: 'POST', body: {} }]);
     signedInAs('Demo');
     assert.equal(sessions.at(-1), demo.user.email);
+    assert.equal(byId('auth-demo-text').textContent, 'Continue as demo');
+    assert.equal(byId('auth-demo-spinner').hidden, true);
   });
 });

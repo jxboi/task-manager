@@ -19,6 +19,9 @@ const hint = byId('auth-password-hint');
 const showPassword = byId('auth-show');
 const submit = byId('auth-submit');
 const demoButton = byId('auth-demo');
+const demoAlt = byId('auth-alt');
+const demoSpinner = byId('auth-demo-spinner');
+const demoText = byId('auth-demo-text');
 const submitText = byId('auth-submit-text');
 const spinner = submit.querySelector('.auth-spinner');
 const errorSlot = byId('auth-error');
@@ -90,6 +93,7 @@ function setFieldError(input, message = '') {
 function setMode(signup, { keepEmail = true, announceMode = false } = {}) {
   creating = signup;
   demoButton.hidden = signup || !demoLoginEnabled;
+  demoAlt.hidden = demoButton.hidden;
   radios[0].checked = !signup;
   radios[1].checked = signup;
   byId('auth-name-field').hidden = !signup;
@@ -113,16 +117,20 @@ function setMode(signup, { keepEmail = true, announceMode = false } = {}) {
   if (announceMode) announce(heading.textContent);
 }
 
-function setSubmitting(active) {
+function setSubmitting(active, trigger = submit) {
   busy = active;
+  const demo = trigger === demoButton;
   demoButton.disabled = active;
-  spinner.hidden = !active;
+  demoButton.setAttribute('aria-busy', String(active && demo));
+  demoSpinner.hidden = !(active && demo);
+  demoText.textContent = active && demo ? 'Signing in…' : 'Continue as demo';
+  spinner.hidden = !(active && !demo);
   submit.setAttribute('aria-disabled', String(active));
-  submit.setAttribute('aria-busy', String(active));
+  submit.setAttribute('aria-busy', String(active && !demo));
   form.setAttribute('aria-busy', String(active));
   for (const input of inputs) input.readOnly = active;
   for (const radio of radios) radio.disabled = active;
-  submitText.textContent = active ? (creating ? 'Creating account…' : 'Signing in…') : heading.textContent;
+  submitText.textContent = active && !demo ? (creating ? 'Creating account…' : 'Signing in…') : heading.textContent;
 }
 
 // Tells the task view which session it shows: a session object, or null when signed out.
@@ -373,7 +381,7 @@ demoButton.addEventListener('click', () => {
 });
 
 async function submitAuth(path, body, trigger) {
-  setSubmitting(true);
+  setSubmitting(true, trigger);
   let response;
   try {
     response = await authRequest(path, body);

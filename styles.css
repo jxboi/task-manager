@@ -1875,6 +1875,77 @@ p {
   color: var(--ink);
 }
 
+/* Demo sign-in: a quiet outlined button under the primary action, after an "or" rule. */
+.auth-alt {
+  margin-top: 16px;
+}
+
+.auth-or {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  color: var(--text-3);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.auth-or::before,
+.auth-or::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--hairline);
+}
+
+.auth-secondary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 48px;
+  padding: 0 16px;
+  border: 1px solid var(--field);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 500;
+  transition: background-color 120ms var(--ease), transform 120ms var(--ease);
+}
+
+.auth-secondary:active:not(:disabled) {
+  background: var(--ink-tint);
+  transform: scale(0.98);
+}
+
+@media (hover: hover) {
+  .auth-secondary:hover:not(:disabled) {
+    background: var(--ink-tint);
+  }
+}
+
+.auth-secondary:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.auth-secondary:disabled {
+  cursor: default;
+  color: var(--text-2);
+  background: var(--raised);
+}
+
+.auth-secondary .auth-spinner {
+  border-color: rgb(31 27 22 / 0.2);
+  border-top-color: var(--ink);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-secondary {
+    transition: none;
+  }
+}
+
 /* Wider screens: the auth form gets a modest width. */
 @media (min-width: 640px) {
   #auth-view,
