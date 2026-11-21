@@ -21,6 +21,14 @@ function checkFields(body, fields) {
   if (Object.keys(body).some((key) => !fields.includes(key))) throw invalid('Unexpected field.');
 }
 
+export function readMove(body, id) {
+  checkFields(body, ['action', 'revision', 'anchorId', 'side']);
+  const anchorId = readId(body.anchorId);
+  if (anchorId === id) throw invalid('Choose a different todo to move relative to.');
+  if (body.side !== 'before' && body.side !== 'after') throw invalid('Choose before or after.');
+  return { anchorId, side: body.side };
+}
+
 function readTag(raw) {
   const tag = normalizeTag(raw);
   if (tag === null || tag.includes('\0')) throw invalid('Provide a valid tag.');

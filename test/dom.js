@@ -40,9 +40,32 @@ export class Element extends EventTarget {
     }
   }
   replaceChildren(...children) {
+    for (const child of this.children) child.parent = null;
     this.children = [];
     this.append(...children);
   }
+  // For the reorder drag: moving and removing rows, and where they are on screen.
+  get parentNode() { return this.parent ?? null; }
+  get nextSibling() {
+    const siblings = this.parent?.children ?? [];
+    return siblings[siblings.indexOf(this) + 1] ?? null;
+  }
+  get isConnected() { return Boolean(this.parent?.children.includes(this)); }
+  insertBefore(child, reference) {
+    child.remove();
+    const index = reference ? this.children.indexOf(reference) : -1;
+    this.children.splice(index < 0 ? this.children.length : index, 0, child);
+    child.parent = this;
+  }
+  remove() {
+    if (!this.parent) return;
+    this.parent.children = this.parent.children.filter((child) => child !== this);
+    this.parent = null;
+  }
+  rect = { top: 0, height: 0 };
+  getBoundingClientRect() { return this.rect; }
+  clientTop = 0;
+  setPointerCapture() {}
   matches(selector) {
     if (selector === 'button') return this.tagName === 'button';
     if (selector === '[data-focus-key]') return this.dataset.focusKey !== undefined;

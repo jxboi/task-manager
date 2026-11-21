@@ -279,6 +279,49 @@ test('auth and todo API against PostgreSQL', {
     assert.deepEqual((await request(`/api/todos?id=${id}`, { account: a })).data.todo, permanent);
   });
 
+  await t.test('persists per-user position, appends new tasks, and rejects stale or invalid moves', async () => {
+    const ids = Array.from({ length: 5 }, () => randomUUID());
+    const [first, second, third, appended, foreign] = ids;
+    for (const id of [first, second, third]) assert.equal((await create(a, id, `Task ${id}`)).status, 201);
+    assert.equal((await create(b, foreign, 'Foreign anchor')).status, 201);
+    const list = async () => (await request('/api/todos', { account: a })).data.todos
+      .filter(({ id }) => ids.includes(id));
+    assert.deepEqual((await list()).map(({ id }) => id), [first, second, third]);
+    const move = { action: 'move', revision: 1, anchorId: first, side: 'before' };
+    assert.equal((await patch(a, third, { ...move, side: 'around' })).status, 400);
+    assert.equal((await patch(a, third, { ...move, revision: 0 })).status, 400);
+    assert.equal((await patch(a, third, { ...move, anchorId: foreign })).status, 404);
+    assert.equal((await patch(b, third, { ...move, anchorId: foreign })).status, 404);
+    const result = await patch(a, third, move);
+    assert.equal(result.status, 200);
+    assert.equal(result.data.todo.revision, 2);
+    assert.equal((await patch(a, third, { ...move, side: 'after' })).status, 409);
+    assert.equal((await patch(a, third, { ...move, revision: 2 })).data.todo.revision, 2);
+    assert.equal((await create(a, appended, 'Appended after the move')).status, 201);
+    const rows = await list();
+    assert.deepEqual(rows.map(({ id, revision }) => [id, revision]), [
+      [third, 2], [first, 1], [second, 1], [appended, 1],
+    ]);
+    assert.ok(rows.every(({ position }, i) => typeof position === 'string' &&
+      (!i || rows[i - 1].position < position)));
+
+    // A legacy writer can omit position, and imported data can repeat a position.
+    const legacy = randomUUID();
+    ids.push(legacy);
+    await admin.query(
+      'INSERT INTO todos (user_id, id, text, created_at) VALUES ($1, $2, $3, $4)',
+      [a.userId, legacy, 'Legacy task', rows.at(-1).createdAt + 60_000],
+    );
+    await admin.query('UPDATE todos SET position = $3, created_at = $4 WHERE user_id = $1 AND id = $2', [
+      a.userId, second, rows[1].position, rows[1].createdAt,
+    ]);
+    const withFallbacks = await list();
+    assert.deepEqual(withFallbacks.map(({ id }) => id), [third, ...[first, second].sort(), appended, legacy]);
+    assert.equal(typeof withFallbacks.at(-1).position, 'string');
+    assert.equal((await remove(b, foreign, 1)).status, 204);
+    for (const { id, revision } of withFallbacks) assert.equal((await remove(a, id, revision)).status, 204);
+  });
+
   await t.test('revokes sign-out sessions and rejects stale and expired sessions', async () => {
     const signedOut = await post(signoutPath, {}, { account: a });
     assert.equal(signedOut.status, 200);

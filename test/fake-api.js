@@ -1,8 +1,9 @@
 // An in-memory stand-in for /api/session and /api/todos, for browser-module tests. It reuses the
 // server's own input rules and transforms (server/todo-input.js), keeps a revision per row and
 // checks the CSRF token, so client code meets the same answers it gets from the real handlers.
-import { createInput, patchTodo, readId } from '../server/todo-input.js';
+import { createInput, patchTodo, readId, readMove } from '../server/todo-input.js';
 import { RequestError } from '../server/http.js';
+import { moveTodo, sortByPosition } from '../src/todos.js';
 
 export function createFakeApi({ csrfToken = 'token-a', user = { name: 'Ana', email: 'ana@example.test' } } = {}) {
   const server = {
@@ -51,10 +52,18 @@ export function createFakeApi({ csrfToken = 'token-a', user = { name: 'Ana', ema
       }
       const patch = JSON.parse(body);
       if (patch.revision !== row.revision) return failure(409, 'REVISION_CONFLICT');
-      const changed = patchTodo(row, patch);
+      let changed;
+      if (patch.action === 'move') {
+        const { anchorId, side } = readMove(patch, id);
+        if (!server.rows.some((item) => item.id === anchorId)) return failure(404, 'NOT_FOUND');
+        changed = moveTodo(server.rows, id, anchorId, side).find((item) => item.id === id);
+      } else {
+        changed = patchTodo(row, patch);
+      }
       if (changed === row) return reply({ todo: row });
       const next = { ...changed, revision: row.revision + 1 };
       server.rows = server.rows.map((item) => (item === row ? next : item));
+      if (patch.action === 'move') server.rows = sortByPosition(server.rows);
       return reply({ todo: next });
     } catch (error) {
       if (error instanceof RequestError) return failure(error.status, error.code, error.message);

@@ -13,10 +13,12 @@ import { isCompleted, isOverdue } from './reminders.js';
 import * as api from './storage.js';
 import { createSync } from './sync.js';
 import { readTaskEdit, readTaskInput } from './task-input.js';
+import { autoScrollStep, createDrag, keyboardTarget } from './drag.js';
 import {
   CALENDAR_KEYS, DEFAULT_TIME, addDays, addMonths, canGoBack, dayLabel, dayName, defaultReminder,
   EARLIEST_DAY, localDate, monthGrid, monthLabel, parseDate, pickerDue, splitDue,
 } from './picker.js';
+import { createSheetViewport } from './viewport.js';
 
 const app = document.querySelector('.app');
 const form = document.getElementById('add-form');
@@ -40,6 +42,7 @@ const editorAnnouncer = document.getElementById('reminder-announcer');
 const layer = document.getElementById('reminder-layer');
 const scrim = document.getElementById('reminder-scrim');
 const editor = document.getElementById('reminder-editor');
+const sheetBody = document.getElementById('sheet-body');
 const textInput = document.getElementById('edit-text');
 const editTags = document.getElementById('edit-tags');
 const tagAdd = document.getElementById('edit-tag-add');
@@ -69,10 +72,13 @@ const xIcon = document.getElementById('x-icon');
 const repeatIcon = document.getElementById('repeat-icon');
 const alertIcon = document.getElementById('alert-icon');
 const infoIcon = document.getElementById('info-icon');
+const gripIcon = document.getElementById('grip-icon');
 const syncNote = document.getElementById('sync-note');
 const syncText = document.getElementById('sync-text');
 const syncRetry = document.getElementById('sync-retry');
 const syncDismiss = document.getElementById('sync-dismiss');
+
+const sheetViewport = createSheetViewport({ layer, body: sheetBody });
 
 const INVALID_FLASH_MS = 400;
 const MAX_DELAY = 2 ** 31 - 1; // setTimeout's limit (about 24.8 days); check() re-arms when it fires
@@ -384,6 +390,22 @@ function renderTodo(todo, now) {
   }
 
   item.append(checkbox, open);
+  // The drag handle. Overdue tasks stay on top by due time, so they have none (a spacer keeps
+  // the column).
+  if (overdue) {
+    const spacer = document.createElement('span');
+    spacer.className = 'todo-handle-space';
+    spacer.setAttribute('aria-hidden', 'true');
+    item.append(spacer);
+  } else {
+    const handle = withKey(document.createElement('button'), 'handle', todo.id);
+    handle.type = 'button';
+    handle.className = 'todo-handle';
+    handle.setAttribute('aria-label', `Reorder ${todo.text}`);
+    handle.setAttribute('aria-describedby', 'reorder-hint');
+    handle.append(icon(gripIcon));
+    item.append(handle);
+  }
   return item;
 }
 
@@ -726,6 +748,9 @@ function openEditor(id) {
   repeatSelect.value = todo.repeat;
   setCalendarOpen(false);
   layer.hidden = false;
+  // Before the focus below: the sheet follows the visual viewport, and the focus (which brings up
+  // the iOS keyboard, inside the tap's gesture) is revealed once the keyboard is up.
+  sheetViewport.start();
   render(); // the opener shows aria-expanded; the page behind goes inert
   syncEditor();
   textInput.focus({ preventScroll: true });
@@ -736,6 +761,7 @@ function openEditor(id) {
 function closeEditor() {
   reminderId = null;
   layer.hidden = true;
+  sheetViewport.stop();
   app.inert = false;
   editorAnnouncer.textContent = '';
   closeTagField();
@@ -1194,6 +1220,169 @@ list.addEventListener('click', (event) => {
   else openEditor(id);
 });
 
+// --- Reorder ---------------------------------------------------------------------------------
+
+const REORDER_KEYS = new Set(['ArrowUp', 'ArrowDown', 'Home', 'End']);
+
+// The rows that can be reordered, as shown: the filtered view below its overdue block.
+function reorderableIds(now = Date.now()) {
+  return visibleTodos(now).filter((todo) => !isOverdue(todo, now)).map((todo) => todo.id);
+}
+
+// Sends one move (applied at once, rolled back if the server refuses it) and says where the task
+// went, counted among the rows shown. `tags` is the filter the move was made under.
+function reorder(id, target, tags = activeTags) {
+  const todo = findTodo(id);
+  if (!todo) return;
+  const filter = [...tags];
+  saved(id, sync.move(id, target.anchorId, target.side, filter), () => {
+    if (findTodo(id) && findTodo(target.anchorId)) reorder(id, target, filter);
+  });
+  const ids = reorderableIds();
+  announce(`Moved “${todo.text}” to position ${ids.indexOf(id) + 1} of ${ids.length}.`);
+}
+
+// Keyboard: Up/Down (Alt or not) move one place, Home/End to the first/last place.
+list.addEventListener('keydown', (event) => {
+  const handle = event.target.closest('.todo-handle');
+  if (!handle || drag || !REORDER_KEYS.has(event.key) || event.ctrlKey || event.metaKey) return;
+  event.preventDefault(); // the arrows would scroll the page
+  const { id } = handle.closest('.todo').dataset;
+  const todo = findTodo(id);
+  if (!todo) return;
+  const target = keyboardTarget(reorderableIds(), id, event.key);
+  if (!target) {
+    const top = event.key === 'ArrowUp' || event.key === 'Home';
+    announce(`“${todo.text}” is already ${top ? 'first' : 'last'}.`);
+    return;
+  }
+  reorder(id, target);
+  render([key('handle', id)]);
+});
+
+// Pointer drag (touch, pen and mouse) on the handle. The handle has touch-action: none, so a
+// drag that starts on it never scrolls the page; everywhere else scrolls as usual. Renders wait
+// for the press to end (see `pressing`), so the rows stay put under the finger.
+let drag = null;
+
+list.addEventListener('pointerdown', (event) => {
+  const handle = event.target.closest('.todo-handle');
+  if (!handle || drag || app.inert || event.button !== 0 || event.isPrimary === false) return;
+  event.preventDefault(); // no text selection, and the handle doesn't take focus from a field
+  const row = handle.closest('.todo');
+  const ids = new Set(reorderableIds());
+  const rows = [...list.children].filter((item) => ids.has(item.dataset.id));
+  if (rows.length < 2 || !rows.includes(row)) return;
+  const measured = rows.map((item) => {
+    const rect = item.getBoundingClientRect();
+    return { id: item.dataset.id, top: rect.top + window.scrollY, height: rect.height };
+  });
+  const state = createDrag(measured, row.dataset.id, event.clientY + window.scrollY);
+  const slot = document.createElement('li');
+  slot.className = 'todo-slot';
+  slot.setAttribute('aria-hidden', 'true');
+  slot.style.height = `${measured[state.from].height}px`;
+  list.append(slot);
+  drag = {
+    state, row, handle, rows, slot,
+    pointerId: event.pointerId,
+    clientY: event.clientY,
+    frame: requestAnimationFrame(autoScroll),
+    tags: [...activeTags],
+  };
+  try {
+    handle.setPointerCapture(event.pointerId);
+  } catch {
+    // Not capturable (already released): the drag still follows the pointer until it ends.
+  }
+  handle.addEventListener('pointermove', onDragMove);
+  handle.addEventListener('pointerup', onDragEnd);
+  handle.addEventListener('pointercancel', onDragCancel);
+  handle.addEventListener('lostpointercapture', onDragEnd);
+  list.classList.add('is-reordering');
+  document.documentElement.classList.add('is-reordering');
+  row.classList.add('is-lifted');
+  layoutDrag();
+});
+
+function onDragMove(event) {
+  if (!drag || event.pointerId !== drag.pointerId) return;
+  drag.clientY = event.clientY;
+  layoutDrag();
+}
+
+function onDragEnd(event) {
+  if (drag && event.pointerId === drag.pointerId) endDrag(true);
+}
+
+function onDragCancel(event) {
+  if (drag && event.pointerId === drag.pointerId) endDrag(false);
+}
+
+// Places the lifted row under the pointer, slides the rows it passes, and draws the gap.
+function layoutDrag() {
+  const { state, row, rows, slot } = drag;
+  if (!row.isConnected) {
+    endDrag(false); // the list was rebuilt under the drag (a session change, say)
+    return;
+  }
+  state.move(drag.clientY + window.scrollY);
+  row.style.transform = `translateY(${state.offset}px)`;
+  const shifts = state.shifts();
+  for (const item of rows) {
+    if (item !== row) item.style.transform = shifts[item.dataset.id] ? `translateY(${shifts[item.dataset.id]}px)` : '';
+  }
+  const listTop = list.getBoundingClientRect().top + window.scrollY + list.clientTop;
+  slot.style.top = `${state.slotTop() - listTop}px`;
+}
+
+// Near the top or bottom of the screen the page scrolls, and the row with it.
+function autoScroll() {
+  if (!drag) return;
+  const step = autoScrollStep(drag.clientY, window.innerHeight);
+  if (step) {
+    const before = window.scrollY;
+    window.scrollBy(0, step);
+    if (window.scrollY !== before) layoutDrag();
+  }
+  if (drag) drag.frame = requestAnimationFrame(autoScroll);
+}
+
+// Drops (commit) or puts the row back. A drop moves the row in the page at once, so it doesn't
+// flash back to its old place before the held render shows the saved order.
+function endDrag(commit) {
+  if (!drag) return;
+  const { state, row, handle, rows, slot, frame, tags } = drag;
+  drag = null;
+  cancelAnimationFrame(frame);
+  handle.removeEventListener('pointermove', onDragMove);
+  handle.removeEventListener('pointerup', onDragEnd);
+  handle.removeEventListener('pointercancel', onDragCancel);
+  handle.removeEventListener('lostpointercapture', onDragEnd);
+  for (const item of rows) item.style.transform = '';
+  slot.remove();
+  list.classList.remove('is-reordering');
+  document.documentElement.classList.remove('is-reordering');
+  row.classList.remove('is-lifted');
+  const target = commit && row.isConnected ? state.target() : null;
+  if (!target) return;
+  const anchor = rows.find((item) => item.dataset.id === target.anchorId);
+  anchor.parentNode.insertBefore(row, target.side === 'before' ? anchor : anchor.nextSibling);
+  reorder(row.dataset.id, target, tags);
+}
+
+// While dragging: Esc puts the row back, and iOS gets no chance to scroll or zoom.
+document.addEventListener('keydown', (event) => {
+  if (drag && event.key === 'Escape') {
+    event.preventDefault();
+    endDrag(false);
+  }
+});
+document.addEventListener('touchmove', (event) => {
+  if (drag) event.preventDefault();
+}, { passive: false });
+window.addEventListener('blur', () => endDrag(false));
+
 // Focus landing on a just-fired row (by Tab or click) ends its highlight.
 list.addEventListener('focusin', (event) => {
   if (!rendering) dismissFired(event.target.closest('.todo')?.dataset.id);
@@ -1329,11 +1518,6 @@ editor.addEventListener('keydown', (event) => {
     event.preventDefault();
     saveButton.click(); // the same path as clicking Save (the only place permission is asked)
   }
-});
-
-// A focused field scrolls into view inside the sheet (above the iOS keyboard).
-editor.addEventListener('focusin', (event) => {
-  event.target.scrollIntoView?.({ block: 'nearest' });
 });
 
 // Tab stays inside the sheet and wraps: focus reaching an edge guard goes round to the other end.
