@@ -1,41 +1,45 @@
-/* Tasks: iPhone redesign (spec: redesign/spec.md). Light only. One accent (ink), system UI type,
-   mono for time stamps and counts only. 4px grid. Designed at 390×844, works down to 375. */
+/* Tasks: "Shelves". Light only. Ink is black; each tag is a shelf with its own pastel, and a task's
+   card takes its first tag's color. Bricolage Grotesque throughout. 4px grid. Designed at 390×844,
+   works down to 375. The Shelves overrides are collected at the end of this file. */
 
 :root {
-  --page: #f5f3ee;
+  --page: #f4f4f1;
   --surface: #ffffff;
-  --raised: #efece6;
-  --text: #1f1b16;
-  --text-2: #5e554a;
-  --text-3: #6b6358;
-  --hairline: rgb(31 27 22 / 0.10);
-  --field: #8a8174;
-  --ink: #1f5f55;
-  --ink-press: #184c44;
-  --ink-tint: #e3eeea;
+  --raised: #ebebe6;
+  --text: #111111;
+  --text-2: #4f4f4a;
+  --text-3: #5f5f59;
+  --hairline: rgb(17 17 17 / 0.10);
+  --field: #76766f;
+  --ink: #111111;
+  --ink-press: #333333;
+  --ink-tint: #e4e4df;
   --over: #a3361f;
   --over-bg: #fbeee8;
   --over-peak: #f6dfd5;
   --warn: #6e4610;
   --warn-bg: #f7eed8;
-  --scrim: rgb(31 27 22 / 0.40);
-  --shadow-sheet: 0 -8px 24px rgb(31 27 22 / 0.08);
-  --shadow-sm: 0 1px 2px rgb(31 27 22 / 0.05);
-  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", Roboto, sans-serif;
+  --scrim: rgb(17 17 17 / 0.45);
+  --shadow-sheet: 0 -8px 24px rgb(17 17 17 / 0.10);
+  --shadow-sm: 0 1px 2px rgb(17 17 17 / 0.05);
+  --font: "Bricolage Grotesque", -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   --side: max(20px, env(safe-area-inset-left), env(safe-area-inset-right));
+  --card: var(--surface);
 }
 
-/* Tag dots: decorative, the "#name" carries the meaning. */
-[data-color="0"] { --dot: #b4472c; }
-[data-color="1"] { --dot: #a86a12; }
-[data-color="2"] { --dot: #6d7a1f; }
-[data-color="3"] { --dot: #2f7d4a; }
-[data-color="4"] { --dot: #1e7a86; }
-[data-color="5"] { --dot: #3a62b5; }
-[data-color="6"] { --dot: #8a4a9e; }
-[data-color="7"] { --dot: #b23c6a; }
+/* Tag colors. --dot: the small decorative dot (the "#name" carries the meaning). --shelf: the
+   pastel a tag's filter tab, its tasks' cards and the task sheet are filled with. Text on every
+   --shelf is --text (#111), well above 4.5:1. */
+[data-color="0"] { --dot: #b4472c; --shelf: #ffd9cc; }
+[data-color="1"] { --dot: #a86a12; --shelf: #ffe2b3; }
+[data-color="2"] { --dot: #6d7a1f; --shelf: #e6ecb4; }
+[data-color="3"] { --dot: #2f7d4a; --shelf: #c9ecd3; }
+[data-color="4"] { --dot: #1e7a86; --shelf: #c6eaee; }
+[data-color="5"] { --dot: #3a62b5; --shelf: #d2deff; }
+[data-color="6"] { --dot: #8a4a9e; --shelf: #e8d7f3; }
+[data-color="7"] { --dot: #b23c6a; --shelf: #ffd2e1; }
 
 *,
 *::before,
@@ -532,7 +536,7 @@ p {
   right: 0;
   bottom: 0;
   width: 24px;
-  background: linear-gradient(to right, rgb(245 243 238 / 0), var(--page));
+  background: linear-gradient(to right, rgb(244 244 241 / 0), var(--page));
   pointer-events: none;
 }
 
@@ -1881,4 +1885,452 @@ p {
   #auth-retry {
     max-width: 400px;
   }
+}
+
+/* --- Shelves ---------------------------------------------------------------------------------
+   The Shelves visual direction, over the layout above: a big heavy title, tag tabs filled with
+   each tag's pastel, tasks as rounded cards in their first tag's color, a black "New task" pill
+   at the bottom right, and a task sheet tinted like the task's card. */
+
+body {
+  /* Room under the last card for the floating New task button. */
+  padding-bottom: calc(104px + env(safe-area-inset-bottom));
+}
+
+.title {
+  font-size: 44px;
+  line-height: 48px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.app-header {
+  min-height: 56px;
+  padding-top: 12px;
+}
+
+/* New task: a black pill fixed to the bottom right. Open, it shows a × and drops its label. */
+.add-toggle {
+  position: fixed;
+  right: max(20px, env(safe-area-inset-right));
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  z-index: 4;
+  gap: 6px;
+  width: auto;
+  height: 56px;
+  padding: 0 22px 0 16px;
+  border-radius: 28px;
+  background: var(--ink);
+  color: #fff;
+  font-size: 17px;
+  font-weight: 600;
+  box-shadow: 0 10px 24px rgb(17 17 17 / 0.20);
+}
+
+.add-toggle .icon-disc,
+.add-toggle:active .icon-disc,
+.add-toggle[aria-expanded="true"] .icon-disc {
+  width: 24px;
+  height: 24px;
+  background: none;
+  color: #fff;
+}
+
+.add-toggle .icon {
+  width: 22px;
+  height: 22px;
+  transition: transform 160ms var(--ease);
+}
+
+.add-toggle[aria-expanded="true"] {
+  padding: 0 16px;
+}
+
+.add-toggle[aria-expanded="true"] .icon {
+  transform: rotate(45deg);
+}
+
+.add-toggle[aria-expanded="true"] .add-toggle-label {
+  display: none;
+}
+
+.add-toggle:focus-visible {
+  outline: 3px solid var(--ink);
+  outline-offset: 3px;
+}
+
+.profile-button .icon-disc {
+  width: 40px;
+  height: 40px;
+  border: 1.5px solid var(--ink);
+  background: transparent;
+  color: var(--ink);
+}
+
+/* Composer: a white pill. */
+.add-field {
+  height: 56px;
+  padding-left: 20px;
+  border: 1.5px solid var(--ink);
+  border-radius: 28px;
+}
+
+.add-input {
+  font-size: 17px;
+}
+
+.add-button,
+.add-field .add-button {
+  border-radius: 24px;
+  font-weight: 600;
+}
+
+/* Tag tabs: 40px pills in the tag's pastel; the selected ones go black. All is outlined. */
+.filter-chip {
+  height: 40px;
+  padding: 0 14px;
+  border: 1.5px solid transparent;
+  border-radius: 20px;
+  background: var(--shelf, var(--surface));
+  font-size: 15px;
+  line-height: 20px;
+  font-weight: 600;
+}
+
+.filter-chip::after {
+  inset: -2px -2px;
+}
+
+.filter-chip.filter-all {
+  border-color: var(--ink);
+  background: transparent;
+}
+
+.filter-chip[data-color]::before {
+  display: none;
+}
+
+.filter-count {
+  color: var(--text-2);
+  font-family: var(--font);
+  font-weight: 400;
+}
+
+.filter-chip[aria-pressed="true"],
+.filter-chip.filter-all[aria-pressed="true"] {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fff;
+}
+
+.filter-chip[aria-pressed="true"] .filter-count {
+  color: #fff;
+}
+
+/* List: no outer box; each row is a card. The 8px gap is a page-colored bottom border, so the
+   rows stay contiguous (src/drag.js measures them that way) while reading as separate cards. */
+.todo-list {
+  margin-top: 16px;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+
+.todo {
+  align-items: center;
+  min-height: 72px;
+  padding: 6px 4px 6px 8px;
+  border: 0 solid transparent;
+  border-bottom-width: 8px;
+  border-radius: 22px;
+  background: var(--shelf, var(--card));
+  background-clip: padding-box;
+}
+
+.todo-checkbox,
+.todo:not(:has(.todo-meta)) .todo-checkbox {
+  margin-top: 0;
+}
+
+.todo-checkbox::before {
+  top: 8px;
+  left: 8px;
+  width: 28px;
+  height: 28px;
+  border: 1.5px solid var(--ink);
+  background: rgb(255 255 255 / 0.6);
+}
+
+.todo-checkbox:checked::before {
+  background: var(--ink);
+}
+
+.todo-checkbox:checked::after {
+  top: 17px;
+  left: 16px;
+  width: 12px;
+  height: 7px;
+}
+
+.todo-open {
+  min-height: 60px;
+  padding: 10px 0 10px 4px;
+}
+
+.todo-text {
+  font-size: 18px;
+  line-height: 24px;
+  font-weight: 600;
+}
+
+.stamp,
+.tag {
+  color: var(--text);
+}
+
+.stamp-when,
+.stamp-repeat {
+  font-family: var(--font);
+  font-weight: 600;
+}
+
+.stamp .icon {
+  color: var(--text);
+}
+
+/* On a colored card the tag chip is a white pill. */
+.tag {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 13px;
+  background: rgb(255 255 255 / 0.7);
+  font-weight: 600;
+}
+
+.todo.is-done {
+  background: var(--surface);
+}
+
+.todo.is-done .todo-text {
+  font-weight: 400;
+}
+
+/* Overdue keeps its words and alert chip; the card gets the overdue tint and a dark ring. */
+.todo.is-overdue {
+  box-shadow: inset 0 0 0 2px var(--over);
+}
+
+.stamp.is-overdue {
+  border-radius: 13px;
+}
+
+.todo-handle,
+.todo-handle-space,
+.todo:not(:has(.todo-meta)) .todo-handle,
+.todo:not(:has(.todo-meta)) .todo-handle-space {
+  margin-top: 0;
+}
+
+.todo-handle {
+  color: var(--text-2);
+}
+
+.todo.is-lifted {
+  border-radius: 22px;
+  border-bottom-width: 0;
+  margin-bottom: 8px;
+  outline: 1.5px solid var(--ink);
+  box-shadow: 0 18px 36px rgb(17 17 17 / 0.22);
+  rotate: -1.5deg;
+}
+
+.todo.is-lifted .todo-handle {
+  color: var(--ink);
+  background: rgb(255 255 255 / 0.6);
+}
+
+.todo-slot {
+  right: 0;
+  left: 0;
+  border: 2px dashed var(--ink);
+  border-radius: 22px;
+  background: rgb(17 17 17 / 0.04);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .todo.is-lifted {
+    rotate: none;
+  }
+}
+
+.skeleton {
+  margin-bottom: 8px;
+  border-radius: 22px;
+  background: var(--surface);
+}
+
+/* Empty: three shelf-colored blocks on a shelf. */
+.empty-page {
+  width: 220px;
+  height: 120px;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  transform: none;
+}
+
+.empty-page::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 12px;
+  left: 0;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--ink);
+}
+
+.empty-page i,
+.empty-page i:nth-child(1),
+.empty-page i:nth-child(2),
+.empty-page i:nth-child(3) {
+  top: auto;
+  bottom: 20px;
+  border: 0;
+  border-radius: 16px;
+}
+
+.empty-page i::before,
+.empty-page i::after {
+  display: none;
+}
+
+.empty-page i:nth-child(1) {
+  left: 18px;
+  width: 58px;
+  height: 72px;
+  background: #d2deff;
+  rotate: -6deg;
+}
+
+.empty-page i:nth-child(2) {
+  left: 86px;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: #ffe2b3;
+}
+
+.empty-page i:nth-child(3) {
+  left: 148px;
+  width: 54px;
+  height: 80px;
+  background: #c9ecd3;
+  rotate: 5deg;
+}
+
+.empty-title {
+  margin-top: 24px;
+  font-size: 30px;
+  line-height: 36px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.empty-hint {
+  max-width: 280px;
+  margin: 8px auto 0;
+  color: var(--text-2);
+  font-size: 16px;
+  line-height: 22px;
+}
+
+/* Task sheet: rounder, tinted with the task's first tag's shelf color. */
+.reminder-editor {
+  border-radius: 30px 30px 0 0;
+  background: var(--shelf, var(--surface));
+}
+
+.reminder-grab {
+  background: rgb(17 17 17 / 0.30);
+}
+
+.reminder-title {
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.sheet-bar .reminder-save {
+  padding: 0 20px;
+  border-radius: 22px;
+  background: var(--ink);
+  color: #fff;
+  font-weight: 600;
+}
+
+.reminder-cancel {
+  color: var(--ink);
+}
+
+.reminder-label {
+  color: var(--text);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.reminder-control {
+  min-height: 52px;
+  border: 0;
+  border-radius: 16px;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.picker {
+  border: 0;
+  border-radius: 20px;
+  background: var(--surface);
+}
+
+.edit-tags .tag {
+  background: var(--surface);
+}
+
+.tag-add {
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1.5px dashed var(--ink);
+  border-radius: 20px;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.task-delete {
+  color: var(--over);
+  font-weight: 600;
+}
+
+@media (min-width: 640px) {
+  .reminder-editor {
+    border-radius: 30px;
+  }
+
+  /* On a wide screen the button sits at the list's right edge. */
+  .add-toggle {
+    right: max(20px, calc((100vw - 560px) / 2));
+  }
+}
+
+/* Auth: the same pills. */
+.auth-primary {
+  border-radius: 28px;
+  font-weight: 600;
+}
+
+.auth-input {
+  border-radius: 14px;
 }
