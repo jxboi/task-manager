@@ -149,25 +149,132 @@ p {
   outline: none;
 }
 
-.account {
+/* "Tasks" and its + button share the left side; the profile button sits on the right. */
+.title-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   min-width: 0;
 }
 
+/* A round icon button: a 32px disc in a 44×44 hit area. */
+.icon-button {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  transition: transform 120ms var(--ease);
+}
+
+.icon-button:active {
+  transform: scale(0.96);
+}
+
+.icon-button:focus-visible {
+  outline-offset: -2px;
+}
+
+.icon-disc {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  transition: background-color 120ms var(--ease);
+}
+
+.add-toggle .icon-disc {
+  background: var(--ink);
+  color: #fff;
+}
+
+.add-toggle:active .icon-disc,
+.add-toggle[aria-expanded="true"] .icon-disc {
+  background: var(--ink-press);
+}
+
+.add-toggle .icon,
+.profile-button .icon {
+  width: 18px;
+  height: 18px;
+}
+
+.profile-button .icon-disc {
+  background: var(--raised);
+  color: var(--text-2);
+}
+
+.profile-button[aria-expanded="true"] .icon-disc {
+  background: var(--ink-tint);
+  color: var(--ink);
+}
+
+.account {
+  position: relative;
+  margin-right: -6px;
+}
+
+/* The profile menu: the name, then Sign out. Anchored under the button, right edges aligned. */
+.profile-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 6px; /* the header's -6px margin: lines up with the list's edge */
+  z-index: 5;
+  width: max-content;
+  min-width: 200px;
+  max-width: min(280px, calc(100vw - 40px));
+  padding: 4px;
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgb(31 27 22 / 0.12), var(--shadow-sm);
+  animation: fade-in 120ms var(--ease);
+}
+
 .account-name {
-  max-width: 140px;
+  padding: 10px 12px 8px;
   overflow: hidden;
   color: var(--text-2);
   font-size: 13px;
   line-height: 20px;
   white-space: nowrap;
   text-overflow: ellipsis;
+  border-bottom: 1px solid var(--hairline);
+  margin-bottom: 4px;
 }
 
-.account-sign-out {
-  margin-right: -4px;
+.menu-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--text);
+  font-weight: 500;
+  text-align: left;
+}
+
+.menu-item:hover,
+.menu-item:focus-visible {
+  background: var(--raised);
+}
+
+.menu-item:focus-visible {
+  outline-offset: -2px;
+}
+
+.menu-item[aria-disabled="true"] {
+  color: var(--text-3);
 }
 
 .summary-row {
@@ -826,7 +933,7 @@ p {
   width: 12px;
   height: 12px;
   border: 1.5px solid var(--field);
-  border-radius: 3px;
+  border-radius: 50%;
 }
 
 .empty-page i::after {
@@ -933,8 +1040,14 @@ p {
 
   .text-button,
   .add-button,
+  .icon-button,
+  .icon-disc,
   .filter-chip {
     transition: none;
+  }
+
+  .profile-menu {
+    animation: none;
   }
 }
 

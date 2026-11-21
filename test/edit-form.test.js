@@ -350,6 +350,8 @@ test('edit form', async (t) => {
 
   await t.test('Add says why it is disabled when the title is too long', () => {
     const add = byId('new-todo');
+    byId('add-toggle').click(); // the + button reveals the field
+    assert.equal(byId('add-form').hidden, false);
     add.value = 'x'.repeat(2001);
     add.dispatchEvent(new Event('input'));
     assert.equal(byId('add-button').disabled, true);
@@ -360,6 +362,8 @@ test('edit form', async (t) => {
     assert.equal(byId('hint-limit').hidden, true);
     add.value = '';
     add.dispatchEvent(new Event('input'));
+    byId('add-toggle').click();
+    assert.equal(byId('add-form').hidden, true);
   });
 
   await t.test('a failed save rolls back and Try again re-sends it', async () => {

@@ -22,6 +22,7 @@ const app = document.querySelector('.app');
 const form = document.getElementById('add-form');
 const input = document.getElementById('new-todo');
 const addButton = document.getElementById('add-button');
+const addToggle = document.getElementById('add-toggle');
 const list = document.getElementById('todo-list');
 const emptyState = document.getElementById('empty-state');
 const summary = document.getElementById('summary');
@@ -452,7 +453,7 @@ function render(focusKeys) {
   );
   const target = keys.map((focusKey) => controls.get(focusKey)).find(Boolean);
   if (target) target.focus();
-  else if (focusKeys) input.focus();
+  else if (focusKeys) focusComposer();
   // Focus moved by the render itself is not the user's: focus handlers ignore it.
   rendering = false;
 
@@ -508,7 +509,7 @@ function syncAddButton() {
   addButton.disabled = phase !== 'ready' || error !== null;
   // Say why Add is disabled when it is the length (the one reason that isn't obvious).
   const tooLong = error === 'invalid';
-  hintLimit.hidden = !tooLong;
+  hintLimit.hidden = !tooLong || form.hidden;
   hintLimit.textContent = tooLong ? MESSAGES.long.text : '';
 }
 
@@ -1027,6 +1028,33 @@ function showMonth(delta) {
   renderCalendar();
 }
 
+// --- Composer: the + button by the title reveals the new-task field --------------------------
+
+function setComposerOpen(open) {
+  form.hidden = !open;
+  addToggle.setAttribute('aria-expanded', String(open));
+  syncAddButton();
+}
+
+// Where focus goes back to after an action: the field while it is open, else the + button.
+function focusComposer() {
+  (form.hidden ? addToggle : input).focus();
+}
+
+// + opens the field and focuses it (on a phone, the keyboard comes up); pressed again it closes,
+// keeping what was typed.
+addToggle.addEventListener('click', () => {
+  setComposerOpen(form.hidden);
+  focusComposer();
+});
+
+input.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || event.defaultPrevented) return;
+  event.preventDefault();
+  setComposerOpen(false);
+  addToggle.focus();
+});
+
 // --- Events --------------------------------------------------------------------------------
 
 input.addEventListener('input', syncAddButton);
@@ -1052,11 +1080,13 @@ form.addEventListener('submit', async (event) => {
   input.focus();
   const outcome = await result;
   if (outcome.ok || outcome.stale) return;
-  // The draft goes back into the field unless something new was typed meanwhile.
+  // The draft goes back into the field unless something new was typed meanwhile, and the field
+  // reopens if it was closed, so the draft can be retried.
   if (input.value === '') {
     input.value = raw;
     syncAddButton();
   }
+  if (form.hidden) setComposerOpen(true);
   // A duplicate ID whose reload failed is uncertain too: keep the ID for the next try.
   const { status, code } = outcome.error ?? {};
   const uncertain = !outcome.error || status === 0 || status >= 500 || code === 'DUPLICATE_ID';
@@ -1144,7 +1174,7 @@ list.addEventListener('animationend', (event) => {
 bannerDismiss.addEventListener('click', () => {
   if (banner.classList.contains('is-note')) dismissNote();
   else hideBanner();
-  input.focus();
+  focusComposer();
 });
 
 for (const field of [textInput, timeInput, dateInput]) {
@@ -1276,12 +1306,12 @@ document.addEventListener('visibilitychange', () => {
 syncRetry.addEventListener('click', () => {
   const action = retryAction;
   hideSync();
-  input.focus();
+  focusComposer();
   action?.();
 });
 syncDismiss.addEventListener('click', () => {
   hideSync();
-  input.focus();
+  focusComposer();
 });
 
 // --- Saving and the session ----------------------------------------------------------------
@@ -1394,6 +1424,7 @@ function clearView() {
   // Nothing of the old account stays in the hidden sheet or the live regions.
   editor.removeAttribute('aria-label');
   textInput.value = '';
+  setComposerOpen(false);
   draftTags = [];
   editTags.replaceChildren();
   reminderOn.checked = false;

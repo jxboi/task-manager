@@ -24,8 +24,12 @@ const errorSlot = byId('auth-error');
 const errorText = byId('auth-error-text');
 const errorButton = byId('auth-error-action');
 const alertIcon = byId('alert-icon');
+const account = byId('account');
+const profileButton = byId('profile-button');
+const profileMenu = byId('profile-menu');
 const accountName = byId('account-name');
 const signOut = byId('account-sign-out');
+const addToggle = byId('add-toggle');
 const signOutNote = byId('auth-signout-note');
 const touch = matchMedia('(hover: none)');
 const inputs = [name, email, password];
@@ -129,16 +133,17 @@ function setAccount(active) {
   const label = active.user.name || active.user.email;
   accountName.textContent = label;
   accountName.title = label;
+  profileButton.setAttribute('aria-label', `Account, ${label}`);
   signOut.setAttribute('aria-label', `Sign out ${label}`);
 }
 
 function showSignedIn(active, focus = false) {
   setAccount(active);
-  for (const element of [accountName, signOut, taskView]) element.hidden = false;
+  for (const element of [account, addToggle, taskView]) element.hidden = false;
   for (const element of [authView, loading, retry]) element.hidden = true;
   setMode(false, { keepEmail: false });
   announceSession(active);
-  if (focus) (touch.matches ? title : byId('new-todo')).focus();
+  if (focus) (touch.matches ? title : addToggle).focus();
 }
 
 function showSignedOut({ focus = false, expired = false } = {}) {
@@ -146,9 +151,11 @@ function showSignedOut({ focus = false, expired = false } = {}) {
   setToken(null);
   announceSession(null);
   if (!byId('reminder-layer').hidden) byId('reminder-cancel').click();
-  for (const element of [accountName, signOut, taskView, loading, retry, signOutNote]) element.hidden = true;
+  setMenuOpen(false);
+  for (const element of [account, addToggle, taskView, loading, retry, signOutNote]) element.hidden = true;
   accountName.textContent = '';
   accountName.removeAttribute('title');
+  profileButton.setAttribute('aria-label', 'Account');
   signOut.removeAttribute('aria-label');
   authView.hidden = false;
   setMode(false, { keepEmail: false });
@@ -215,7 +222,8 @@ async function followSession() {
         currentSession = null;
         setToken(null);
         announceSession(null);
-        for (const element of [accountName, signOut, taskView, signOutNote]) element.hidden = true;
+        setMenuOpen(false);
+        for (const element of [account, addToggle, taskView, signOutNote]) element.hidden = true;
       }
       showRetry();
     } else if (active.user) {
@@ -323,7 +331,7 @@ errorButton.addEventListener('click', () => errorAction?.());
 retryButton.addEventListener('click', () => loadSession({ focus: true }));
 byId('auth-dismiss-note').addEventListener('click', () => {
   signOutNote.hidden = true;
-  signOut.focus();
+  profileButton.focus();
 });
 
 form.addEventListener('submit', async (event) => {
@@ -384,13 +392,67 @@ signOut.addEventListener('click', async () => {
     broadcastAuthChange();
     announce('Signed out.');
   } catch {
+    // The note is in the task view; the menu closes so it isn't covered, and Sign out is one tap
+    // away again under the profile button.
     signOutNote.hidden = false;
-    signOut.focus();
+    setMenuOpen(false);
+    profileButton.focus();
   } finally {
     signOut.textContent = 'Sign out';
     signOut.removeAttribute('aria-disabled');
     busy = false;
   }
+});
+
+// --- The profile menu: the account's name and Sign out, under the header's profile button ---
+
+function setMenuOpen(open) {
+  profileMenu.hidden = !open;
+  profileButton.setAttribute('aria-expanded', String(open));
+}
+
+// Closing returns focus to the profile button when it was in the menu.
+function closeMenu() {
+  if (profileMenu.hidden) return;
+  const inside = profileMenu.contains(document.activeElement);
+  setMenuOpen(false);
+  if (inside) profileButton.focus();
+}
+
+function openMenu() {
+  setMenuOpen(true);
+  signOut.focus();
+}
+
+profileButton.addEventListener('click', () => {
+  if (profileMenu.hidden) openMenu();
+  else closeMenu();
+});
+
+// The menu button pattern: Down or Up on the button opens it, on the one item keeps focus there.
+profileButton.addEventListener('keydown', (event) => {
+  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+  event.preventDefault();
+  openMenu();
+});
+profileMenu.addEventListener('keydown', (event) => {
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+  event.preventDefault();
+  signOut.focus();
+});
+
+// Escape closes it from anywhere; so does a tap or click outside, or Tab moving focus out of it.
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !profileMenu.hidden) {
+    event.preventDefault();
+    closeMenu();
+  }
+});
+document.addEventListener('pointerdown', (event) => {
+  if (!profileMenu.hidden && !account.contains(event.target)) setMenuOpen(false);
+});
+account.addEventListener('focusout', (event) => {
+  if (event.relatedTarget && !account.contains(event.relatedTarget)) setMenuOpen(false);
 });
 
 // From the task view: its session ended (401), or a request was refused because the session
