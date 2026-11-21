@@ -115,7 +115,7 @@ test('browser storage modules against PostgreSQL', {
 
   await t.test('signed out, the list cannot be read', async () => {
     shared.use();
-    assert.deepEqual(await startSession(), { user: null, csrfToken: null });
+    assert.deepEqual(await startSession(), { user: null, csrfToken: null, demoLoginEnabled: true });
     await assert.rejects(api.listTodos(), { status: 401 });
   });
 
@@ -332,7 +332,7 @@ test('browser storage modules against PostgreSQL', {
 
   await t.test('sign-out revokes the session; an expired session gets 401', async () => {
     assert.equal((await api.authRequest('sign-out', {}, { csrf: true })).ok, true);
-    assert.deepEqual(await startSession(), { user: null, csrfToken: null });
+    assert.deepEqual(await startSession(), { user: null, csrfToken: null, demoLoginEnabled: true });
     await assert.rejects(api.listTodos(), { status: 401 });
 
     clean.use();

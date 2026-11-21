@@ -18,6 +18,10 @@ const password = byId('auth-password');
 const hint = byId('auth-password-hint');
 const showPassword = byId('auth-show');
 const submit = byId('auth-submit');
+const demoButton = byId('auth-demo');
+const demoAlt = byId('auth-alt');
+const demoSpinner = byId('auth-demo-spinner');
+const demoText = byId('auth-demo-text');
 const submitText = byId('auth-submit-text');
 const spinner = submit.querySelector('.auth-spinner');
 const errorSlot = byId('auth-error');
@@ -37,6 +41,7 @@ const touched = new Set();
 const networkMessage = "Can't reach the server. Check your connection and try again.";
 
 let creating = false;
+let demoLoginEnabled = false;
 let busy = false;
 let checking = false;
 let currentSession = null;
@@ -87,6 +92,8 @@ function setFieldError(input, message = '') {
 
 function setMode(signup, { keepEmail = true, announceMode = false } = {}) {
   creating = signup;
+  demoButton.hidden = signup || !demoLoginEnabled;
+  demoAlt.hidden = demoButton.hidden;
   radios[0].checked = !signup;
   radios[1].checked = signup;
   byId('auth-name-field').hidden = !signup;
@@ -110,15 +117,20 @@ function setMode(signup, { keepEmail = true, announceMode = false } = {}) {
   if (announceMode) announce(heading.textContent);
 }
 
-function setSubmitting(active) {
+function setSubmitting(active, trigger = submit) {
   busy = active;
-  spinner.hidden = !active;
+  const demo = trigger === demoButton;
+  demoButton.disabled = active;
+  demoButton.setAttribute('aria-busy', String(active && demo));
+  demoSpinner.hidden = !(active && demo);
+  demoText.textContent = active && demo ? 'Signing in…' : 'Continue as demo';
+  spinner.hidden = !(active && !demo);
   submit.setAttribute('aria-disabled', String(active));
-  submit.setAttribute('aria-busy', String(active));
+  submit.setAttribute('aria-busy', String(active && !demo));
   form.setAttribute('aria-busy', String(active));
   for (const input of inputs) input.readOnly = active;
   for (const radio of radios) radio.disabled = active;
-  submitText.textContent = active ? (creating ? 'Creating account…' : 'Signing in…') : heading.textContent;
+  submitText.textContent = active && !demo ? (creating ? 'Creating account…' : 'Signing in…') : heading.textContent;
 }
 
 // Tells the task view which session it shows: a session object, or null when signed out.
@@ -181,6 +193,7 @@ async function loadSession({ focus = false } = {}) {
   const delay = setTimeout(() => { loading.firstElementChild.hidden = false; }, 1000);
   try {
     const active = await readSession();
+    demoLoginEnabled = active.demoLoginEnabled === true;
     announce('');
     if (active.user) showSignedIn(active, focus);
     else showSignedOut({ focus });
@@ -335,7 +348,7 @@ byId('auth-dismiss-note').addEventListener('click', () => {
   profileButton.focus();
 });
 
-form.addEventListener('submit', async (event) => {
+form.addEventListener('submit', (event) => {
   event.preventDefault();
   if (busy) return;
   setSummary();
@@ -357,28 +370,46 @@ form.addEventListener('submit', async (event) => {
 
   const body = { email: email.value.trim(), password: password.value };
   if (creating) body.name = name.value.trim();
-  setSubmitting(true);
+  return submitAuth(creating ? 'sign-up/email' : 'sign-in/email', body, submit);
+});
+
+demoButton.addEventListener('click', () => {
+  if (busy || creating || !demoLoginEnabled || authView.hidden) return;
+  setSummary();
+  info.textContent = '';
+  return submitAuth('demo', {}, demoButton);
+});
+
+async function submitAuth(path, body, trigger) {
+  setSubmitting(true, trigger);
   let response;
-  let errorCode;
   try {
-    response = await authRequest(creating ? 'sign-up/email' : 'sign-in/email', body);
-    errorCode = response.code;
+    response = await authRequest(path, body);
   } catch {
     setSummary(networkMessage);
-    submit.focus();
   } finally {
     setSubmitting(false);
   }
-  if (!response) return;
+  if (!response) {
+    trigger.focus();
+    return;
+  }
   if (!response.ok) {
-    handleAuthError(response, errorCode);
+    if (trigger === demoButton) {
+      setSummary(response.status === 429
+        ? 'Too many attempts. Wait a minute, then try again.'
+        : "Couldn't sign in as demo. Try again.");
+      demoButton.focus();
+    } else {
+      handleAuthError(response, response.code);
+    }
     return;
   }
   password.value = '';
   authView.hidden = true;
   broadcastAuthChange();
   await loadSession({ focus: true });
-});
+}
 
 signOut.addEventListener('click', async () => {
   if (busy || !currentSession) return;
