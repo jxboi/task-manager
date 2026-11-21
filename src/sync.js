@@ -6,11 +6,14 @@
 // from the old one is ignored when it settles.
 import {
   addTag,
+  appendTodo,
   clearReminder,
   editTodo,
+  moveTodo,
   removeTag,
   removeTodo,
   setReminder,
+  sortByPosition,
   toggleTodo,
 } from './todos.js';
 import { isOverdue } from './reminders.js';
@@ -172,15 +175,35 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
       const result = await write({
         id: todo.id,
         needsRow: false,
-        apply: (todos) => (todos.some((item) => item.id === todo.id) ? todos : [...todos, todo]),
+        apply: (todos) => (todos.some((item) => item.id === todo.id) ? todos : appendTodo(todos, todo)),
         send: () => api.createTodo(todo),
-        commit: (todos, row) => [...todos.filter((item) => item.id !== row.id), row],
+        commit: (todos, row) => {
+          const next = [...todos.filter((item) => item.id !== row.id), row];
+          return row.position == null ? next : sortByPosition(next);
+        },
       });
       if (!result.ok && result.error?.code === 'DUPLICATE_ID' && result.reloaded &&
           confirmed.some((item) => item.id === todo.id)) {
         return { ok: true, todo: confirmed.find((item) => item.id === todo.id), reconciled: true };
       }
       return result;
+    },
+
+    // Slice 2: call move(id, anchorId, 'before' | 'after', activeTags) with visible IDs.
+    // The result follows the normal write contract. An unchanged move resolves with skipped.
+    move(id, anchorId, side, activeTags = []) {
+      const tags = [...activeTags];
+      const apply = (todos) => moveTodo(todos, id, anchorId, side, tags);
+      if (apply(view) === view) return Promise.resolve({ ok: false, skipped: true });
+      return write({
+        id,
+        apply,
+        send: (row) => {
+          if (confirmed.some((todo) => todo.id === anchorId) && apply(confirmed) === confirmed) return row;
+          return api.patchTodo(id, row.revision, 'move', { anchorId, side });
+        },
+        commit: (todos, row) => sortByPosition(replace(todos, row)),
+      });
     },
 
     // The browser works out the next occurrence of a repeating todo in its own zone; the server

@@ -28,6 +28,75 @@ export function addTodo(todos, text, tags = []) {
   ];
 }
 
+const SLOT_WIDTH = 20;
+const TIMESTAMP_OFFSET = 9223372036854775808n;
+const HEX = '0123456789abcdef';
+const suffixFor = (id) => `8${id.replaceAll('-', '')}8`;
+const timestampSlot = (createdAt) => BigInt(createdAt) + TIMESTAMP_OFFSET;
+const slotKey = (slot) => String(slot).padStart(SLOT_WIDTH, '0');
+const positionOf = (todo) => todo.position ?? slotKey(timestampSlot(todo.createdAt)) + suffixFor(todo.id);
+const compare = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
+
+export function sortByPosition(todos) {
+  return [...todos].sort((a, b) =>
+    compare(positionOf(a), positionOf(b)) || a.createdAt - b.createdAt || compare(a.id, b.id),
+  );
+}
+
+// Optimistic creates append even when the server's tail is ahead of the browser clock.
+export function appendTodo(todos, todo) {
+  const last = todos.at(-1);
+  if (!last || compare(positionOf(last), positionOf(todo)) < 0) return [...todos, todo];
+  const nextSlot = BigInt(positionOf(last).slice(0, SLOT_WIDTH)) + 1n;
+  return [...todos, { ...todo, position: slotKey(nextSlot) + suffixFor(todo.id) }];
+}
+
+// Find a prefix strictly between two hexadecimal fractions. A missing lower digit is 0.
+// When the upper bound is absent, it is 1 (one past the largest fractional digit).
+// Stored fractions end in a nonzero digit, so extending the prefix can always open a gap.
+function between(lower, upper) {
+  let prefix = '';
+  for (let i = 0; ; i++) {
+    const low = i < lower.length ? HEX.indexOf(lower[i]) : 0;
+    const high = upper === null ? HEX.length : HEX.indexOf(upper[i]);
+    if (high - low > 1) return prefix + HEX[Math.floor((low + high) / 2)];
+    prefix += HEX[low];
+    if (low < high) upper = null;
+  }
+}
+
+// Slice 2: pass the full position-ordered list, two visible IDs, 'before' or 'after', and the
+// active tag filter. Only the moved row changes. Reminder urgency still determines view groups.
+export function moveTodo(todos, id, anchorId, side, activeTags = []) {
+  if (id === anchorId || (side !== 'before' && side !== 'after')) return todos;
+  const visible = filterByTags(todos, activeTags);
+  const from = visible.findIndex((todo) => todo.id === id);
+  const anchor = visible.findIndex((todo) => todo.id === anchorId);
+  const offset = side === 'before' ? 0 : 1;
+  if (from < 0 || anchor < 0 || (side === 'before' ? from + 1 === anchor : from - 1 === anchor)) return todos;
+
+  const moved = visible[from];
+  const next = todos.filter((todo) => todo !== moved);
+  let index = next.indexOf(visible[anchor]) + offset;
+  const anchorPosition = positionOf(visible[anchor]);
+  // Imported ties have no gap between them. Place the task on the requested side
+  // of the tied rows, which retain their existing order.
+  if (side === 'before') {
+    while (index > 0 && positionOf(next[index - 1]) === anchorPosition) index--;
+  } else {
+    while (index < next.length && positionOf(next[index]) === anchorPosition) index++;
+  }
+  const left = index > 0 ? positionOf(next[index - 1]) : null;
+  const right = index < next.length ? positionOf(next[index]) : null;
+  // Pick a slot already in use so an append can always take the next whole slot.
+  const slot = (left ?? right).slice(0, SLOT_WIDTH);
+  const lower = left?.slice(SLOT_WIDTH) ?? '';
+  const upper = right?.startsWith(slot) ? right.slice(SLOT_WIDTH) : null;
+  const position = slot + between(lower, upper) + suffixFor(id);
+  next.splice(index, 0, { ...moved, position });
+  return next;
+}
+
 export function toggleTodo(todos, id, now = Date.now()) {
   return todos.map((todo) => {
     if (todo.id !== id) return todo;

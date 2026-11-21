@@ -120,6 +120,48 @@ test('a failed write drops out of the view and keeps the confirmed row', async (
   assert.equal(server.rows[0].revision, 1);
 });
 
+test('optimistic moves share the revision queue and a failed move rolls back', async () => {
+  const { server, sync } = setup();
+  const [a, hidden, b, c] = ['A', 'Hidden', 'B', 'C'].map((text, i) => ({
+    ...newTodo(text, text === 'Hidden' ? [] : ['work']), createdAt: i, revision: 1,
+  }));
+  server.rows = [a, hidden, b, c];
+  await sync.load();
+  const texts = () => sync.todos.map(({ text }) => text);
+
+  const moved = sync.move(c.id, a.id, 'before', ['work']);
+  const edit = sync.addTag(c.id, 'another');
+  assert.deepEqual(texts(), ['C', 'A', 'Hidden', 'B']);
+  assert.equal((await moved).ok, true);
+  assert.equal((await edit).ok, true);
+  const [move, tag] = server.requests.filter(({ method }) => method === 'PATCH').map(({ body }) => JSON.parse(body));
+  assert.deepEqual(move, { revision: 1, action: 'move', anchorId: a.id, side: 'before' });
+  assert.equal(tag.revision, 2);
+
+  server.failNext = () => new Response('{}', { status: 500 });
+  const rejected = sync.move(c.id, b.id, 'after', ['work']);
+  assert.deepEqual(texts(), ['A', 'Hidden', 'B', 'C']);
+  assert.equal((await rejected).error.status, 500);
+  assert.deepEqual(texts(), ['C', 'A', 'Hidden', 'B']);
+  assert.deepEqual(sync.todos, server.rows);
+});
+
+test('a stale move reloads the remote order and cancels a queued move of the stale row', async () => {
+  const { server, sync } = setup();
+  const [a, b, c] = ['A', 'B', 'C'].map((text, i) => ({ ...newTodo(text), createdAt: i, revision: 1 }));
+  server.rows = [a, b, c];
+  await sync.load();
+  const otherTab = createSync(api);
+  await otherTab.load();
+  assert.equal((await otherTab.move(c.id, b.id, 'before')).ok, true);
+
+  const first = sync.move(c.id, a.id, 'before');
+  const queued = sync.move(c.id, b.id, 'after');
+  assert.equal((await first).error.status, 409);
+  assert.deepEqual(await queued, { ok: false, cancelled: true });
+  assert.deepEqual(sync.todos, otherTab.todos);
+});
+
 test('a revision conflict reloads the list before resolving', async () => {
   const { server, sync } = setup();
   const todo = newTodo('Shared');

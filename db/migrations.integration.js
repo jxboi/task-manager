@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -140,4 +140,55 @@ test('a failing migration leaves neither its schema change nor its ledger row', 
       await client.end();
     }
   }
+});
+
+test('position migration preserves per-user creation order and accepts legacy inserts', {
+  skip: testUrl ? false : 'Set TEST_DATABASE_URL to a disposable PostgreSQL database',
+}, async (t) => {
+  const { runMigrations } = await import('./runner.js');
+  const schema = `task_manager_test_${randomBytes(8).toString('hex')}`;
+  const database = new URL(testUrl);
+  database.searchParams.set('options', `-c search_path=${schema}`);
+  const client = new pg.Client({ connectionString: database.href });
+  const directory = await mkdtemp(join(tmpdir(), 'migrations-'));
+  await client.connect();
+  t.after(async () => {
+    try {
+      await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+    } finally {
+      await client.end();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  await client.query(`CREATE SCHEMA ${schema}`);
+  const migration = '0004_todo_position.sql';
+  const source = new URL('./migrations/', import.meta.url);
+  const copy = (name) => copyFile(new URL(name, source), join(directory, name));
+  for (const name of (await readdir(source)).filter((name) => name.endsWith('.sql') && name < migration)) {
+    await copy(name);
+  }
+  const options = { connectionString: database.href, directory: pathToFileURL(`${directory}/`), log: () => {} };
+  await runMigrations(options);
+  await client.query(`
+    INSERT INTO "user" (id, name, email, "createdAt", "updatedAt") VALUES
+      ('a', 'A', 'a@example.test', now(), now()), ('b', 'B', 'b@example.test', now());
+    INSERT INTO todos (user_id, id, text, created_at, due, revision) VALUES
+      ('a', '00000000-0000-0000-0000-000000000003', 'Later', 10, 1, 7),
+      ('a', '00000000-0000-0000-0000-000000000002', 'Tie B', 2, NULL, 1),
+      ('a', '00000000-0000-0000-0000-000000000001', 'Tie A', 2, NULL, 1),
+      ('b', '00000000-0000-0000-0000-000000000001', 'Other user', -1, NULL, 1);
+  `);
+  const old = await client.query('SELECT user_id, text, due, revision FROM todos ORDER BY user_id, created_at, id');
+  await copy(migration);
+  assert.deepEqual(await runMigrations(options), [migration]);
+  const backfilled = await client.query('SELECT user_id, text, due, revision, position FROM todos ORDER BY user_id, position');
+  assert.ok(backfilled.rows.every(({ position }) => typeof position === 'string'));
+  assert.deepEqual(backfilled.rows.map(({ position, ...row }) => row), old.rows);
+
+  await client.query(`
+    INSERT INTO todos (user_id, id, text, created_at)
+    VALUES ('a', '00000000-0000-0000-0000-000000000004', 'Legacy insert', 11);
+  `);
+  const legacy = await client.query("SELECT position FROM todos WHERE text = 'Legacy insert'");
+  assert.deepEqual(legacy.rows, [{ position: null }]);
 });
