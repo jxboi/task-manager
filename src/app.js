@@ -28,6 +28,9 @@ const form = document.getElementById('add-form');
 const input = document.getElementById('new-todo');
 const addButton = document.getElementById('add-button');
 const addToggle = document.getElementById('add-toggle');
+const addShelf = document.getElementById('add-shelf');
+const addQuick = document.getElementById('add-quick');
+const addRepeat = document.getElementById('add-repeat');
 const list = document.getElementById('todo-list');
 const emptyState = document.getElementById('empty-state');
 const summary = document.getElementById('summary');
@@ -134,6 +137,8 @@ let recheckTimer;
 const openNotifications = new Set(); // closed when the session ends
 // View state: never saved, never in the URL.
 let activeTags = []; // A to Z
+let newReminder = null; // the composer's quick reminder for the next task: null, 'tonight', 'tomorrow'
+let newRepeat = 'none';
 let reminderId = null; // todo whose task sheet is open
 let draft = null; // the sheet's starting point: { text, tags, due, repeat } of that todo
 let draftTags = []; // the tags the sheet will save (a copy of the todo's, edited by its chips)
@@ -458,6 +463,7 @@ function render(focusKeys) {
   summary.setAttribute('aria-busy', String(loading));
   summaryRow.classList.toggle('is-quiet', !ready || !filtering);
   syncAddButton();
+  renderComposerOptions(now);
   clearFilters.hidden = !filtering || !ready;
   // A load error is a card in the list slot; other sync notes are a line above the list.
   syncNote.classList.toggle('is-block', phase === 'error');
@@ -1108,6 +1114,78 @@ function showMonth(delta) {
 
 // --- Composer: the + button by the title reveals the new-task field --------------------------
 
+// Quick reminders for the next task: tonight at 6 PM (while that is still ahead) and tomorrow at
+// 9 AM, in the browser's zone.
+const QUICK_TIMES = { tonight: [0, 18], tomorrow: [1, 9] };
+
+function quickDue(choice, now) {
+  const [days, hour] = QUICK_TIMES[choice];
+  const date = new Date(now);
+  date.setDate(date.getDate() + days);
+  date.setHours(hour, 0, 0, 0);
+  return date.getTime();
+}
+
+function quickChoices(now) {
+  return Object.keys(QUICK_TIMES).filter((choice) => quickDue(choice, now) > now);
+}
+
+function composerChip(label, pressed, data) {
+  const chip = withKey(document.createElement('button'), 'add-chip', ...Object.entries(data).flat());
+  chip.type = 'button';
+  chip.className = 'add-chip';
+  chip.setAttribute('aria-pressed', String(pressed));
+  Object.assign(chip.dataset, data);
+  chip.textContent = label;
+  return chip;
+}
+
+// The composer's second line: which shelf the task goes on (the selected tags), the quick
+// reminder and, once one is picked, how it repeats.
+function renderComposerOptions(now = Date.now()) {
+  const choices = quickChoices(now);
+  if (newReminder !== null && !choices.includes(newReminder)) newReminder = null;
+  addShelf.hidden = activeTags.length === 0;
+  addShelf.textContent = activeTags.length === 0 ? '' : `Adds to ${activeTags.map((tag) => `#${tag}`).join(', ')}`;
+  addQuick.replaceChildren(
+    composerChip('No reminder', newReminder === null, { quick: 'none' }),
+    ...choices.map((choice) => composerChip(formatDue(quickDue(choice, now), now), newReminder === choice, { quick: choice })),
+  );
+  addRepeat.hidden = newReminder === null;
+  if (newReminder === null) newRepeat = 'none';
+  addRepeat.replaceChildren(...['none', 'daily', 'weekly'].map((repeat) =>
+    composerChip(repeat === 'none' ? 'Once' : REPEAT_LABELS[repeat], newRepeat === repeat, { repeat })));
+}
+
+function focusChip(group, name, value) {
+  group.children.find((chip) => chip.dataset[name] === value)?.focus();
+}
+
+addQuick.addEventListener('click', (event) => {
+  const chip = event.target.closest('.add-chip');
+  if (!chip) return;
+  newReminder = chip.dataset.quick === 'none' ? null : chip.dataset.quick;
+  renderComposerOptions();
+  focusChip(addQuick, 'quick', chip.dataset.quick);
+});
+
+addRepeat.addEventListener('click', (event) => {
+  const chip = event.target.closest('.add-chip');
+  if (!chip) return;
+  newRepeat = chip.dataset.repeat;
+  renderComposerOptions();
+  focusChip(addRepeat, 'repeat', newRepeat);
+});
+
+// A new task's quick reminder, sent after its create (the queue keeps them in order).
+function remindNew(id, due, repeat) {
+  saved(id, sync.setReminder(id, due, repeat), () => {
+    const todo = findTodo(id);
+    if (todo && (todo.due !== due || todo.repeat !== repeat)) remindNew(id, due, repeat);
+  });
+  check();
+}
+
 function setComposerOpen(open) {
   form.hidden = !open;
   addToggle.setAttribute('aria-expanded', String(open));
@@ -1153,6 +1231,11 @@ form.addEventListener('submit', async (event) => {
   }
   hideSync();
   const result = sync.create(todo);
+  const now = Date.now();
+  if (newReminder !== null && quickDue(newReminder, now) > now) remindNew(todo.id, quickDue(newReminder, now), newRepeat);
+  // The field stays open for the next task; its reminder starts over.
+  newReminder = null;
+  newRepeat = 'none';
   input.value = '';
   addButton.disabled = true;
   render();
