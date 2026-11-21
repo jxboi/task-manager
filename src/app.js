@@ -21,6 +21,9 @@ import {
 import { createSheetViewport } from './viewport.js';
 
 const app = document.querySelector('.app');
+const header = document.getElementById('app-header');
+const title = document.getElementById('app-title');
+const dragStatus = document.getElementById('drag-status');
 const form = document.getElementById('add-form');
 const input = document.getElementById('new-todo');
 const addButton = document.getElementById('add-button');
@@ -458,6 +461,12 @@ function render(focusKeys) {
   clearFilters.hidden = !filtering || !ready;
   // A load error is a card in the list slot; other sync notes are a line above the list.
   syncNote.classList.toggle('is-block', phase === 'error');
+
+  // One tag selected: that shelf's view. The title names it and the header takes its color.
+  const shelf = ready && activeTags.length === 1 ? activeTags[0] : null;
+  title.textContent = shelf ?? 'Tasks';
+  if (shelf) header.dataset.color = tagColor(shelf);
+  else delete header.dataset.color;
 
   const scroll = filterBar.scrollLeft;
   filterWrap.hidden = !ready || tags.length === 0;
@@ -1339,6 +1348,9 @@ function layoutDrag() {
   }
   const listTop = list.getBoundingClientRect().top + window.scrollY + list.clientTop;
   slot.style.top = `${state.slotTop() - listTop}px`;
+  // Visual only: screen readers use the keyboard reorder and its announcement.
+  dragStatus.textContent = `Moving to position ${state.index + 1} of ${rows.length}`;
+  dragStatus.hidden = false;
 }
 
 // Near the top or bottom of the screen the page scrolls, and the row with it.
@@ -1366,6 +1378,7 @@ function endDrag(commit) {
   handle.removeEventListener('lostpointercapture', onDragEnd);
   for (const item of rows) item.style.transform = '';
   slot.remove();
+  dragStatus.hidden = true;
   list.classList.remove('is-reordering');
   document.documentElement.classList.remove('is-reordering');
   row.classList.remove('is-lifted');
