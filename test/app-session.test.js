@@ -42,8 +42,22 @@ test('task view against the server API', async (t) => {
   const input = byId('new-todo');
   const summary = byId('summary');
   const note = byId('sync-note');
-  const texts = () => list.children.map((item) => item.querySelector('.todo-text').textContent);
-  const rowOf = (text) => list.children.find((item) => item.querySelector('.todo-text').textContent === text);
+  // Task rows only: while loading the list holds skeleton rows.
+  // The task sheet's picker: the Reminder switch on, then Date and Time.
+  const setWhen = (value) => {
+    const [day, clock] = value.split('T');
+    const on = byId('reminder-on');
+    if (!on.checked) {
+      on.checked = true;
+      on.dispatchEvent(new Event('change'));
+    }
+    byId('reminder-date').value = day;
+    byId('reminder-time').value = clock;
+    byId('reminder-time').dispatchEvent(new Event('input'));
+  };
+  const rows = () => list.children.filter((item) => item.className.split(' ').includes('todo'));
+  const texts = () => rows().map((item) => item.querySelector('.todo-text').textContent);
+  const rowOf = (text) => rows().find((item) => item.querySelector('.todo-text').textContent === text);
   const event = (target, type) => {
     const value = new Event(type);
     Object.defineProperty(value, 'target', { value: target });
@@ -73,7 +87,7 @@ test('task view against the server API', async (t) => {
     gate = new Promise((resolve) => { open = resolve; });
     signIn(sessionA);
     await settle(1);
-    assert.equal(summary.textContent, 'Loading your tasks…');
+    assert.equal(summary.textContent, 'Loading your tasks');
     assert.equal(byId('empty-state').hidden, true);
     assert.equal(byId('add-button').disabled, true);
     gate = null;
@@ -136,7 +150,7 @@ test('task view against the server API', async (t) => {
     servers.a.failNext = () => ({ afterWrite: true });
     await add('Call Sam');
     assert.equal(input.value, 'Call Sam');
-    assert.match(byId('sync-text').textContent, /press Add to try again/);
+    assert.equal(byId('sync-text').textContent, "Couldn't add “Call Sam”.");
     const count = servers.a.rows.length;
     byId('add-form').dispatchEvent(new Event('submit'));
     await settle();
@@ -185,7 +199,7 @@ test('task view against the server API', async (t) => {
     assert.deepEqual(events, ['tasks:expired', 'tasks:revalidate']);
     // The list stays hidden while the session is re-read.
     assert.deepEqual(texts(), []);
-    assert.equal(summary.textContent, 'Loading your tasks…');
+    assert.equal(summary.textContent, 'Loading your tasks');
     servers.a.session = { ...sessionA };
     signIn(sessionA); // the auth module found the same session
     await settle();
@@ -202,7 +216,7 @@ test('task view against the server API', async (t) => {
     // auth.js got a BroadcastChannel message from another tab.
     window.dispatchEvent(new CustomEvent('tasks:invalidate'));
     assert.deepEqual(texts(), []);
-    assert.equal(summary.textContent, 'Loading your tasks…');
+    assert.equal(summary.textContent, 'Loading your tasks');
     assert.equal(byId('add-button').disabled, true);
     gate = null;
     open(); // the already-authorized answer arrives: ignored
@@ -220,7 +234,8 @@ test('task view against the server API', async (t) => {
     signIn(sessionA);
     await settle();
     servers.a.failNext = (method) => (method === 'DELETE' ? new Response('{}', { status: 500 }) : undefined);
-    rowOf('Ping').querySelector('.todo-delete').click();
+    rowOf('Ping').querySelector('.todo-open').click();
+    byId('task-delete').click();
     await settle();
     assert.ok(texts().includes('Ping'));
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -231,16 +246,14 @@ test('task view against the server API', async (t) => {
   });
 
   await t.test('item 5: Try again after a lost reminder save reconciles first and never re-arms a claimed alert', async () => {
-    rowOf('Fix tap').querySelector('.reminder-add').click();
-    const when = byId('reminder-when');
-    when.value = '2000-01-01T12:00';
-    when.dispatchEvent(new Event('input'));
+    rowOf('Fix tap').querySelector('.todo-open').click();
+    setWhen('2000-01-01T12:00');
     servers.a.failNext = (method) => (method === 'PATCH' ? { afterWrite: true } : undefined);
     byId('reminder-save').click();
     await settle();
     const saved = servers.a.rows.find((item) => item.text === 'Fix tap');
     assert.ok(saved.due !== null, 'the save reached the server');
-    assert.equal(rowOf('Fix tap').querySelector('.reminder-chip'), null, 'rolled back here');
+    assert.equal(rowOf('Fix tap').querySelector('.stamp'), null, 'rolled back here');
     // Another tab claims (alerts) it before this tab retries.
     servers.a.rows = servers.a.rows.map((item) => (item === saved ? { ...item, notified: item.due, revision: item.revision + 1 } : item));
     const patches = () => servers.a.requests.filter((r) => r.method === 'PATCH' && r.path.endsWith(saved.id)).length;
@@ -252,7 +265,7 @@ test('task view against the server API', async (t) => {
     const after = servers.a.rows.find((item) => item.id === saved.id);
     assert.equal(after.notified, after.due);
     assert.equal(byId('announcer').textContent, announced, 'no second alert');
-    assert.ok(rowOf('Fix tap').querySelector('.reminder-chip'));
+    assert.ok(rowOf('Fix tap').querySelector('.stamp'));
   });
 
   await t.test('item 4: each lost create keeps its own retry ID, also after a duplicate with a failed reload', async () => {
@@ -329,10 +342,8 @@ test('task view against the server API', async (t) => {
 
   await t.test('item 4: Try again keeps a recurring reminder that another tab claimed and advanced', async () => {
     const target = servers.a.rows.find((item) => item.text === 'Unrelated');
-    rowOf('Unrelated').querySelector('.reminder-add').click();
-    const when = byId('reminder-when');
-    when.value = '2000-01-01T12:00';
-    when.dispatchEvent(new Event('input'));
+    rowOf('Unrelated').querySelector('.todo-open').click();
+    setWhen('2000-01-01T12:00');
     byId('reminder-repeat').value = 'daily';
     byId('reminder-repeat').dispatchEvent(new Event('change'));
     servers.a.failNext = (method) => (method === 'PATCH' ? { afterWrite: true } : undefined);
@@ -380,9 +391,9 @@ test('task view against the server API', async (t) => {
   await t.test('signing out clears rows, filters, drafts and editors; late answers are ignored', async () => {
     assert.ok(notifications.length > 0 && notifications.some((item) => !item.closed));
     assert.notEqual(byId('announcer').textContent, '');
-    // item 2: an open reminder editor with values in it.
-    rowOf('Existing').querySelector('.reminder-add').click();
-    byId('reminder-when').value = '2031-05-05T08:00';
+    // item 2: an open task sheet with values in it.
+    rowOf('Existing').querySelector('.todo-open').click();
+    setWhen('2031-05-05T08:00');
     byId('reminder-repeat').value = 'daily';
     byId('filter-bar').children.find((item) => item.dataset.tag === 'home').click();
     input.value = 'half-typed';
@@ -399,9 +410,11 @@ test('task view against the server API', async (t) => {
     assert.equal(byId('filter-wrap').hidden, true);
     assert.equal(byId('reminder-layer').hidden, true);
     assert.equal(note.hidden, true);
-    assert.equal(byId('reminder-for').textContent, '');
     assert.equal(byId('reminder-editor').getAttribute('aria-label'), null);
-    assert.equal(byId('reminder-when').value, '');
+    assert.equal(byId('edit-text').value, '');
+    assert.equal(byId('reminder-on').checked, false);
+    assert.equal(byId('reminder-date').value, '');
+    assert.equal(byId('reminder-time').value, '');
     assert.equal(byId('reminder-repeat').value, 'none');
     assert.equal(byId('announcer').textContent, '');
     assert.equal(byId('reminder-announcer').textContent, '');
@@ -414,7 +427,7 @@ test('task view against the server API', async (t) => {
     await settle();
     assert.deepEqual(texts(), []);
     assert.equal(byId('empty-state').hidden, false);
-    assert.equal(summary.textContent, 'Nothing to do yet');
+    assert.equal(summary.textContent, '0 to do');
     await add('Ben only');
     assert.deepEqual(texts(), ['Ben only']);
     assert.equal(servers.a.rows.some((item) => item.text === 'Ben only'), false);
@@ -435,7 +448,11 @@ test('task view against the server API', async (t) => {
     signIn({ ...sessionA, csrfToken: 'token-a3' });
     servers.a.session = { ...sessionA, csrfToken: 'token-a3' };
     await settle();
-    assert.equal(summary.textContent, "Couldn't load your tasks");
+    // The summary row collapses; the error card in the list slot says it, with Try again.
+    assert.equal(summary.textContent, '');
+    assert.equal(byId('summary-row').className.split(' ').includes('is-quiet'), true);
+    assert.equal(byId('sync-text').textContent, "Couldn't load your tasks");
+    assert.equal(byId('sync-note').className.split(' ').includes('is-block'), true);
     assert.equal(byId('sync-retry').hidden, false);
     assert.equal(byId('empty-state').hidden, true);
     byId('sync-retry').click();

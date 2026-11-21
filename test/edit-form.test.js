@@ -1,12 +1,11 @@
-// The edit form in src/app.js: the reminder editor in 'task' mode, run against the fake API.
+// The task sheet in src/app.js (title, tags, reminder picker, delete), run against the fake API.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createFakeApi, settle } from './fake-api.js';
 import { installDom } from './dom.js';
-import { toLocalInput } from '../src/reminders.js';
 
 const changedElsewhere = 'This task changed in another tab or device. The list is up to date now, so try again.';
-const couldNotSave = "Couldn't save your change. Check your connection and try again.";
+const couldNotSave = "Couldn't save your change.";
 
 test('edit form', async (t) => {
   const { byId, list } = installDom(t, { fetch: (...args) => server.fetch(...args) });
@@ -27,9 +26,10 @@ test('edit form', async (t) => {
 
   const layer = byId('reminder-layer');
   const editor = byId('reminder-editor');
-  const title = byId('reminder-title');
   const text = byId('edit-text');
-  const when = byId('reminder-when');
+  const on = byId('reminder-on');
+  const date = byId('reminder-date');
+  const time = byId('reminder-time');
   const repeat = byId('reminder-repeat');
   const save = byId('reminder-save');
   const message = byId('reminder-message');
@@ -37,12 +37,23 @@ test('edit form', async (t) => {
   const syncNote = byId('sync-note');
   const syncText = byId('sync-text');
   const row = (id) => list.children.find((item) => item.dataset.id === ids[id]);
-  const editButton = (id) => row(id).querySelector('.todo-edit');
+  const editButton = (id) => row(id).querySelector('.todo-open');
   const open = (id) => editButton(id).click();
   const type = (field, value) => {
     field.value = value;
     field.dispatchEvent(new Event('input'));
   };
+  // The picker: "YYYY-MM-DDTHH:MM" turns the Reminder switch on with that date and time; '' turns it off.
+  const setWhen = (value) => {
+    const [day = '', clock = ''] = value.split('T');
+    if (on.checked !== (value !== '')) {
+      on.checked = value !== '';
+      on.dispatchEvent(new Event('change'));
+    }
+    date.value = day;
+    type(time, clock);
+  };
+  const format = (ms, options) => new Intl.DateTimeFormat(undefined, options).format(new Date(ms));
   const key = (target, name) => {
     const event = Object.assign(new Event('keydown'), { key: name, preventDefault() {} });
     Object.defineProperty(event, 'target', { value: target });
@@ -54,24 +65,31 @@ test('edit form', async (t) => {
   const serverRow = (id) => server.rows.find((item) => item.id === ids[id]);
   Notification.permission = 'granted';
 
-  await t.test('each task has a labelled Edit button that opens the form prefilled', () => {
+  await t.test('each row body is one labelled button that opens the sheet prefilled', () => {
     const button = editButton('plants');
-    assert.equal(button.getAttribute('aria-label'), 'Edit “Water plants”');
+    // Another year: "{short date with year}, {time}", as the app formats it.
+    const when = `${format(later, { month: 'short', day: 'numeric', year: 'numeric' })}, ${format(later, { hour: 'numeric', minute: '2-digit' })}`;
+    assert.equal(button.getAttribute('aria-label'), `Water plants. Reminder ${when}, repeats weekly. Edit task`);
+    assert.equal(button.getAttribute('aria-haspopup'), 'dialog');
     assert.equal(button.getAttribute('aria-expanded'), 'false');
+    assert.equal(editButton('rent').getAttribute('aria-label'), 'Pay rent. Tags: home. Edit task');
+    // The row has no other controls: no pencil, trash, "+ tag", "+ reminder" or tag ×.
+    for (const control of ['.todo-edit', '.todo-delete', '.tag-add', '.reminder-add', '.tag-remove']) {
+      assert.equal(row('rent').querySelector(control), null, control);
+    }
     open('plants');
     assert.equal(layer.hidden, false);
-    assert.equal(title.textContent, 'Edit task');
-    assert.equal(byId('edit-text-field').hidden, false);
-    assert.equal(byId('reminder-for').hidden, true);
-    assert.equal(byId('reminder-remove').hidden, true);
     assert.equal(editor.getAttribute('aria-label'), 'Edit “Water plants”');
     assert.equal(text.value, 'Water plants');
-    assert.equal(when.value, toLocalInput(later));
+    assert.equal(on.checked, true);
+    assert.equal(byId('picker-detail').hidden, false);
+    assert.equal(date.value, '2099-03-04');
+    assert.equal(time.value, '09:30');
+    assert.equal(byId('reminder-date-value').textContent, format(later, { month: 'short', day: 'numeric', year: 'numeric' }));
+    assert.equal(byId('calendar').hidden, true, 'the calendar opens from the Date row');
     assert.equal(repeat.value, 'weekly');
     assert.equal(document.activeElement, text);
     assert.equal(editButton('plants').getAttribute('aria-expanded'), 'true');
-    // Its reminder chip isn't the opener: it isn't shown as expanded.
-    assert.equal(row('plants').querySelector('.reminder-chip').getAttribute('aria-expanded'), 'false');
     assert.equal(save.getAttribute('aria-disabled'), 'false');
     assert.equal(shownMessage(), null);
     byId('reminder-cancel').click();
@@ -81,7 +99,10 @@ test('edit form', async (t) => {
     open('rent');
     assert.equal(text.value, 'Pay rent');
     assert.deepEqual(byId('edit-tags').querySelectorAll('.tag-label').map((chip) => chip.textContent), ['#home']);
-    assert.equal(when.value, '');
+    assert.equal(on.checked, false);
+    assert.equal(byId('picker-detail').hidden, true);
+    assert.equal(date.value, '');
+    assert.equal(time.value, '');
     assert.equal(repeat.value, 'none');
     byId('reminder-cancel').click();
   });
@@ -89,12 +110,12 @@ test('edit form', async (t) => {
   await t.test('Cancel discards the changes and returns focus to the task', () => {
     open('rent');
     type(text, 'Something else #other');
-    type(when, '2099-01-01T12:00');
+    setWhen('2099-01-01T12:00');
     byId('reminder-cancel').click();
     assert.equal(layer.hidden, true);
     assert.equal(row('rent').querySelector('.todo-text').textContent, 'Pay rent');
     assert.equal(patches().length, 0);
-    assert.equal(focusKey(), JSON.stringify(['edit', ids.rent]));
+    assert.equal(focusKey(), JSON.stringify(['open', ids.rent]));
     open('rent');
     assert.equal(text.value, 'Pay rent', 'reopening starts from the saved task');
     byId('reminder-cancel').click();
@@ -107,7 +128,7 @@ test('edit form', async (t) => {
     assert.equal(layer.hidden, true);
     assert.equal(row('plants').querySelector('.todo-text').textContent, 'Water plants');
     assert.equal(patches().length, 0);
-    assert.equal(focusKey(), JSON.stringify(['edit', ids.plants]));
+    assert.equal(focusKey(), JSON.stringify(['open', ids.plants]));
   });
 
   await t.test('an empty title, or only #tags, is refused with the rule that disables Add', () => {
@@ -118,7 +139,7 @@ test('edit form', async (t) => {
       assert.equal(shownMessage(), 'Enter a task title.');
       assert.equal(message.getAttribute('role'), 'alert');
       assert.equal(text.getAttribute('aria-invalid'), 'true');
-      assert.equal(text.getAttribute('aria-describedby'), 'reminder-message edit-text-hint');
+      assert.equal(text.getAttribute('aria-describedby'), 'reminder-message');
       save.click(); // aria-disabled: nothing is sent, focus goes to the field
       assert.equal(layer.hidden, false);
       assert.equal(document.activeElement, text);
@@ -133,7 +154,7 @@ test('edit form', async (t) => {
     assert.equal(patches().length, 0);
   });
 
-  await t.test('an over-long title and an unreadable date are refused too', () => {
+  await t.test('an over-long title and an unreadable time are refused too', () => {
     open('rent');
     type(text, 'x'.repeat(2001));
     assert.equal(shownMessage(), 'Keep the title to 2,000 characters or fewer.');
@@ -141,17 +162,18 @@ test('edit form', async (t) => {
     type(text, 'Pay rent');
     assert.equal(shownMessage(), null);
     assert.equal(text.getAttribute('aria-invalid'), null);
-    // A half-typed date reads as '' with badInput set.
-    when.validity = { badInput: true };
-    type(when, '');
+    // A half-typed time reads as '' with badInput set.
+    setWhen('2099-01-01T12:00');
+    time.validity = { badInput: true };
+    type(time, '');
     assert.equal(shownMessage(), 'Enter a valid date and time.');
-    assert.equal(when.getAttribute('aria-invalid'), 'true');
+    assert.equal(time.getAttribute('aria-invalid'), 'true');
     assert.equal(save.getAttribute('aria-disabled'), 'true');
     save.click();
-    assert.equal(document.activeElement, when);
-    when.validity = { badInput: false };
-    type(when, '');
-    assert.equal(save.getAttribute('aria-disabled'), 'false', 'an empty date means no reminder');
+    assert.equal(document.activeElement, time);
+    time.validity = { badInput: false };
+    setWhen('');
+    assert.equal(save.getAttribute('aria-disabled'), 'false', 'the switch off means no reminder');
     byId('reminder-cancel').click();
     assert.equal(patches().length, 0);
   });
@@ -159,7 +181,7 @@ test('edit form', async (t) => {
   await t.test('Save updates text, tags, date and repeat at once with one PATCH, then confirms', async () => {
     open('rent');
     type(text, 'Pay rent early #bills'); // the title's #tag is added after the home chip
-    type(when, '2099-01-01T12:00');
+    setWhen('2099-01-01T12:00');
     repeat.value = 'daily';
     repeat.dispatchEvent(new Event('change'));
     save.click();
@@ -167,8 +189,8 @@ test('edit form', async (t) => {
     assert.equal(layer.hidden, true);
     assert.equal(row('rent').querySelector('.todo-text').textContent, 'Pay rent early');
     assert.deepEqual(row('rent').querySelectorAll('.tag-label').map((chip) => chip.dataset.tag), ['home', 'bills']);
-    assert.ok(row('rent').querySelector('.reminder-chip'));
-    assert.equal(focusKey(), JSON.stringify(['edit', ids.rent]));
+    assert.ok(row('rent').querySelector('.stamp'));
+    assert.equal(focusKey(), JSON.stringify(['open', ids.rent]));
     await settle();
     const due = Date.parse('2099-01-01T12:00:00');
     assert.deepEqual(JSON.parse(patches().at(-1).body), {
@@ -194,11 +216,11 @@ test('edit form', async (t) => {
     assert.deepEqual(serverRow('rent').tags, ['bills']);
   });
 
-  await t.test('emptying the date removes the reminder', async () => {
+  await t.test('turning the Reminder switch off removes the reminder', async () => {
     open('plants');
-    type(when, '');
+    setWhen('');
     save.click();
-    assert.equal(row('plants').querySelector('.reminder-chip'), null);
+    assert.equal(row('plants').querySelector('.stamp'), null);
     await settle();
     assert.deepEqual([serverRow('plants').due, serverRow('plants').repeat], [null, 'none']);
   });
@@ -358,16 +380,162 @@ test('edit form', async (t) => {
     assert.equal(syncNote.hidden, true);
   });
 
-  await t.test('the reminder editor still opens in reminder mode after the edit form', () => {
+  await t.test('"Add tag" in the sheet adds to the draft with the "+ tag" rules, and Save sends it', async () => {
+    const tagAdd = byId('edit-tag-add');
+    const field = byId('edit-tag-field');
+    const enter = (value) => {
+      field.value = value;
+      const event = Object.assign(new Event('keydown'), { key: 'Enter' });
+      field.dispatchEvent(event);
+    };
+    const chips = () => byId('edit-tags').querySelectorAll('.tag-label').map((chip) => chip.textContent);
+    open('rent');
+    const saved = chips();
+    assert.equal(field.hidden, true);
+    tagAdd.click();
+    assert.equal(field.hidden, false);
+    assert.equal(tagAdd.hidden, true);
+    assert.equal(document.activeElement, field);
+    enter('#Errands');
+    assert.deepEqual(chips(), [...saved, '#errands']);
+    assert.equal(field.hidden, false, 'Enter adds and stays open');
+    assert.equal(field.value, '');
+    enter('errands'); // a duplicate is refused and flashed
+    assert.deepEqual(chips(), [...saved, '#errands']);
+    assert.equal(field.getAttribute('aria-invalid'), 'true');
+    enter('##bad');
+    assert.deepEqual(chips(), [...saved, '#errands']);
+    const escape = Object.assign(new Event('keydown'), { key: 'Escape' });
+    field.dispatchEvent(escape);
+    assert.equal(field.hidden, true, 'Esc closes the field');
+    assert.equal(layer.hidden, false, 'and not the sheet');
+    assert.equal(document.activeElement, tagAdd);
+    const before = patches().length;
+    save.click();
+    await settle();
+    assert.equal(patches().length, before + 1);
+    assert.deepEqual(serverRow('rent').tags, [...saved, '#errands'].map((tag) => tag.slice(1)));
+    // Back as it was, through the sheet's ×.
+    open('rent');
+    byId('edit-tags').querySelectorAll('.tag-remove').find((button) => button.dataset.tag === 'errands').click();
+    save.click();
+    await settle();
+    assert.deepEqual(serverRow('rent').tags, saved.map((tag) => tag.slice(1)));
+  });
+
+  await t.test('Save keeps a tag still typed in the focused Add tag field', async () => {
+    open('rent');
+    const before = serverRow('rent').tags;
+    byId('edit-tag-add').click();
+    const field = byId('edit-tag-field');
+    field.value = 'Pending';
+    assert.equal(document.activeElement, field);
+    save.click(); // no blur first
+    await settle();
+    assert.deepEqual(serverRow('rent').tags, [...before, 'pending']);
+    open('rent');
+    byId('edit-tags').querySelectorAll('.tag-remove').find((button) => button.dataset.tag === 'pending').click();
+    save.click();
+    await settle();
+    assert.deepEqual(serverRow('rent').tags, before);
+  });
+
+  await t.test('focus stays in the sheet when Previous month disables itself', async () => {
     open('plants');
+    byId('reminder-date-button').click();
+    const prev = byId('cal-prev');
+    // Page to February 1970 by choosing a day there (the native input holds the date), then close and reopen.
+    date.value = '1970-02-10';
+    date.dispatchEvent(new Event('input'));
+    byId('reminder-date-button').click();
+    byId('reminder-date-button').click();
+    assert.equal(byId('cal-month').textContent,
+      new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(new Date(1970, 1, 1)));
+    assert.equal(prev.disabled, false);
+    prev.focus();
+    assert.equal(document.activeElement, prev);
+    prev.click(); // January 1970: the first month, so Previous month disables itself
+    assert.equal(prev.disabled, true);
+    assert.notEqual(document.activeElement, prev);
+    assert.ok(byId('cal-days').children.includes(document.activeElement), 'focus moved to a day in the calendar');
+    assert.equal(document.activeElement.dataset.date, '1970-01-01', 'the first available day');
     byId('reminder-cancel').click();
-    row('plants').querySelector('.reminder-add').click();
-    assert.equal(title.textContent, 'Reminder');
-    assert.equal(byId('edit-text-field').hidden, true);
-    assert.equal(byId('reminder-for').hidden, false);
-    assert.equal(byId('reminder-when-label').textContent, 'Date and time');
-    assert.equal(save.getAttribute('aria-disabled'), 'true', 'an empty date is still invalid here');
+  });
+
+  await t.test('the calendar picks a day; the time starts at 9:00 AM; any day can be picked, past ones too', async () => {
+    const today = new Date();
+    const pad = (value) => String(value).padStart(2, '0');
+    const iso = (day) => `${day.getFullYear()}-${pad(day.getMonth() + 1)}-${pad(day.getDate())}`;
+    open('plants');
+    assert.equal(on.checked, false, 'its reminder was removed above');
+    on.checked = true;
+    on.dispatchEvent(new Event('change'));
+    const days = () => byId('cal-days').children.filter((cell) => cell.dataset.date);
+    assert.equal(byId('calendar').hidden, false);
+    assert.ok(days().length >= 28);
+    assert.equal(byId('cal-month').textContent,
+      new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(new Date(`${date.value}T12:00`)));
+    const selected = days().filter((cell) => cell.getAttribute('aria-pressed') === 'true');
+    assert.deepEqual(selected.map((cell) => cell.dataset.date), [date.value]);
+    assert.equal(selected[0].tabIndex, 0, 'the chosen day holds the one tab stop');
+    // Today is marked; earlier days in the month can be picked too.
+    const todayCell = days().find((cell) => cell.dataset.date === iso(today));
+    if (todayCell) assert.equal(todayCell.getAttribute('aria-current'), 'date');
+    for (const cell of days()) {
+      assert.ok(!cell.disabled, cell.dataset.date);
+    }
+    assert.equal(byId('cal-prev').disabled, false, 'paging back is open');
+    // Next month, the 15th, at the default time, then repeat daily.
+    byId('cal-next').click();
+    const fifteenth = days().find((cell) => cell.dataset.date.endsWith('-15'));
+    assert.equal(byId('cal-prev').disabled, false);
+    fifteenth.click();
+    assert.equal(date.value, fifteenth.dataset.date);
+    assert.equal(time.value, '09:00');
+    assert.equal(fifteenth.getAttribute('aria-label'),
+      new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
+        .format(new Date(`${fifteenth.dataset.date}T12:00`)));
+    repeat.value = 'daily';
+    repeat.dispatchEvent(new Event('change'));
+    save.click();
+    await settle();
+    assert.deepEqual([serverRow('plants').due, serverRow('plants').repeat], [Date.parse(`${fifteenth.dataset.date}T09:00:00`), 'daily']);
+    // Arrow keys move by a day and a week.
+    open('plants');
+    byId('reminder-date-button').click();
+    assert.equal(byId('calendar').hidden, false);
+    const arrow = (cell, keyName) => {
+      const event = Object.assign(new Event('keydown'), { key: keyName, preventDefault() {} });
+      Object.defineProperty(event, 'target', { value: cell });
+      byId('cal-days').dispatchEvent(event);
+    };
+    const current = () => days().find((cell) => cell.tabIndex === 0).dataset.date;
+    const start = current();
+    arrow(days().find((cell) => cell.dataset.date === start), 'ArrowDown');
+    assert.equal(current(), iso(new Date(new Date(`${start}T12:00`).setDate(new Date(`${start}T12:00`).getDate() + 7))));
     byId('reminder-cancel').click();
+    // Off again for the tests after this one.
+    open('plants');
+    setWhen('');
+    save.click();
+    await settle();
+    assert.deepEqual([serverRow('plants').due, serverRow('plants').repeat], [null, 'none']);
+  });
+
+  await t.test('Delete task deletes at once and focuses the next row, or the composer', async () => {
+    server.rows.push({ ...base, id: '00000000-0000-4000-8000-0000000000a3', text: 'Temporary', tags: [], createdAt: 3 });
+    window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: server.session } }));
+    await settle();
+    const temporary = list.children.find((item) => item.querySelector('.todo-text').textContent === 'Temporary');
+    const index = list.children.indexOf(temporary);
+    const neighbour = list.children[index + 1] ?? list.children[index - 1];
+    temporary.querySelector('.todo-open').click();
+    byId('task-delete').click();
+    assert.equal(layer.hidden, true);
+    assert.equal(list.children.some((item) => item.querySelector('.todo-text').textContent === 'Temporary'), false);
+    assert.equal(focusKey(), JSON.stringify(['checkbox', neighbour.dataset.id]));
+    await settle();
+    assert.equal(server.rows.some((item) => item.text === 'Temporary'), false);
   });
 
   // Signing out clears the view and its reminder timer, so nothing keeps node:test alive.

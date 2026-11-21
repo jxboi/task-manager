@@ -13,20 +13,21 @@
     <main class="app">
       <header class="app-header">
         <h1 class="title" id="app-title" tabindex="-1">Tasks</h1>
-        <span class="account-name" id="account-name" hidden></span>
-        <button class="auth-link account-sign-out" id="account-sign-out" type="button" hidden>Sign out</button>
+        <div class="account">
+          <span class="account-name" id="account-name" hidden></span>
+          <button class="text-button account-sign-out" id="account-sign-out" type="button" hidden>Sign out</button>
+        </div>
       </header>
       <p class="visually-hidden" id="auth-status" role="status"></p>
-      <div class="auth-loading" id="auth-loading" aria-busy="true"><p hidden>Loading…</p></div>
+      <div class="auth-loading" id="auth-loading" aria-busy="true"><p class="visually-hidden" hidden>Loading</p></div>
       <section class="auth-card" id="auth-retry" hidden>
-        <p>Can't reach the server. Check your connection and try again.</p>
+        <p>Can't reach the server</p>
         <button class="auth-primary add-button" id="auth-retry-button" type="button">Try again</button>
       </section>
 
       <section id="auth-view" hidden>
-        <p class="summary auth-subtitle">Sign in to see your tasks.</p>
         <div class="auth-card">
-          <div class="auth-modes" role="radiogroup" aria-label="Account">
+          <div class="auth-modes seg" role="radiogroup" aria-label="Account">
             <label><input type="radio" name="account-mode" value="signin" checked><span>Sign in</span></label>
             <label><input type="radio" name="account-mode" value="signup"><span>Create account</span></label>
           </div>
@@ -55,7 +56,7 @@
                   autocapitalize="none" enterkeyhint="go" maxlength="128">
                 <button class="auth-show" id="auth-show" type="button" aria-label="Show password" aria-pressed="false">Show</button>
               </div>
-              <p class="auth-password-hint" id="auth-password-hint" hidden>At least 12 characters.</p>
+              <p class="visually-hidden" id="auth-password-hint" hidden>At least 12 characters</p>
               <p class="auth-field-error" id="auth-password-error" hidden></p>
             </div>
             <button class="auth-primary add-button" id="auth-submit" type="submit">
@@ -66,42 +67,47 @@
       </section>
 
       <div id="task-view" hidden>
-        <div class="summary-row">
+        <div class="summary-row is-quiet" id="summary-row">
           <p class="summary" id="summary" aria-live="polite"></p>
-          <button class="clear-filters" id="clear-filters" type="button" aria-label="Clear filters" hidden>
-            <span class="clear-long">Clear filters</span><span class="clear-short">Clear</span>
-          </button>
+          <button class="text-button clear-filters" id="clear-filters" type="button" aria-label="Clear filters" hidden>
+Clear</button>
         </div>
 
         <form class="add-form" id="add-form">
-          <label class="visually-hidden" for="new-todo">New task</label>
-          <input class="add-input" id="new-todo" type="text" placeholder="Add a task…" autocomplete="off" aria-describedby="add-hint">
-          <button class="add-button" id="add-button" type="submit" disabled>Add</button>
+          <div class="add-field">
+            <label class="visually-hidden" for="new-todo">New task</label>
+            <input class="add-input" id="new-todo" type="text" placeholder="New task" autocomplete="off" enterkeyhint="done"
+              aria-describedby="hint-limit">
+            <button class="add-button" id="add-button" type="submit" disabled>Add</button>
+          </div>
         </form>
-        <p class="hint" id="add-hint">
-          <span id="hint-default">Add tags with <code>#</code>, like <code>Pay rent #home</code></span>
-          <span id="hint-auto" hidden></span>
-          <span id="hint-limit" hidden></span>
-        </p>
+        <p class="add-error" id="hint-limit" hidden></p>
 
         <div class="auth-signout-note" id="auth-signout-note" hidden>
-          <p role="status">Couldn't sign out. Try again.</p>
-          <button class="auth-link" id="auth-dismiss-note" type="button" aria-label="Dismiss sign-out error">×</button>
+          <p class="sync-text" role="status">Couldn't sign out. Try again.</p>
+          <button class="text-button sync-dismiss" id="auth-dismiss-note" type="button" aria-label="Dismiss sign-out error">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
         </div>
 
         <div class="sync-note" id="sync-note" role="alert" hidden>
+          <span class="sync-icon" aria-hidden="true">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="m2 2 20 20M5.78 5.78A7 7 0 0 0 9 19h8.5a4.5 4.5 0 0 0 1.31-.2M21.53 16.05A4.5 4.5 0 0 0 17.5 10h-1.79A7 7 0 0 0 9.26 5.05"/></svg>
+          </span>
           <p class="sync-text" id="sync-text"></p>
-          <button class="auth-link" id="sync-retry" type="button" hidden>Try again</button>
-          <button class="auth-link sync-dismiss" id="sync-dismiss" type="button" aria-label="Dismiss message">×</button>
+          <button class="text-button sync-retry" id="sync-retry" type="button" hidden>Try again</button>
+          <button class="text-button sync-dismiss" id="sync-dismiss" type="button" aria-label="Dismiss message">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
         </div>
 
         <div class="status" id="status" role="status">
           <div class="banner" id="banner" hidden>
             <span class="banner-icon" id="banner-icon"></span>
             <p class="banner-text" id="banner-text"></p>
-            <button class="banner-dismiss" id="banner-dismiss" type="button" aria-label="Dismiss">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true" focusable="false">
-                <path d="M6 6l12 12M18 6L6 18"/>
+            <button class="banner-dismiss" id="banner-dismiss" type="button" aria-label="Dismiss notifications notice">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true" focusable="false">
+                <path d="M18 6 6 18M6 6l12 12"/>
               </svg>
             </button>
           </div>
@@ -115,14 +121,8 @@
         <ul class="todo-list" id="todo-list" hidden></ul>
 
         <div class="empty-state" id="empty-state" hidden>
-          <div class="empty-icon" aria-hidden="true">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M9 11l3 3 8-8"/>
-              <path d="M20 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
-            </svg>
-          </div>
+          <div class="empty-page" aria-hidden="true"><i></i><i></i><i></i></div>
           <h2 class="empty-title">No tasks yet</h2>
-          <p class="empty-body">Add your first task above to get started.</p>
         </div>
 
         <p class="footer" id="footer" hidden></p>
@@ -131,88 +131,116 @@
 
     <div class="reminder-layer" id="reminder-layer" hidden>
       <div class="reminder-scrim" id="reminder-scrim"></div>
-      <div class="reminder-editor" id="reminder-editor" role="dialog">
+      <div class="reminder-editor" id="reminder-editor" role="dialog" aria-modal="true">
         <span class="reminder-edge" id="reminder-start" tabindex="0"></span>
         <div class="reminder-grab" aria-hidden="true"></div>
-        <h2 class="reminder-title" id="reminder-title">Reminder</h2>
-        <p class="reminder-for" id="reminder-for"></p>
-        <div class="reminder-field" id="edit-text-field" hidden>
-          <label class="reminder-label" for="edit-text">Task</label>
-          <input class="reminder-control" id="edit-text" type="text" autocomplete="off" enterkeyhint="done"
-            aria-describedby="edit-text-hint">
-          <p class="reminder-help" id="edit-text-hint">Add tags with <code>#</code>, like <code>Pay rent #home</code></p>
-          <div class="todo-tags edit-tags" id="edit-tags" role="group" aria-label="Tags"></div>
+        <div class="sheet-bar">
+          <button class="text-button reminder-cancel" id="reminder-cancel" type="button">Cancel</button>
+          <h2 class="reminder-title" id="reminder-title">Edit task</h2>
+          <button class="text-button reminder-save" id="reminder-save" type="button">Save</button>
         </div>
-        <div class="reminder-field">
-          <label class="reminder-label" for="reminder-when" id="reminder-when-label">Date and time</label>
-          <input class="reminder-control" id="reminder-when" type="datetime-local">
-        </div>
-        <div class="reminder-field">
-          <label class="reminder-label" for="reminder-repeat">Repeat</label>
-          <select class="reminder-control" id="reminder-repeat" aria-describedby="reminder-repeat-help">
-            <option value="none">Does not repeat</option>
-            <option value="daily">Daily</option>
-            <option value="weekly">Weekly</option>
-          </select>
-          <p class="reminder-help" id="reminder-repeat-help" hidden></p>
-        </div>
-        <div aria-live="polite">
-          <p class="reminder-message" id="reminder-message" hidden>
-            <span class="reminder-message-icon" id="reminder-message-icon"></span>
-            <span id="reminder-message-text"></span>
-          </p>
-        </div>
-        <span class="visually-hidden" id="reminder-announcer" aria-live="polite"></span>
-        <p class="reminder-note">Reminders alert only while this page is open in a browser tab.</p>
-        <div class="reminder-actions" id="reminder-actions">
-          <button class="reminder-remove" id="reminder-remove" type="button" aria-label="Remove reminder">
-            <span class="remove-short">Remove</span><span class="remove-long">Remove reminder</span>
-          </button>
-          <button class="reminder-cancel" id="reminder-cancel" type="button">Cancel</button>
-          <button class="reminder-save" id="reminder-save" type="button">Save</button>
+        <div class="sheet-body" id="sheet-body">
+          <div class="sheet-section" id="edit-text-field">
+            <label class="reminder-label" for="edit-text">Task</label>
+            <input class="reminder-control" id="edit-text" type="text" autocomplete="off" enterkeyhint="done">
+          </div>
+          <div class="sheet-section">
+            <span class="reminder-label" id="edit-tags-label">Tags</span>
+            <div class="edit-tags-row">
+              <div class="edit-tags" id="edit-tags" role="group" aria-labelledby="edit-tags-label"></div>
+              <button class="text-button tag-add" id="edit-tag-add" type="button">
+                <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg>Add tag
+              </button>
+              <input class="tag-field" id="edit-tag-field" type="text" autocomplete="off" autocapitalize="none"
+                enterkeyhint="done" aria-label="New tag" hidden>
+            </div>
+          </div>
+          <div class="sheet-section">
+            <div class="picker" id="picker">
+              <div class="picker-row">
+                <span class="picker-icon" aria-hidden="true"><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></span>
+                <label class="picker-key" for="reminder-on">Reminder</label>
+                <input class="switch" id="reminder-on" type="checkbox" role="switch">
+              </div>
+              <div class="picker-detail" id="picker-detail" hidden>
+                <div class="picker-row">
+                  <span class="picker-icon" aria-hidden="true"><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg></span>
+                  <span class="picker-key" id="reminder-date-key">Date</span>
+                  <button class="picker-value" id="reminder-date-button" type="button" aria-expanded="false"
+                    aria-controls="calendar" aria-labelledby="reminder-date-key reminder-date-value">
+                    <span id="reminder-date-value"></span><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg>
+                  </button>
+                  <input class="visually-hidden" id="reminder-date" type="date" tabindex="-1" aria-hidden="true">
+                </div>
+                <div class="calendar" id="calendar" hidden>
+                  <div class="cal-head">
+                    <h3 class="cal-month" id="cal-month" aria-live="polite"></h3>
+                    <button class="cal-nav" id="cal-prev" type="button" aria-label="Previous month"><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m15 18-6-6 6-6"/></svg></button>
+                    <button class="cal-nav" id="cal-next" type="button" aria-label="Next month"><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m9 18 6-6-6-6"/></svg></button>
+                  </div>
+                  <div class="cal-weekdays" id="cal-weekdays" aria-hidden="true"></div>
+                  <div class="cal-days" id="cal-days" role="group" aria-labelledby="cal-month"></div>
+                </div>
+                <div class="picker-row">
+                  <span class="picker-icon" aria-hidden="true"><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>
+                  <label class="picker-key" for="reminder-time">Time</label>
+                  <input class="time-input" id="reminder-time" type="time">
+                </div>
+                <div class="picker-row">
+                  <span class="picker-icon" aria-hidden="true"><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg></span>
+                  <label class="picker-key" for="reminder-repeat">Repeat</label>
+                  <select class="repeat-select" id="reminder-repeat">
+                    <option value="none">Never</option>
+                    <option value="daily">Daily</option>
+                    <option value="weekly">Weekly</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+            <div aria-live="polite">
+              <p class="reminder-message" id="reminder-message" hidden>
+                <span class="reminder-message-icon" id="reminder-message-icon"></span>
+                <span id="reminder-message-text"></span>
+              </p>
+            </div>
+          </div>
+          <div class="sheet-section">
+            <button class="text-button task-delete" id="task-delete" type="button">
+              <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>Delete task
+            </button>
+          </div>
+          <span class="visually-hidden" id="reminder-announcer" aria-live="polite"></span>
         </div>
         <span class="reminder-edge" id="reminder-end" tabindex="0"></span>
       </div>
     </div>
 
-    <template id="trash-icon">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-        <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/>
-      </svg>
-    </template>
-
-    <template id="pencil-icon">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-        <path d="M17 3l4 4L8 20l-5 1 1-5L17 3z"/>
-      </svg>
-    </template>
-
     <template id="x-icon">
-      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true" focusable="false">
-        <path d="M6 6l12 12M18 6L6 18"/>
-      </svg>
-    </template>
-
-    <template id="bell-icon">
-      <svg class="icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-        <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0"/>
+      <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+        <path d="M18 6 6 18M6 6l12 12"/>
       </svg>
     </template>
 
     <template id="repeat-icon">
-      <svg class="icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-        <path d="M17 2l4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3"/>
+      <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+        <path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>
       </svg>
     </template>
 
     <template id="alert-icon">
-      <svg class="icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+      <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
         <circle cx="12" cy="12" r="10"/><path d="M12 7v6M12 17h.01"/>
       </svg>
     </template>
 
+    <template id="clock-icon">
+      <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+        <circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>
+      </svg>
+    </template>
+
     <template id="info-icon">
-      <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+      <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
         <circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>
       </svg>
     </template>

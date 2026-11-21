@@ -1,27 +1,41 @@
+/* Tasks: iPhone redesign (spec: redesign/spec.md). Light only. One accent (ink), system UI type,
+   mono for time stamps and counts only. 4px grid. Designed at 390×844, works down to 375. */
+
 :root {
-  --color-bg: #f7f7f8;
-  --color-surface: #ffffff;
-  --color-border: #e4e4e7;
-  --color-text: #18181b;
-  --color-muted: #71717a;
-  --color-accent: #4f46e5;
-  --color-accent-hover: #4338ca;
-  --color-danger: #dc2626;
-  --color-done: #a1a1aa;
-  --color-accent-tint: #eef2ff;
-  --color-over: #b91c1c;
-  --color-over-bg: #fef2f2;
-  --color-over-bg-hover: #fee2e2;
-  --color-meta: #3f3f46;
-  --color-meta-done: #52525b;
-  --color-field-border: #71717a;
-  --color-warn-bg: #fef3c7;
-  --color-warn-text: #92400e;
-  --radius: 10px;
-  --radius-checkbox: 6px;
-  --radius-icon-button: 8px;
-  --font: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --page: #f5f3ee;
+  --surface: #ffffff;
+  --raised: #efece6;
+  --text: #1f1b16;
+  --text-2: #5e554a;
+  --text-3: #6b6358;
+  --hairline: rgb(31 27 22 / 0.10);
+  --field: #8a8174;
+  --ink: #1f5f55;
+  --ink-press: #184c44;
+  --ink-tint: #e3eeea;
+  --over: #a3361f;
+  --over-bg: #fbeee8;
+  --over-peak: #f6dfd5;
+  --warn: #6e4610;
+  --warn-bg: #f7eed8;
+  --scrim: rgb(31 27 22 / 0.40);
+  --shadow-sheet: 0 -8px 24px rgb(31 27 22 / 0.08);
+  --shadow-sm: 0 1px 2px rgb(31 27 22 / 0.05);
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --side: max(20px, env(safe-area-inset-left), env(safe-area-inset-right));
 }
+
+/* Tag dots: decorative, the "#name" carries the meaning. */
+[data-color="0"] { --dot: #b4472c; }
+[data-color="1"] { --dot: #a86a12; }
+[data-color="2"] { --dot: #6d7a1f; }
+[data-color="3"] { --dot: #2f7d4a; }
+[data-color="4"] { --dot: #1e7a86; }
+[data-color="5"] { --dot: #3a62b5; }
+[data-color="6"] { --dot: #8a4a9e; }
+[data-color="7"] { --dot: #b23c6a; }
 
 *,
 *::before,
@@ -33,643 +47,717 @@
   display: none !important;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 body {
   margin: 0;
-  padding: 40px max(32px, env(safe-area-inset-right))
-    calc(40px + env(safe-area-inset-bottom)) max(32px, env(safe-area-inset-left));
-  background: var(--color-bg);
-  color: var(--color-text);
-  font: 14px/20px var(--font);
+  padding: calc(8px + env(safe-area-inset-top)) max(20px, env(safe-area-inset-right))
+    calc(40px + env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+  background: var(--page);
+  color: var(--text);
+  font: 16px/24px var(--font);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
 }
 
 .visually-hidden {
-  position: absolute;
+  position: absolute !important;
   width: 1px;
   height: 1px;
   margin: -1px;
   padding: 0;
   overflow: hidden;
   clip: rect(0 0 0 0);
+  clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
 }
 
 :focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 1px;
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+/* A text button: no fill, 44 tall. */
+.text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--ink);
+  font-weight: 500;
+  transition: transform 120ms var(--ease), color 120ms var(--ease);
+}
+
+.text-button:active {
+  transform: scale(0.98);
 }
 
 .app {
-  max-width: 520px;
+  max-width: 560px;
   margin: 0 auto;
 }
 
+/* --- Header -------------------------------------------------------------------------------- */
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+}
+
 .title {
-  margin: 0 0 4px;
-  font-size: 24px;
-  line-height: 32px;
-  font-weight: 600;
+  font-size: 28px;
+  line-height: 36px;
+  font-weight: 500;
+}
+
+.title:focus {
+  outline: none;
+}
+
+.account {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.account-name {
+  max-width: 140px;
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 20px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.account-sign-out {
+  margin-right: -4px;
 }
 
 .summary-row {
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  column-gap: 8px;
-  margin: 0 0 24px;
+  align-items: center;
+  gap: 12px;
+  min-height: 20px;
+  margin-bottom: 16px;
+}
+
+/* Signed out, loading or a load error: the row collapses; its live region stays for screen readers. */
+.summary-row.is-quiet {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
 }
 
 .summary {
-  margin: 0;
-  color: var(--color-muted);
+  flex: 1;
+  min-width: 0;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 20px;
 }
 
 .clear-filters {
-  padding: 2px 0;
-  border: 0;
-  background: none;
-  color: var(--color-accent-hover);
-  font: inherit;
-  font-weight: 600;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-  cursor: pointer;
+  min-height: 20px;
+  margin: -12px -4px;
+  padding: 12px 4px;
+  font-size: 13px;
+  line-height: 20px;
 }
 
-.clear-short {
-  display: none;
+#task-view {
+  margin-top: 0;
 }
 
-/* Add form */
+#task-view > .summary-row.is-quiet + .add-form {
+  margin-top: 16px;
+}
+
+/* --- Composer ------------------------------------------------------------------------------- */
 
 .add-form {
+  margin: 0;
+}
+
+.add-field {
   display: flex;
+  align-items: center;
   gap: 8px;
+  height: 48px;
+  padding: 1px 1px 1px 16px;
+  border: 1px solid var(--field);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.add-field:focus-within {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
 }
 
 .add-input {
   flex: 1;
   min-width: 0;
-  height: 44px;
-  padding: 0 14px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  background: var(--color-surface);
-  color: inherit;
-  font: inherit;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 16px;
+  outline: none;
 }
 
 .add-input::placeholder {
-  color: var(--color-muted);
-}
-
-.add-input:focus-visible {
-  border-color: transparent;
+  color: var(--text-3);
+  opacity: 1;
 }
 
 .add-button {
-  height: 44px;
-  padding: 0 18px;
+  flex: none;
+  height: 40px;
+  padding: 0 16px;
   border: 0;
-  border-radius: var(--radius);
-  background: var(--color-accent);
+  border-radius: 8px;
+  background: var(--ink);
   color: #fff;
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
+  font-weight: 500;
+  transition: background-color 120ms var(--ease), transform 120ms var(--ease);
 }
 
-.add-button:hover:not(:disabled) {
-  background: var(--color-accent-hover);
+/* In the composer the button is a 44x44 hit area; a transparent 2px border keeps the
+   visible fill at 40px, inset 3px from the field like before. */
+.add-field .add-button {
+  height: 44px;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  background-clip: padding-box;
+}
+
+.add-field .add-button:focus-visible {
+  outline-offset: 0;
+}
+
+.add-button:active:not(:disabled) {
+  background-color: var(--ink-press);
+  transform: scale(0.98);
 }
 
 .add-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+  background-color: var(--raised);
+  color: var(--text-3);
+  cursor: default;
 }
 
-.hint {
-  margin: 6px 2px 20px;
-  color: var(--color-muted);
-  font-size: 12px;
-  line-height: 16px;
+.add-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--over);
+  font-size: 13px;
+  line-height: 20px;
 }
 
-.hint.is-limit > :not(#hint-limit) {
-  display: none; /* the reason Add is disabled replaces the tag hints */
-}
+/* --- Notices -------------------------------------------------------------------------------- */
 
-.hint code,
-.reminder-help code {
-  padding: 0 4px;
-  border-radius: 4px;
-  background: #f4f4f5;
-  color: #3f3f46;
-  font: inherit;
+.status {
+  margin: 0;
 }
-
-/* Status line: notification note and repeat rollover message */
 
 .banner {
   display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  margin: 0 0 12px;
-  padding: 10px 12px;
-  border-radius: var(--radius);
-  font-size: 13px;
-  line-height: 18px;
-}
-
-/* Blocked notifications: one muted line (it wraps only at larger text sizes), no fill, so it
-   never outweighs the task list. Its copy is short enough for one line at 375px. */
-.banner.is-note {
+  align-items: center;
   gap: 8px;
-  margin-top: -12px; /* 8px under the add hint (its margin is 20px) */
-  padding: 0 2px;
-  border-radius: 0;
-  color: #52525b;
-}
-
-.banner.is-note .banner-icon {
-  margin-top: 2px;
-}
-
-.banner.is-note .banner-icon svg {
-  width: 14px;
-  height: 14px;
-}
-
-.banner.is-info {
-  background: var(--color-accent-tint);
-  color: var(--color-meta);
+  margin-top: 8px;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 20px;
 }
 
 .banner-icon {
   display: flex;
-  margin-top: 1px;
-}
-
-.banner.is-info .banner-icon {
-  color: var(--color-accent);
+  color: var(--text-2);
 }
 
 .banner-text {
   flex: 1;
-  margin: 0;
+  min-width: 0;
 }
 
 .banner-dismiss {
-  flex: none;
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
-  margin: -3px -4px -3px 0;
-  padding: 0;
+  width: 44px;
+  height: 44px;
+  margin: -12px -14px -12px 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: 10px;
   background: none;
-  color: inherit;
-  cursor: pointer;
+  color: var(--text-2);
 }
 
-/* Tag palette: tags.js hashes each tag into one of these slots (PALETTE_SIZE).
-   Every pair passes AA, and so does white on --tag-fg (selected filter chip). */
+.auth-signout-note,
+.sync-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 4px 4px 4px 16px;
+  border-radius: 12px;
+  background: var(--over-bg);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 20px;
+}
 
-[data-color="0"] { --tag-bg: #fee2e2; --tag-fg: #991b1b; }
-[data-color="1"] { --tag-bg: #ffedd5; --tag-fg: #9a3412; }
-[data-color="2"] { --tag-bg: #fef3c7; --tag-fg: #92400e; }
-[data-color="3"] { --tag-bg: #dcfce7; --tag-fg: #166534; }
-[data-color="4"] { --tag-bg: #ccfbf1; --tag-fg: #115e59; }
-[data-color="5"] { --tag-bg: #e0f2fe; --tag-fg: #075985; }
-[data-color="6"] { --tag-bg: #ede9fe; --tag-fg: #5b21b6; }
-[data-color="7"] { --tag-bg: #fce7f3; --tag-fg: #9d174d; }
+.sync-icon {
+  display: flex;
+  color: var(--over);
+}
 
-/* Filter bar */
+.sync-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sync-note .text-button {
+  min-width: 44px;
+  justify-content: center;
+}
+
+.sync-dismiss {
+  color: var(--text-2);
+}
+
+/* The load error: a card in the list slot. */
+.sync-note.is-block {
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0;
+  margin-top: 28px;
+  padding: 20px;
+  border: 1px solid var(--hairline);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  font-size: 16px;
+  line-height: 24px;
+}
+
+.sync-note.is-block .sync-icon {
+  margin-right: 8px;
+  color: var(--text-2);
+}
+
+.sync-note.is-block .sync-text {
+  flex: none;
+}
+
+.sync-note.is-block .sync-retry {
+  flex: 1 0 100%;
+  justify-content: center;
+  height: 48px;
+  margin-top: 20px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--raised);
+  color: var(--text);
+  font-weight: 400;
+}
+
+.sync-note.is-block .sync-dismiss {
+  display: none;
+}
+
+/* --- Filter bar ----------------------------------------------------------------------------- */
 
 .filter-wrap {
   position: relative;
-  margin-bottom: 12px;
+  margin: 16px calc(-1 * var(--side)) 0 0;
+}
+
+.filter-wrap::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 24px;
+  background: linear-gradient(to right, rgb(245 243 238 / 0), var(--page));
+  pointer-events: none;
 }
 
 .filter-bar {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
+  margin: -6px 0;
+  padding: 6px 24px 6px 4px;
+  margin-left: -4px;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+}
+
+.filter-bar::-webkit-scrollbar {
+  display: none;
 }
 
 .filter-chip {
+  position: relative;
   display: inline-flex;
+  flex: none;
   align-items: center;
-  gap: 6px;
-  height: 28px;
+  gap: 8px;
+  height: 32px;
   padding: 0 10px;
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
-  background: var(--color-surface);
-  color: var(--color-text);
-  font: inherit;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
   font-size: 13px;
+  line-height: 20px;
   white-space: nowrap;
-  cursor: pointer;
+  scroll-snap-align: start;
+  transition: background-color 120ms var(--ease), transform 120ms var(--ease);
 }
 
-.filter-chip:hover {
-  border-color: #d4d4d8;
+.filter-chip::after {
+  content: "";
+  position: absolute;
+  inset: -6px -2px;
 }
 
-.filter-count {
-  color: var(--color-muted);
-  font-size: 12px;
+.filter-chip:active {
+  transform: scale(0.98);
 }
 
-/* Unselected tag: a dot in the tag color (decorative). */
 .filter-chip[data-color]::before {
   content: "";
   flex: none;
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  background: var(--tag-fg);
+  background: var(--dot);
 }
 
-/* Selected: solid fill plus a checkmark, so the state never relies on color alone. */
+.filter-count {
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
 .filter-chip[aria-pressed="true"] {
-  border-color: var(--tag-fg);
-  background: var(--tag-fg);
+  border-color: var(--ink);
+  background: var(--ink);
   color: #fff;
-  font-weight: 600;
-}
-
-.filter-all[aria-pressed="true"] {
-  border-color: #3f3f46;
-  background: #3f3f46;
 }
 
 .filter-chip[aria-pressed="true"] .filter-count {
   color: #fff;
-  font-weight: 400;
 }
 
+/* Selected: a check in place of the dot. */
 .filter-chip[aria-pressed="true"]::before {
   content: "";
   flex: none;
-  width: 5px;
-  height: 9px;
-  margin: 0 1px 0 2px;
-  border: solid currentColor;
-  border-width: 0 2px 2px 0;
+  width: 9px;
+  height: 5px;
+  margin: -3px 1px 0;
+  border: solid #fff;
+  border-width: 0 0 1.5px 1.5px;
   border-radius: 0;
   background: none;
-  transform: translateY(-1px) rotate(45deg);
+  transform: rotate(-45deg);
 }
 
-/* List */
+/* --- List ----------------------------------------------------------------------------------- */
 
 .todo-list {
-  margin: 0;
+  margin: 12px 0 0;
   padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
   list-style: none;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
+}
+
+#task-view > .add-form + .auth-signout-note[hidden] + .sync-note[hidden] + .status + .filter-wrap[hidden] + .todo-list,
+.todo-list.is-loading {
+  margin-top: 28px;
 }
 
 .todo {
+  position: relative;
   display: flex;
   align-items: flex-start;
-  gap: 12px;
-  min-height: 52px;
-  padding: 14px 12px 14px 16px;
+  min-height: 56px;
+  padding: 0 16px 0 4px;
 }
 
-.todo + .todo {
-  border-top: 1px solid var(--color-border);
+.todo + .todo::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50px;
+  right: 0;
+  height: 1px;
+  background: var(--hairline);
 }
 
-.todo:first-child {
-  border-radius: var(--radius) var(--radius) 0 0;
-}
-
-.todo:last-child {
-  border-radius: 0 0 var(--radius) var(--radius);
-}
-
-.todo:only-child {
-  border-radius: var(--radius);
-}
-
-.todo:hover {
-  background: #fafafa;
-}
-
+/* Checkbox: a 22px box with a 44×44 hit area. */
 .todo-checkbox {
+  flex: none;
   appearance: none;
-  flex: none;
-  width: 20px;
-  height: 20px;
-  margin: 0;
-  border: 1.5px solid var(--color-muted);
-  border-radius: var(--radius-checkbox);
-  background: var(--color-surface) center / 14px 14px no-repeat;
-  cursor: pointer;
-}
-
-.todo-checkbox:checked {
-  border-color: var(--color-accent);
-  background-color: var(--color-accent);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12l5 5 9-10'/%3E%3C/svg%3E");
-}
-
-.todo-body {
-  flex: 1;
-  min-width: 0;
-}
-
-.todo-text {
-  display: block;
-  overflow-wrap: anywhere;
-  cursor: pointer;
-}
-
-.todo.is-done .todo-text {
-  color: var(--color-done);
-  text-decoration: line-through;
-}
-
-.todo-actions {
-  flex: none;
-  display: flex;
-  margin: -6px 0;
-}
-
-/* Edit and delete: the same quiet icon button, shown on row hover or focus (always on touch). */
-.todo-edit,
-.todo-delete {
-  flex: none;
-  display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
+  -webkit-appearance: none;
+  position: relative;
+  width: 44px;
+  height: 44px;
+  margin: 2px 2px 0 0;
   border: 0;
-  border-radius: var(--radius-icon-button);
-  background: transparent;
-  color: var(--color-muted);
+  border-radius: 10px;
+  background: none;
   cursor: pointer;
-  opacity: 0;
 }
 
-.todo:hover :is(.todo-edit, .todo-delete),
-.todo:focus-within :is(.todo-edit, .todo-delete),
-.todo-edit[aria-expanded="true"] {
-  opacity: 1;
+.todo-checkbox::before {
+  content: "";
+  position: absolute;
+  top: 11px;
+  left: 11px;
+  width: 22px;
+  height: 22px;
+  border: 1.5px solid var(--field);
+  border-radius: 6px;
+  background: var(--surface);
+  transition: background-color 120ms var(--ease), border-color 120ms var(--ease);
 }
 
-.todo-edit:hover,
-.todo-edit:focus-visible,
-.todo-edit[aria-expanded="true"] {
-  background: #f4f4f5;
-  color: var(--color-text);
-}
-
-.todo:hover .todo-delete,
-.todo-delete:focus-visible {
-  background: #fef2f2;
-  color: var(--color-danger);
-}
-
-/* Tags on a todo */
-
-.todo-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+/* A title-only row is 56 tall with its text centered: the box lines up with it. */
+.todo:not(:has(.todo-meta)) .todo-checkbox {
   margin-top: 6px;
 }
 
-.tag {
-  display: inline-flex;
-  align-items: center;
-  max-width: 100%;
-  height: 22px;
-  border-radius: 6px;
-  background: var(--tag-bg);
-  color: var(--tag-fg);
-  font-size: 12px;
-  line-height: 16px;
+.todo:not(:has(.todo-meta)) .todo-open {
+  justify-content: center;
 }
 
-.todo.is-done .tag {
-  opacity: 0.6;
+.todo-checkbox:checked::before {
+  border-color: var(--ink);
+  background: var(--ink);
 }
 
-/* Tag matches an active filter: bold plus a ring in its own color. */
-.tag.is-match {
-  font-weight: 600;
-  box-shadow: inset 0 0 0 1px var(--tag-fg);
-}
-
-/* A long tag shrinks with an ellipsis so the chip and its × stay inside the row. */
-.tag-label {
-  min-width: 0;
-  height: 100%;
-  padding: 0 8px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  border: 0;
-  border-radius: 6px;
-  background: none;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-}
-
-.tag-remove {
-  position: relative;
-  flex: none;
-  display: grid;
-  place-items: center;
-  width: 16px;
-  height: 16px;
-  margin: 0 2px 0 -4px;
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
-  background: none;
-  color: inherit;
-  opacity: 0.75;
-  cursor: pointer;
-}
-
-/* 24x24 hit area around the 16px button. With the -4px margin it stops where the label's
-   text ends, so clicking the name never removes the tag. */
-.tag-remove::before {
+.todo-checkbox:checked::after {
   content: "";
   position: absolute;
-  inset: -4px;
+  top: 17px;
+  left: 17px;
+  width: 10px;
+  height: 6px;
+  border: solid #fff;
+  border-width: 0 0 2px 2px;
+  transform: rotate(-45deg);
 }
 
-.tag-remove:hover {
-  opacity: 1;
+.todo-checkbox:focus-visible {
+  outline: none;
 }
 
-.tag-add {
-  height: 22px;
-  padding: 0 8px;
-  border: 1px dashed #d4d4d8;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--color-muted);
-  font: inherit;
-  font-size: 12px;
-  line-height: 20px;
-  cursor: pointer;
+.todo-checkbox:focus-visible::before {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
 }
 
-.tag-add:hover {
-  border-color: var(--color-muted);
-  color: var(--color-text);
-}
-
-.tag-field {
-  width: 120px;
-  height: 22px;
-  padding: 0 6px;
+/* The body: one button that opens the task sheet. */
+.todo-open {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+  min-height: 56px;
+  padding: 12px 0;
   border: 0;
-  border-radius: 6px;
-  background: var(--color-surface);
-  color: inherit;
-  font: inherit;
-  font-size: 12px;
-  outline: 2px solid var(--color-accent);
-  outline-offset: 0;
+  background: none;
+  text-align: left;
 }
 
-.tag-field[aria-invalid="true"] {
-  outline-color: var(--color-danger);
+.todo-open:focus-visible {
+  outline-offset: -2px;
+  border-radius: 10px;
 }
 
-/* Reminders on a todo: the due chip sits on a meta line under the text */
+.todo-text {
+  max-width: 100%;
+  font-size: 16px;
+  line-height: 24px;
+  overflow-wrap: anywhere;
+}
 
 .todo-meta {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px 8px;
-  margin-top: 6px;
+  max-width: 100%;
 }
 
-.icon {
-  flex: none;
+.todo-meta:empty {
+  display: none;
 }
 
-.reminder-chip {
+.todo.is-done .todo-text {
+  color: var(--text-3);
+  text-decoration: line-through;
+}
+
+/* The signature time stamp: mono, a 16px clock. */
+.stamp {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0 4px;
+  gap: 4px 8px;
   max-width: 100%;
-  min-height: 22px;
-  padding: 0 8px;
-  border: 1px solid #d4d4d8;
-  border-radius: 6px;
-  background: var(--color-surface);
-  color: var(--color-meta);
-  font: inherit;
-  font-size: 12px;
+  color: var(--text-2);
+  font-size: 13px;
   line-height: 20px;
-  text-align: left;
-  cursor: pointer;
 }
 
-.reminder-chip:hover {
-  border-color: var(--color-muted);
-}
-
-.reminder-repeat {
+.stamp-when,
+.stamp-repeat {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  margin-left: 2px;
-  padding-left: 6px;
-  border-left: 1px solid #d4d4d8;
+  gap: 8px;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
-/* Overdue: one light chip, alert icon plus "Overdue · {due}" in red, so never color alone.
-   Never on done rows. */
-.reminder-chip.is-overdue {
-  border-color: var(--color-over);
-  background: var(--color-surface);
-  color: var(--color-over);
-  font-weight: 600;
-}
-
-.reminder-chip.is-overdue .reminder-repeat {
-  border-left-color: #fca5a5;
-}
-
-/* Done: plain muted text that still passes AA (no strikethrough, no opacity). */
-.todo.is-done .reminder-chip {
-  background: transparent;
-  color: var(--color-meta-done);
-}
-
-/* "+ reminder": the same dashed pattern as "+ tag". */
-.reminder-add {
-  display: inline-flex;
-  align-items: center;
+.stamp-repeat {
   gap: 4px;
-  height: 22px;
+}
+
+/* A ticked row's stamp flows into the meta line, so "Daily" and the tags can share a line. */
+.todo.is-ticked .stamp {
+  display: contents;
+}
+
+.stamp-lead {
+  white-space: nowrap;
+}
+
+.stamp .icon {
+  color: var(--text-2);
+}
+
+.todo.is-done .stamp,
+.todo.is-done .stamp .icon,
+.todo.is-done .tag {
+  color: var(--text-3);
+}
+
+/* Tags: #name with a 6px dot on a raised chip. */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  height: 24px;
   padding: 0 8px;
-  border: 1px dashed #d4d4d8;
   border-radius: 6px;
-  background: transparent;
-  color: var(--color-muted);
-  font: inherit;
-  font-size: 12px;
+  background: var(--raised);
+  color: var(--text-2);
+  font-size: 13px;
   line-height: 20px;
-  cursor: pointer;
+  white-space: nowrap;
 }
 
-.reminder-add:hover {
-  border-color: var(--color-muted);
-  color: var(--color-text);
+.tag::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dot, var(--text-3));
 }
 
-:is(.reminder-chip, .reminder-add)[aria-expanded="true"] {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 1px;
+.tag-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-/* Row states. The tint and bar repeat what the "Overdue" label says. */
-
+/* Overdue: tint, a 3px inset bar, and the stamp as one outlined chip with words. */
 .todo.is-overdue {
-  background: var(--color-over-bg);
-  box-shadow: inset 3px 0 0 var(--color-over);
+  background: var(--over-bg);
+  box-shadow: inset 3px 0 0 var(--over);
 }
 
-.todo.is-overdue:hover {
-  background: var(--color-over-bg-hover);
+.stamp.is-overdue {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--over);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--over);
+  font-weight: 500;
 }
 
-/* Just fired: an overdue row that pulses twice to the hover tint, then settles. The end of the
-   animation clears the state in app.js (PULSE_MS there matches 2 × 1.2s). */
+.stamp.is-overdue .icon {
+  color: var(--over);
+}
+
 .todo.is-fired {
-  animation: reminder-pulse 1.2s ease-in-out 2;
+  animation: reminder-pulse 1.2s var(--ease) 2;
 }
 
-/* Explicit endpoints: on a hovered row the base would already be the peak tint. */
 @keyframes reminder-pulse {
-  0%,
-  100% {
-    background: var(--color-over-bg);
+  0%, 100% {
+    background: var(--over-bg);
   }
-
   50% {
-    background: var(--color-over-bg-hover);
+    background: var(--over-peak);
   }
 }
 
@@ -679,711 +767,874 @@ body {
   }
 }
 
-/* Reminder editor: a popover under the chip; a bottom sheet under 640px */
+.footer {
+  margin-top: 12px;
+  color: var(--text-3);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+/* Loading: three static skeleton rows. */
+.skeleton {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  min-height: 56px;
+  padding: 16px;
+}
+
+.skeleton + .skeleton {
+  border-top: 1px solid var(--hairline);
+}
+
+.skeleton::before {
+  content: "";
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--raised);
+}
+
+.skeleton span {
+  display: block;
+  height: 16px;
+  border-radius: 4px;
+  background: var(--raised);
+}
+
+.skeleton span + span {
+  width: 40%;
+  height: 12px;
+  margin-top: 8px;
+}
+
+.skeleton-lines {
+  flex: 1;
+}
+
+.skeleton-lines span:first-child {
+  width: 70%;
+}
+
+/* --- Empty: a small ruled planner page with one inked tick box ------------------------------ */
+
+.empty-state {
+  margin-top: 48px;
+  text-align: center;
+}
+
+.empty-page {
+  position: relative;
+  width: 160px;
+  height: 124px;
+  margin: 0 auto;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background:
+    linear-gradient(to right, transparent 27px, rgb(163 54 31 / 0.30) 27px 28px, transparent 28px),
+    repeating-linear-gradient(to bottom, transparent 0 23px, rgb(31 27 22 / 0.08) 23px 24px) 0 4px,
+    var(--surface);
+  box-shadow: 0 4px 12px rgb(31 27 22 / 0.06);
+  transform: rotate(-2deg);
+}
+
+.empty-page i {
+  position: absolute;
+  left: 40px;
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid var(--field);
+  border-radius: 3px;
+}
+
+.empty-page i::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 20px;
+  width: 72px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--raised);
+}
+
+.empty-page i:nth-child(1) {
+  top: 18px;
+  border-color: var(--ink);
+  background: var(--ink);
+}
+
+.empty-page i:nth-child(1)::before {
+  content: "";
+  position: absolute;
+  top: 1px;
+  left: 2px;
+  width: 6px;
+  height: 3px;
+  border: solid #fff;
+  border-width: 0 0 1.5px 1.5px;
+  transform: rotate(-45deg);
+}
+
+.empty-page i:nth-child(2) {
+  top: 42px;
+}
+
+.empty-page i:nth-child(2)::after {
+  width: 84px;
+}
+
+.empty-page i:nth-child(3) {
+  top: 66px;
+}
+
+.empty-page i:nth-child(3)::after {
+  width: 56px;
+}
+
+.empty-title {
+  margin-top: 32px;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 400;
+}
+
+/* --- Task sheet ----------------------------------------------------------------------------- */
+
+.reminder-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.reminder-scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--scrim);
+  animation: fade-in 300ms var(--ease);
+}
 
 .reminder-editor {
-  position: absolute;
-  z-index: 10;
-  width: 324px;
-  max-width: calc(100vw - 16px);
-  padding: 16px;
-  border: 1px solid var(--color-border);
-  border-radius: 12px;
-  background: var(--color-surface);
-  box-shadow: 0 8px 24px rgb(24 24 27 / 0.14), 0 1px 3px rgb(0 0 0 / 0.08);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 560px;
+  max-height: calc(100dvh - 48px);
+  border-radius: 20px 20px 0 0;
+  background: var(--surface);
+  box-shadow: var(--shadow-sheet);
+  animation: sheet-in 300ms var(--ease);
 }
 
-.reminder-scrim,
-.reminder-grab {
-  display: none;
+@keyframes sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
 }
 
-/* Focus guards that wrap Tab inside the editor; never seen. */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reminder-editor,
+  .reminder-scrim {
+    animation: none;
+  }
+
+  .text-button,
+  .add-button,
+  .filter-chip {
+    transition: none;
+  }
+}
+
 .reminder-edge {
   position: absolute;
   width: 1px;
   height: 1px;
   overflow: hidden;
-  outline: none;
+}
+
+.reminder-grab {
+  flex: none;
+  width: 36px;
+  height: 4px;
+  margin: 8px auto 0;
+  border-radius: 2px;
+  background: rgb(31 27 22 / 0.16);
+}
+
+.sheet-bar {
+  display: grid;
+  flex: none;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  height: 52px;
+  padding: 0 16px;
+}
+
+.sheet-bar .reminder-save {
+  justify-self: end;
+}
+
+.reminder-cancel {
+  justify-self: start;
+  color: var(--text-2);
+  font-weight: 400;
+}
+
+.reminder-save[aria-disabled="true"] {
+  color: var(--text-3);
 }
 
 .reminder-title {
-  margin: 0;
-  font-size: 14px;
-  line-height: 20px;
-  font-weight: 600;
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 500;
+  text-align: center;
 }
 
-.reminder-for {
-  margin: 0 0 12px;
-  overflow: hidden;
-  color: var(--color-muted);
-  font-size: 12px;
-  line-height: 16px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.sheet-body {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 20px calc(20px + env(safe-area-inset-bottom));
 }
 
-.reminder-field {
-  margin-bottom: 12px;
+.sheet-section {
+  margin-top: 24px;
 }
 
-/* The edit form hides the "for" line (its Task field shows the text): keep that line's gap. */
-.reminder-for[hidden] + .reminder-field {
-  margin-top: 12px;
+.sheet-section:first-child {
+  margin-top: 20px;
 }
 
 .reminder-label {
   display: block;
-  margin-bottom: 4px;
-  font-size: 12px;
-  line-height: 16px;
-  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 20px;
 }
 
-/* Field borders are darker than the list's so the input boundary meets 3:1. */
 .reminder-control {
   display: block;
   width: 100%;
-  height: 36px;
-  padding: 0 10px;
-  border: 1px solid var(--color-field-border);
-  border-radius: 8px;
-  background: var(--color-surface);
-  color: inherit;
-  font: inherit;
-}
-
-/* Repeat: native arrow replaced by a 12px chevron in the icon style (24-unit grid, 2px round stroke). */
-select.reminder-control {
-  -webkit-appearance: none;
-  appearance: none;
-  padding-right: 32px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2352525B' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 10px center;
-  background-size: 12px 12px;
+  height: 48px;
+  padding: 0 16px;
+  border: 1px solid var(--field);
+  border-radius: 10px;
+  background: var(--surface);
+  font-size: 16px;
 }
 
 .reminder-control:focus-visible {
-  border-color: transparent;
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
 }
 
 .reminder-control[aria-invalid="true"] {
-  border-color: var(--color-over);
-  box-shadow: 0 0 0 1px var(--color-over);
+  border-color: var(--over);
 }
 
-.reminder-help {
-  margin: 4px 0 0;
-  color: var(--color-muted);
-  font-size: 12px;
-  line-height: 16px;
+.edit-tags-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
 
+.edit-tags {
+  display: contents;
+}
+
+.edit-tags .tag {
+  height: 32px;
+  padding: 0 0 0 10px;
+}
+
+.tag-remove {
+  /* A 44x44 hit area that lays out as the old 28x32 slot: negative margins absorb the extra. */
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin: -6px -8px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-2);
+}
+
+.tag-remove:focus-visible {
+  outline-offset: -8px;
+}
+
+.tag-add {
+  height: 32px;
+  min-height: 32px;
+  color: var(--text-2);
+  font-weight: 400;
+  position: relative;
+}
+
+.tag-add::after {
+  content: "";
+  position: absolute;
+  inset: -6px 0;
+}
+
+.tag-field {
+  width: 140px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--field);
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: 16px;
+}
+
+.tag-field[aria-invalid="true"] {
+  border-color: var(--over);
+}
+
+/* The reminder picker: a grouped list (switch, date + inline calendar, time, repeat). */
+.picker {
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--page);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+.picker-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 0 16px 0 12px;
+}
+
+.picker-row + .picker-row::before,
+.picker-detail::before,
+.calendar + .picker-row::before,
+.picker-row + .calendar::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 52px;
+  right: 0;
+  height: 1px;
+  background: var(--hairline);
+}
+
+.picker-detail {
+  position: relative;
+}
+
+.picker-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--ink-tint);
+  color: var(--ink);
+}
+
+.picker-key {
+  flex: 1;
+  min-width: 0;
+}
+
+.switch {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex: none;
+  width: 52px;
+  height: 44px;
+  margin: -6px 0;
+  border: solid transparent;
+  border-width: 6px 0;
+  /* The 32px track is the padding box; the transparent border makes the hit area 44 tall. */
+  border-radius: 16px / 22px;
+  background: rgb(31 27 22 / 0.16) padding-box;
+  cursor: pointer;
+  transition: background-color 200ms var(--ease);
+}
+
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.16), 0 0 0 0.5px rgb(0 0 0 / 0.04);
+  transition: transform 200ms var(--ease);
+}
+
+.switch:checked {
+  background: var(--ink) padding-box;
+}
+
+.switch:focus-visible {
+  outline-offset: -4px;
+}
+
+.switch:checked::after {
+  transform: translateX(20px);
+}
+
+/* The switch track is 32 tall; the row gives it a 48 hit area. */
+.switch-hit {
+  position: absolute;
+  inset: 0;
+  cursor: pointer;
+}
+
+.picker-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 44px;
+  margin-right: -8px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.picker-value .icon {
+  transition: transform 200ms var(--ease);
+}
+
+.picker-value[aria-expanded="true"] .icon {
+  transform: rotate(180deg);
+}
+
+.time-input {
+  /* A 44px hit area; the transparent border keeps the visible chip 32px tall. */
+  box-sizing: border-box;
+  height: 44px;
+  min-width: 112px;
+  margin: -6px -4px -6px 0;
+  padding: 0 12px;
+  border: solid transparent;
+  border-width: 6px 0;
+  border-radius: 8px / 14px;
+  background: rgb(31 27 22 / 0.06) padding-box;
+  font: 16px/24px var(--mono);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.time-input::-webkit-date-and-time-value {
+  text-align: center;
+}
+
+.time-input:focus-visible {
+  outline-offset: -4px;
+}
+
+.time-input[aria-invalid="true"] {
+  box-shadow: inset 0 0 0 1px var(--over);
+}
+
+.repeat-select {
+  appearance: none;
+  -webkit-appearance: none;
+  min-height: 44px;
+  margin-right: -8px;
+  padding: 0 28px 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b6358' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 18 6-6-6-6'/%3E%3C/svg%3E")
+    no-repeat right 8px center;
+  color: var(--text-2);
+  font-size: 16px;
+  text-align: right;
+  text-align-last: right;
+}
+
+.calendar {
+  position: relative;
+  padding: 0 12px 8px;
+}
+
+.cal-head {
+  display: flex;
+  align-items: center;
+  height: 44px;
+  padding-left: 4px;
+}
+
+.cal-month {
+  flex: 1;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 500;
+}
+
+.cal-nav {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--ink);
+}
+
+.cal-nav:last-child {
+  margin-right: -8px;
+}
+
+.cal-nav:disabled {
+  color: var(--text-3);
+  cursor: default;
+}
+
+.cal-nav .icon {
+  width: 20px;
+  height: 20px;
+}
+
+.cal-weekdays,
+.cal-days {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  text-align: center;
+}
+
+.cal-weekdays {
+  height: 20px;
+  color: var(--text-3);
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 500;
+}
+
+.cal-day {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.cal-day::before {
+  content: "";
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  width: 32px;
+  height: 32px;
+  margin-left: -16px;
+  border-radius: 50%;
+}
+
+.cal-day span {
+  position: relative;
+}
+
+.cal-day:disabled {
+  color: var(--text-3);
+  cursor: default;
+}
+
+.cal-day[aria-current="date"] {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.cal-day[aria-pressed="true"] {
+  color: #fff;
+  font-weight: 500;
+}
+
+.cal-day[aria-pressed="true"]::before {
+  background: var(--ink);
+}
+
+.cal-day:focus-visible {
+  outline: none;
+}
+
+.cal-day:focus-visible::before {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* The one message line: error > past > done > blocked. Empty takes no space. */
 .reminder-message {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
-  margin: 0 0 12px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  font-size: 12px;
-  line-height: 16px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 20px;
 }
 
 .reminder-message-icon {
   display: flex;
-  margin-top: 2px;
-}
-
-.reminder-message-icon .icon {
-  width: 12px;
-  height: 12px;
-}
-
-.reminder-message.is-info {
-  background: var(--color-accent-tint);
-  color: var(--color-meta);
-}
-
-.reminder-message.is-info .reminder-message-icon {
-  color: var(--color-accent);
-}
-
-.reminder-message.is-warn {
-  background: var(--color-warn-bg);
-  color: var(--color-warn-text);
 }
 
 .reminder-message.is-error {
-  background: var(--color-over-bg);
-  color: var(--color-over);
+  background: var(--over-bg);
+  color: var(--over);
 }
 
-.reminder-note {
-  margin: 0 0 12px;
-  color: var(--color-muted);
-  font-size: 12px;
-  line-height: 16px;
+.reminder-message.is-warn {
+  background: var(--warn-bg);
+  color: var(--warn);
 }
 
-.reminder-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 4px;
+.reminder-message.is-info {
+  background: var(--ink-tint);
+  color: var(--text);
 }
 
-.reminder-actions button {
-  height: 36px;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
+.task-delete {
+  margin-left: -4px;
+  color: var(--over);
+  font-weight: 400;
 }
 
-.reminder-remove {
-  padding: 0 4px;
-  border: 0;
-  background: none;
-  color: var(--color-over);
-  text-decoration: underline;
-  text-underline-offset: 3px;
+/* Wider screens (not designed yet): the sheet becomes a centered dialog. */
+@media (min-width: 640px) {
+  .reminder-layer {
+    align-items: center;
+    padding: 24px;
+  }
+
+  .reminder-editor {
+    max-width: 440px;
+    max-height: calc(100dvh - 48px);
+    border-radius: 20px;
+  }
+
+  .reminder-grab {
+    display: none;
+  }
+
+  .filter-wrap {
+    margin-right: 0;
+  }
 }
 
-.remove-long {
-  display: none;
+/* --- Auth ----------------------------------------------------------------------------------- */
+
+.auth-loading {
+  min-height: 280px;
 }
 
-.reminder-cancel {
-  margin-left: auto;
-  padding: 0 14px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-surface);
-  color: var(--color-text);
-}
-
-.reminder-cancel:hover {
-  border-color: #d4d4d8;
-  background: #fafafa;
-}
-
-.reminder-save {
-  padding: 0 16px;
-  border: 0;
-  border-radius: 8px;
-  background: var(--color-accent);
-  color: #fff;
-}
-
-.reminder-save:hover {
-  background: var(--color-accent-hover);
-}
-
-/* aria-disabled, not disabled: Save stays focusable so its reason can be found. */
-.reminder-save[aria-disabled="true"] {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.reminder-save[aria-disabled="true"]:hover {
-  background: var(--color-accent);
-}
-
-/* Bottom sheet: modal, over a scrim; the page behind is inert. */
-
-.reminder-layer.is-sheet {
-  position: fixed;
-  inset: 0;
-  z-index: 10;
-}
-
-.is-sheet .reminder-scrim {
-  display: block;
-  position: absolute;
-  inset: 0;
-  background: rgb(24 24 27 / 0.45);
-}
-
-.is-sheet .reminder-editor {
-  top: auto;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  width: auto;
-  max-width: none;
-  max-height: 100%;
-  overflow-y: auto;
-  padding: 8px 16px calc(20px + env(safe-area-inset-bottom));
-  border: 0;
-  border-radius: 20px 20px 0 0;
-  box-shadow: 0 -8px 24px rgb(0 0 0 / 0.18);
-}
-
-.is-sheet .reminder-grab {
-  display: block;
-  width: 36px;
-  height: 4px;
-  margin: 0 auto 12px;
-  border-radius: 2px;
-  background: #a1a1aa;
-}
-
-.is-sheet .reminder-title {
-  font-size: 16px;
-  line-height: 24px;
-}
-
-.is-sheet .reminder-for {
-  margin-bottom: 16px;
-  font-size: 13px;
-  line-height: 18px;
-}
-
-.is-sheet .reminder-for[hidden] + .reminder-field {
+#auth-view,
+#auth-retry {
   margin-top: 16px;
 }
 
-/* 16px text so iOS doesn't zoom into the field. */
-.is-sheet .reminder-control {
-  height: 44px;
-  font-size: 16px;
-}
-
-/* Bypass iOS native sizing while keeping WebKit's flex centering. */
-.is-sheet input.reminder-control {
-  -webkit-appearance: none;
-  appearance: none;
-  box-sizing: border-box;
-  max-width: 100%;
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  -webkit-min-logical-width: 0;
-  min-height: 44px;
-  line-height: 20px;
-  text-align: left;
-}
-
-.is-sheet input.reminder-control::-webkit-date-and-time-value {
-  margin: 0;
-  min-height: 1.2em;
-  text-align: left;
-}
-
-.is-sheet .reminder-message {
-  font-size: 13px;
-  line-height: 18px;
-}
-
-.is-sheet .reminder-actions {
-  display: grid;
-  grid-template-columns: auto auto;
-  justify-content: space-between;
-  gap: 8px 0;
-}
-
-.is-sheet .reminder-save {
-  grid-column: 1 / -1;
-  height: 48px;
-  border-radius: var(--radius);
-  font-size: 15px;
-}
-
-.is-sheet .reminder-cancel,
-.is-sheet .reminder-remove {
-  height: 44px;
-  margin: 0;
-  padding: 0 8px;
-  border: 0;
-  background: none;
-  font-size: 14px;
-}
-
-.is-sheet .reminder-cancel {
-  color: var(--color-meta);
-}
-
-.is-sheet .reminder-remove {
-  grid-column: 2;
-}
-
-.is-sheet .remove-short {
-  display: none;
-}
-
-.is-sheet .remove-long {
-  display: inline;
-}
-
-.footer {
-  margin: 12px 0 0;
-  padding: 0 4px;
-  color: var(--color-muted);
-  font-size: 13px;
-  line-height: 18px;
-}
-
-/* Empty state */
-
-.empty-state {
-  padding: 48px 24px;
-  background: var(--color-surface);
-  border: 1px dashed #d4d4d8;
-  border-radius: var(--radius);
-  text-align: center;
-}
-
-.empty-icon {
-  display: grid;
-  place-items: center;
-  width: 48px;
-  height: 48px;
-  margin: 0 auto 12px;
-  border-radius: 12px;
-  background: #eef2ff;
-  color: var(--color-accent);
-}
-
-.empty-title {
-  margin: 0 0 4px;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 600;
-}
-
-.empty-body {
-  margin: 0;
-  color: var(--color-muted);
-}
-
-/* Mouse on a wide screen: tag × and "+ tag" appear on row hover or focus. Hidden this way
-   (not display: none) so they stay focusable and focus can be moved onto them. */
-
-@media (hover: hover) and (min-width: 640px) {
-  .todo:not(:hover, :focus-within, .is-editing, .is-held) :is(.tag-remove, .tag-add, .reminder-add) {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    margin: -1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-
-  .todo:not(:hover, :focus-within, .is-editing, .is-held) .todo-tags.is-empty {
-    margin-top: 0;
-  }
-}
-
-/* Touch devices and small screens: delete is always visible */
-
-@media (hover: none) {
-  .todo-edit,
-  .todo-delete {
-    opacity: 1;
-  }
-
-  /* "+ tag" is plain muted text on touch: no dashed box (the hit area comes from padding). */
-  .tag-add,
-  .tag-add:hover {
-    border-color: transparent;
-    color: #52525b;
-  }
-}
-
-/* Small or touch screens: chips keep their 22px look with a 30px hit area. (The editor is a
-   bottom sheet here too; app.js uses the same query.) */
-
-@media (max-width: 639px), (hover: none) {
-  .reminder-chip,
-  .reminder-add {
-    position: relative;
-  }
-
-  .reminder-chip::after,
-  .reminder-add::after {
-    content: "";
-    position: absolute;
-    inset: -4px -2px;
-  }
-
-  .reminder-add {
-    padding: 0 6px;
-  }
-
-  /* Edit and delete get full 44px tap targets; the negative margins keep the row's height and
-     let the targets reach into the row's right padding. */
-  .todo-actions {
-    margin: -12px -8px -12px -6px;
-  }
-
-  .todo-edit,
-  .todo-delete {
-    width: 44px;
-    height: 44px;
-  }
-}
-
-@media (max-width: 639px) {
-  body {
-    padding-left: max(16px, env(safe-area-inset-left));
-    padding-right: max(16px, env(safe-area-inset-right));
-  }
-
-  .app {
-    max-width: none;
-  }
-
-  .todo-edit,
-  .todo-delete {
-    opacity: 1;
-  }
-
-  .clear-long {
-    display: none;
-  }
-
-  .clear-short {
-    display: inline;
-  }
-
-  /* The chip stays on one line: the repeat part is icon-only (the chip's aria-label still says
-     "repeats daily") and drops its divider. */
-  .reminder-chip {
-    flex-wrap: nowrap;
-  }
-
-  .reminder-repeat-label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    margin: -1px;
-    padding: 0;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
-    border: 0;
-  }
-
-  .reminder-repeat,
-  .reminder-chip.is-overdue .reminder-repeat {
-    margin-left: 0;
-    padding-left: 0;
-    border-left: 0;
-  }
-
-  /* Filter chips scroll sideways; the right edge fades out. The 3px inset keeps focus
-     rings from being clipped by the scroller; the right padding lets the last chip
-     scroll clear of the fade. */
-  .filter-bar {
-    flex-wrap: nowrap;
-    margin: -3px;
-    padding: 3px 36px 3px 3px;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-
-  .filter-bar::-webkit-scrollbar {
-    display: none;
-  }
-
-  .filter-wrap::after {
-    content: "";
-    position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: 36px;
-    background: linear-gradient(to right, rgb(247 247 248 / 0), var(--color-bg));
-    pointer-events: none;
-  }
-}
-
-/* Account */
-.app-header {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, auto) auto;
-  align-items: start;
-  column-gap: 12px;
-}
-
-.account-name {
-  align-self: center;
-  max-width: 220px;
-  overflow: hidden;
-  color: var(--color-meta);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.auth-link {
-  border: 0;
-  padding: 0 8px;
-  background: none;
-  color: var(--color-accent-hover);
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.account-sign-out {
-  grid-column: 3;
-  min-height: 32px;
-}
-
-.account-sign-out:is(:hover, :focus-visible),
-.auth-error .auth-link {
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-
-.auth-loading { min-height: 280px; }
-.auth-loading p, .auth-subtitle { color: var(--color-muted); }
-.auth-subtitle { margin-bottom: 24px; }
-
 .auth-card {
-  min-width: 0;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  padding: 24px;
-  background: var(--color-surface);
+  margin: 0;
 }
 
-#auth-retry > p { margin: 0 0 16px; }
-
-.auth-modes {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  padding: 4px;
-  border-radius: var(--radius);
-  background: #f4f4f5;
+#auth-retry > p {
+  margin-bottom: 16px;
 }
 
-.auth-modes label { position: relative; }
+/* The toggle: the composer's track style, no accent. */
+.seg {
+  display: flex;
+  height: 48px;
+  margin: 0 0 24px;
+  padding: 2px;
+  border-radius: 12px;
+  background: var(--raised);
+}
 
-.auth-modes input {
+.seg label {
+  position: relative;
+  display: flex;
+  flex: 1;
+}
+
+.seg input {
   position: absolute;
-  inset: -4px 0 0;
+  inset: 0;
   width: 100%;
-  height: calc(100% + 4px);
+  height: 100%;
   margin: 0;
   opacity: 0;
   cursor: pointer;
 }
 
-.auth-modes span {
-  display: grid;
-  min-height: 40px;
-  place-items: center;
-  border-radius: 6px;
-  color: var(--color-meta);
-  font-weight: 600;
-  text-align: center;
+.seg span {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  color: var(--text-2);
 }
 
-.auth-modes input:checked + span {
-  background: var(--color-meta);
-  color: #fff;
+.seg input:checked + span {
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--field);
+  color: var(--text);
+  font-weight: 500;
 }
 
-.auth-modes input:focus-visible + span {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 1px;
+.seg input:focus-visible + span {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
 }
 
 .auth-heading {
-  margin: 16px 0;
-  font-size: 18px;
-  line-height: 24px;
-  font-weight: 600;
+  margin-bottom: 16px;
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 500;
 }
 
-.auth-info:empty,
-.auth-error:not(.is-visible) {
-  margin: 0;
+.auth-heading:focus {
+  outline: none;
 }
 
 .auth-info:not(:empty),
 .auth-error.is-visible {
   margin: 0 0 16px;
-  border-radius: var(--radius);
-  padding: 10px 12px;
+  padding: 12px 16px;
+  border-radius: 12px;
   font-size: 13px;
-  line-height: 18px;
+  line-height: 20px;
   overflow-wrap: anywhere;
 }
 
 .auth-info:not(:empty) {
-  background: var(--color-accent-tint);
-  color: var(--color-meta);
+  background: var(--ink-tint);
+  color: var(--text);
+}
+
+.auth-error:not(.is-visible) {
+  display: none;
 }
 
 .auth-error.is-visible {
-  border: 1px solid var(--color-over);
-  background: var(--color-over-bg);
+  border: 1px solid var(--over);
+  background: var(--over-bg);
+  color: var(--text);
 }
 
-.auth-error .auth-link { min-height: 44px; }
-.auth-error svg, .auth-field-error svg {
-  margin-right: 6px;
-  color: var(--color-over);
-  vertical-align: -2px;
+.auth-error .auth-link {
+  display: block;
+  min-height: 44px;
+  margin: -12px 0 -12px 24px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
-.auth-error svg { width: 14px; height: 14px; }
 
-.auth-field { margin-bottom: 16px; }
+.auth-error svg,
+.auth-field-error svg {
+  width: 16px;
+  height: 16px;
+  margin-right: 8px;
+  color: var(--over);
+  vertical-align: -3px;
+}
+
+.auth-field {
+  margin-bottom: 16px;
+}
+
 .auth-field label {
   display: block;
-  margin-bottom: 6px;
-  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 20px;
 }
 
 .auth-input {
+  display: block;
   width: 100%;
-  min-width: 0;
-  height: 44px;
-  border: 1px solid var(--color-field-border);
-  border-radius: var(--radius);
-  padding: 0 14px;
-  background: var(--color-surface);
-  color: inherit;
-  font: 16px var(--font);
+  height: 48px;
+  padding: 0 16px;
+  border: 1px solid var(--field);
+  border-radius: 10px;
+  background: var(--surface);
+  font-size: 16px;
 }
 
-.auth-input[aria-invalid="true"] { border-color: var(--color-over); }
-.auth-input:read-only { background: #f4f4f5; }
-.auth-password { position: relative; }
-.auth-password .auth-input { padding-right: 64px; }
+.auth-input:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.auth-input[aria-invalid="true"] {
+  border-color: var(--over);
+}
+
+.auth-input:read-only {
+  background: var(--raised);
+}
+
+.auth-password {
+  position: relative;
+}
+
+.auth-password .auth-input {
+  padding-right: 72px;
+}
 
 .auth-show {
   position: absolute;
-  inset: 0 1px 0 auto;
+  top: 2px;
+  right: 4px;
   min-width: 44px;
-  min-height: 44px;
+  height: 44px;
+  padding: 0 8px;
   border: 0;
-  border-radius: var(--radius);
-  padding: 0 10px;
+  border-radius: 8px;
   background: none;
-  color: var(--color-meta);
-  font: 600 13px var(--font);
-  cursor: pointer;
-}
-
-.auth-password-hint,
-.auth-field-error {
-  margin: 6px 0 0;
-  color: var(--color-meta-done);
-  font-size: 12px;
-  line-height: 16px;
+  color: var(--ink);
+  font-weight: 500;
 }
 
 .auth-field-error {
-  color: var(--color-over);
+  margin-top: 8px;
+  color: var(--over);
   font-size: 13px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .auth-primary {
@@ -1392,79 +1643,46 @@ select.reminder-control {
   justify-content: center;
   gap: 8px;
   width: 100%;
-  scroll-margin-bottom: 96px;
+  height: 48px;
+  margin-top: 24px;
+  border-radius: 10px;
+}
+
+.auth-primary[aria-disabled="true"] {
+  background: var(--ink-press);
 }
 
 .auth-spinner {
   width: 16px;
   height: 16px;
-  border: 2px solid currentColor;
-  border-right-color: transparent;
+  border: 2px solid rgb(255 255 255 / 0.4);
+  border-top-color: #fff;
   border-radius: 50%;
-  animation: auth-spin 750ms linear infinite;
+  animation: auth-spin 0.8s linear infinite;
 }
 
-@keyframes auth-spin { to { transform: rotate(1turn); } }
-@media (prefers-reduced-motion: reduce) { .auth-spinner { display: none; } }
-
-.auth-signout-note {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 44px;
-  color: var(--color-meta-done);
-  font-size: 13px;
-}
-
-.auth-signout-note p { margin: 0; }
-.auth-signout-note button { min-width: 44px; min-height: 44px; }
-
-/* A save or load that failed: what happened, and Try again when repeating it makes sense. */
-.sync-note {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 44px;
-  margin: -8px 0 12px;
-  color: var(--color-meta);
-  font-size: 13px;
-  line-height: 18px;
-}
-
-.sync-text { flex: 1; margin: 0; }
-.sync-note button { flex: none; min-width: 44px; min-height: 44px; }
-
-@media (max-width: 639px) {
-  .app-header { grid-template-columns: minmax(0, 1fr) auto; }
-
-  .account-name {
-    grid-row: 2;
-    grid-column: 1 / -1;
-    max-width: 100%;
-    margin-bottom: 4px;
-    color: var(--color-meta-done);
+@keyframes auth-spin {
+  to {
+    transform: rotate(1turn);
   }
+}
 
-  .account-sign-out {
-    grid-row: 1;
-    grid-column: 2;
-    min-width: 44px;
-    min-height: 44px;
-    margin: -6px 0;
+@media (prefers-reduced-motion: reduce) {
+  .auth-spinner {
+    animation: none;
   }
-
-  .auth-card { padding: 20px; }
-  .auth-primary { height: 48px; }
 }
 
-/* The edit form's tags, under the title field. */
-.edit-tags {
-  margin-top: 8px;
+.auth-link {
+  border: 0;
+  background: none;
+  color: var(--ink);
 }
 
-.edit-tags .tag-label {
-  display: flex;
-  align-items: center;
-  cursor: default;
+/* Wider screens: the auth form gets a modest width. */
+@media (min-width: 640px) {
+  #auth-view,
+  #auth-retry {
+    max-width: 400px;
+  }
 }

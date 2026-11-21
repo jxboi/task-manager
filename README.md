@@ -1,9 +1,9 @@
 # task-manager
 
-A small todo list app. Sign in, then add a task, tick it off, delete it.
+A small todo list app. Sign in, then add a task, tick it off, tap it to edit or delete it.
 Each account's tasks are saved on the server, so they follow you to any browser you sign in from, and two accounts on the same device never see each other's lists. Signed out, no tasks are shown or kept in the browser.
-Type `#tags` in a new task (`Pay rent #home`) to tag it; each tag gets a fixed color from its name, and the tag chips filter the list (any selected tag matches).
-Give a task a reminder ("+ reminder": a date and time, repeating daily or weekly if you like). Overdue tasks are marked and listed first.
+Type `#tags` in a new task (`Pay rent #home`) to tag it; each tag gets a fixed color dot from its name, and the filter bar's chips filter the list (any selected tag matches). Tags on a row don't filter; tapping a row opens its task sheet.
+Give a task a reminder in its task sheet (the Reminder switch, then a date from the inline calendar, a time, and Repeat: never, daily or weekly). Overdue tasks are marked and listed first.
 Checking a repeating task keeps it checked until the start of the next scheduled occurrence's day. The reminder shows the next occurrence as soon as you check the task.
 Reminders fire only while the page is open in a browser tab; ones missed while it was closed alert once when you next open it. With several tabs open, each reminder alerts in one of them.
 Browser notifications are optional: if they're blocked or unsupported, due tasks are still highlighted on the page.
@@ -103,7 +103,7 @@ A stale revision returns 409.
 
 ## How the browser saves
 
-`src/sync.js` keeps the rows the server confirmed and the changes still being saved. Changes show immediately and are sent one at a time, each with the revision the previous answer returned. A change the server refuses drops out of the list, and reminders are rechecked. A 409 or 404 reloads the list and asks you to try the edit again. Changes to that task made against the version you saw before the reload are cancelled, not applied to the newer version. A completion is only sent if the task is still in the state you clicked. A network or server failure offers Try again, which reloads first and re-sends only if the task is still at the version the change was sent against. Otherwise the server's version is kept. A new task whose save was uncertain goes back into the input and keeps its ID, tied to the exact text and tags (filter included), so adding it again can't create a duplicate. A 401 returns to sign-in. Signing in, up or out tells the browser's other tabs (`BroadcastChannel`); they hide their lists at once and re-read the session, discarding any read that a newer change has overtaken. A CSRF rejection does the same. Signing out or switching accounts clears the list, filters, the reminder editor, announcements, open notifications, drafts and timers, and ignores late answers from the old session. Returning to the tab re-reads the session and reloads the list before checking reminders. Each due reminder is claimed on the server (`markNotified`) before it alerts, so only one open tab alerts it. If the page closes between the claim and the alert, that occurrence is not alerted again.
+`src/sync.js` keeps the rows the server confirmed and the changes still being saved. Changes show immediately and are sent one at a time, each with the revision the previous answer returned. A change the server refuses drops out of the list, and reminders are rechecked. A 409 or 404 reloads the list and asks you to try the edit again. Changes to that task made against the version you saw before the reload are cancelled, not applied to the newer version. A completion is only sent if the task is still in the state you clicked. A network or server failure offers Try again, which reloads first and re-sends only if the task is still at the version the change was sent against. Otherwise the server's version is kept. A new task whose save was uncertain goes back into the input and keeps its ID, tied to the exact text and tags (filter included), so adding it again can't create a duplicate. A 401 returns to sign-in. Signing in, up or out tells the browser's other tabs (`BroadcastChannel`); they hide their lists at once and re-read the session, discarding any read that a newer change has overtaken. A CSRF rejection does the same. Signing out or switching accounts clears the list, filters, the task sheet, announcements, open notifications, drafts and timers, and ignores late answers from the old session. Returning to the tab re-reads the session and reloads the list before checking reminders. Each due reminder is claimed on the server (`markNotified`) before it alerts, so only one open tab alerts it. If the page closes between the claim and the alert, that occurrence is not alerted again.
 
 ## Layout
 
@@ -115,6 +115,7 @@ src/todos.js        pure logic: validText, addTodo, editTodo, toggleTodo, remove
 src/task-input.js   the add and edit fields' shared rules: readTaskInput (#tags and title check), formatTaskInput
 src/tags.js         pure tag rules: normalizeTag, parseTodoInput, tagColor
 src/reminders.js    pure reminder rules: normalizeReminder, isOverdue, nextOccurrence, parseLocalInput, toLocalInput
+src/picker.js       the task sheet's reminder picker: pickerDue, splitDue, defaultReminder, monthGrid, dayLabel
 src/storage.js      every server request: session, sign-in/up/out and /api/todos (no task data in browser storage)
 src/sync.js         the confirmed rows, pending changes, the request queue and reminder claims
 src/auth.js         sign-in, sign-up and sign-out UI and session checks
