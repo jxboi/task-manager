@@ -2461,3 +2461,14 @@ body {
 .app-header[data-color] .title::first-letter {
   text-transform: uppercase;
 }
+
+/* One shelf: the All tab already clears it, so the Clear row collapses as when unfiltered
+   (its live region stays for screen readers). */
+.app:has(.app-header[data-color]) .summary-row {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
