@@ -643,7 +643,7 @@ p {
   text-decoration: line-through;
 }
 
-/* The signature time stamp: mono, a 16px clock. */
+/* The signature time stamp: mono text, no clock icon. */
 .stamp {
   display: inline-flex;
   flex-wrap: wrap;

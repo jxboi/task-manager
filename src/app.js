@@ -69,7 +69,6 @@ const xIcon = document.getElementById('x-icon');
 const repeatIcon = document.getElementById('repeat-icon');
 const alertIcon = document.getElementById('alert-icon');
 const infoIcon = document.getElementById('info-icon');
-const clockIcon = document.getElementById('clock-icon');
 const syncNote = document.getElementById('sync-note');
 const syncText = document.getElementById('sync-text');
 const syncRetry = document.getElementById('sync-retry');
@@ -313,8 +312,9 @@ function isTicked(todo, now) {
   return todo.completedUntil != null && isCompleted(todo, now);
 }
 
-// The time stamp, in words and mono: "◷ Today 5:30 PM · ⟳ Daily", "Overdue · Today 8:30 AM",
-// "Done today · next ◷ Tomorrow 8:00 AM · ⟳ Daily". Overdue is said in words, not only by color.
+// The time stamp, in words and mono: "Today 5:30 PM · ⟳ Daily", "Overdue · Today 8:30 AM",
+// "Done today · next Tomorrow 8:00 AM · ⟳ Daily". Overdue is said in words, not only by color;
+// the due time has no icon, an overdue one keeps its alert mark.
 function renderStamp(todo, overdue, ticked, now) {
   const stamp = document.createElement('span');
   stamp.className = overdue ? 'stamp is-overdue' : 'stamp';
@@ -329,7 +329,8 @@ function renderStamp(todo, overdue, ticked, now) {
   const text = document.createElement('span');
   text.className = 'reminder-when';
   text.textContent = overdue ? `Overdue · ${formatDue(todo.due, now)}` : formatDue(todo.due, now);
-  when.append(icon(overdue ? alertIcon : clockIcon), text);
+  if (overdue) when.append(icon(alertIcon));
+  when.append(text);
   stamp.append(when);
   if (todo.repeat !== 'none' && !overdue) {
     const repeat = document.createElement('span');
