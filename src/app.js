@@ -1048,8 +1048,9 @@ addToggle.addEventListener('click', () => {
   focusComposer();
 });
 
-input.addEventListener('keydown', (event) => {
-  if (event.key !== 'Escape' || event.defaultPrevented) return;
+// On the form, so Escape works from the Add button too; not while an IME composition is open.
+form.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing) return;
   event.preventDefault();
   setComposerOpen(false);
   addToggle.focus();

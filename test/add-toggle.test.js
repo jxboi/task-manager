@@ -57,7 +57,7 @@ test('the + button opens the new-task field', async (t) => {
 
   await t.test('Escape in the field closes it and returns focus to +', () => {
     type('Half typed');
-    const event = keydown(input, 'Escape');
+    const event = keydown(form, 'Escape'); // the fake DOM doesn't bubble: the form stands in for the field
     assert.equal(event.defaultPrevented, true);
     assert.equal(form.hidden, true);
     assert.equal(toggle.getAttribute('aria-expanded'), 'false');
@@ -65,6 +65,19 @@ test('the + button opens the new-task field', async (t) => {
     // What was typed is kept for when it reopens.
     toggle.click();
     assert.equal(input.value, 'Half typed');
+    type('');
+  });
+
+  await t.test('Escape on the Add button closes it; not during IME composition', () => {
+    type('Draft');
+    const composing = new Event('keydown', { cancelable: true });
+    Object.assign(composing, { key: 'Escape', isComposing: true });
+    form.dispatchEvent(composing);
+    assert.equal(form.hidden, false);
+    // The fake DOM doesn't bubble: the form stands in for a keydown from the Add button.
+    assert.equal(keydown(form, 'Escape').defaultPrevented, true);
+    assert.equal(form.hidden, true);
+    toggle.click();
     type('');
   });
 

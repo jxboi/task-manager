@@ -394,9 +394,11 @@ signOut.addEventListener('click', async () => {
   } catch {
     // The note is in the task view; the menu closes so it isn't covered, and Sign out is one tap
     // away again under the profile button.
+    // Focus goes back to the button only if the menu still owns it; the user may have moved on.
+    const owned = profileMenu.contains(document.activeElement);
     signOutNote.hidden = false;
     setMenuOpen(false);
-    profileButton.focus();
+    if (owned) profileButton.focus();
   } finally {
     signOut.textContent = 'Sign out';
     signOut.removeAttribute('aria-disabled');
@@ -424,9 +426,18 @@ function openMenu() {
   signOut.focus();
 }
 
+// A pointer press on the button moves focus to it, which closes the open menu (focus left it)
+// before the click arrives; remember whether it was open at the press so the click closes it
+// rather than reopening it.
+let openAtPress = null;
+profileButton.addEventListener('pointerdown', () => {
+  openAtPress = !profileMenu.hidden;
+});
 profileButton.addEventListener('click', () => {
-  if (profileMenu.hidden) openMenu();
-  else closeMenu();
+  const wasOpen = openAtPress ?? !profileMenu.hidden;
+  openAtPress = null;
+  if (wasOpen) closeMenu();
+  else openMenu();
 });
 
 // The menu button pattern: Down or Up on the button opens it, on the one item keeps focus there.
@@ -449,10 +460,21 @@ document.addEventListener('keydown', (event) => {
   }
 });
 document.addEventListener('pointerdown', (event) => {
-  if (!profileMenu.hidden && !account.contains(event.target)) setMenuOpen(false);
+  if (profileMenu.hidden || account.contains(event.target)) return;
+  const owned = profileMenu.contains(document.activeElement);
+  setMenuOpen(false);
+  // Let the press move focus to the control it landed on; if the menu had focus and nothing took
+  // it (blank space), put it back on the profile button rather than the document body.
+  if (owned) {
+    setTimeout(() => {
+      const active = document.activeElement;
+      if (!active || active === document.body || profileMenu.contains(active)) profileButton.focus();
+    }, 0);
+  }
 });
-account.addEventListener('focusout', (event) => {
-  if (event.relatedTarget && !account.contains(event.relatedTarget)) setMenuOpen(false);
+// Focus leaving the menu for anywhere else (Tab, Shift+Tab onto the button) closes it.
+profileMenu.addEventListener('focusout', (event) => {
+  if (event.relatedTarget && !profileMenu.contains(event.relatedTarget)) setMenuOpen(false);
 });
 
 // From the task view: its session ended (401), or a request was refused because the session

@@ -64,9 +64,13 @@ test('task view against the server API', async (t) => {
     return value;
   };
   const add = async (value) => {
+    const form = byId('add-form');
+    if (form.hidden) byId('add-toggle').click();
+    assert.equal(form.hidden, false, 'the composer is visible');
     input.value = value;
     input.dispatchEvent(new Event('input'));
-    byId('add-form').dispatchEvent(new Event('submit'));
+    assert.equal(byId('add-button').disabled, false, 'Add is enabled');
+    form.dispatchEvent(new Event('submit'));
     await settle();
   };
   const toggle = async (text) => {

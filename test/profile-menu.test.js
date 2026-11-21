@@ -98,8 +98,48 @@ test('profile menu', async (t) => {
     dispatch(menu, 'keydown', { key: 'ArrowUp' });
     assert.equal(document.activeElement, signOut);
     // Tab out of the menu closes it.
-    dispatch(account, 'focusout', { relatedTarget: byId('app-title') });
+    dispatch(menu, 'focusout', { relatedTarget: byId('app-title') });
     assert.equal(isOpen(), false);
+  });
+
+  await t.test('Tab and Shift+Tab out of the menu both close it, including back onto the button', () => {
+    button.click();
+    dispatch(menu, 'focusout', { relatedTarget: byId('app-title') });
+    assert.equal(isOpen(), false);
+    button.click();
+    button.focus();
+    dispatch(menu, 'focusout', { relatedTarget: button });
+    assert.equal(isOpen(), false);
+    assert.equal(document.activeElement, button);
+    // Focus moving between items inside the menu keeps it open.
+    button.click();
+    dispatch(menu, 'focusout', { relatedTarget: signOut });
+    assert.equal(isOpen(), true);
+    button.click();
+  });
+
+  await t.test('a press on the button while open closes it instead of reopening', () => {
+    button.click();
+    dispatch(button, 'pointerdown');
+    button.focus();
+    dispatch(menu, 'focusout', { relatedTarget: button });
+    button.click();
+    assert.equal(isOpen(), false);
+  });
+
+  await t.test('a click on blank space restores focus to the button; on a control it leaves focus', async () => {
+    button.click();
+    dispatch(document, 'pointerdown', { target: byId('todo-list') });
+    document.activeElement = null; // the hidden item dropped focus
+    await settle(1);
+    assert.equal(isOpen(), false);
+    assert.equal(document.activeElement, button);
+    button.click();
+    const other = byId('new-todo');
+    dispatch(document, 'pointerdown', { target: other });
+    other.focus();
+    await settle(1);
+    assert.equal(document.activeElement, other);
   });
 
   await t.test('a tap outside closes it; a tap inside does not', () => {
@@ -125,12 +165,24 @@ test('profile menu', async (t) => {
     assert.equal(document.activeElement, button);
   });
 
+  await t.test('a late sign-out failure does not steal focus once the menu is dismissed', async () => {
+    signOutStatus = 500;
+    button.click();
+    signOut.click();
+    byId('new-todo').focus();
+    dispatch(menu, 'focusout', { relatedTarget: byId('new-todo') });
+    await settle();
+    assert.equal(byId('auth-signout-note').hidden, false);
+    assert.equal(document.activeElement, byId('new-todo'));
+    byId('auth-dismiss-note').click();
+  });
+
   await t.test('Sign out from the menu signs out and hides the header controls', async () => {
     signOutStatus = 204;
     button.click();
     signOut.click();
     await settle();
-    assert.equal(signOuts.length, 2);
+    assert.equal(signOuts.length, 3);
     assert.equal(byId('auth-view').hidden, false);
     assert.equal(byId('task-view').hidden, true);
     assert.equal(account.hidden, true);
