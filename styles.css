@@ -545,7 +545,7 @@ p {
   background: var(--hairline);
 }
 
-/* Checkbox: a 22px box with a 44×44 hit area. */
+/* Checkbox: a 22px circle with a 44×44 hit area. */
 .todo-checkbox {
   flex: none;
   appearance: none;
@@ -568,7 +568,7 @@ p {
   width: 22px;
   height: 22px;
   border: 1.5px solid var(--field);
-  border-radius: 6px;
+  border-radius: 50%;
   background: var(--surface);
   transition: background-color 120ms var(--ease), border-color 120ms var(--ease);
 }
@@ -606,6 +606,7 @@ p {
 .todo-checkbox:focus-visible::before {
   outline: 2px solid var(--ink);
   outline-offset: 2px;
+  border-radius: 50%;
 }
 
 /* The body: one button that opens the task sheet. */
@@ -792,7 +793,7 @@ p {
   flex: none;
   width: 22px;
   height: 22px;
-  border-radius: 6px;
+  border-radius: 50%;
   background: var(--raised);
 }
 
