@@ -91,6 +91,32 @@ test('profile menu', async (t) => {
     assert.equal(dispatch(document, 'keydown', { key: 'Escape' }).defaultPrevented, false);
   });
 
+  await t.test('Escape returns focus to the button even when focus fell to the body', () => {
+    button.click();
+    document.activeElement = document.body ?? null; // clicking the name label blurred Sign out
+    if (document.activeElement === button || menu.contains(document.activeElement)) document.activeElement = null;
+    assert.equal(isOpen(), true);
+    dispatch(document, 'keydown', { key: 'Escape' });
+    assert.equal(isOpen(), false);
+    assert.equal(document.activeElement, button);
+  });
+
+  await t.test('another tab switching accounts closes the open menu', async () => {
+    button.click();
+    assert.equal(document.activeElement, signOut);
+    ana.user = { name: 'Bo', email: 'bo@example.test' };
+    ana.csrfToken = 'token-b';
+    dispatch(globalThis.window ?? document, 'focus');
+    await settle();
+    assert.equal(isOpen(), false);
+    assert.equal(document.activeElement, button);
+    assert.equal(name.textContent, 'Bo');
+    ana.user = { name: 'Ana', email: 'ana@example.test' };
+    ana.csrfToken = 'token-a';
+    dispatch(globalThis.window ?? document, 'focus');
+    await settle();
+  });
+
   await t.test('keyboard: Down on the button opens it; arrows keep focus on the item', () => {
     dispatch(button, 'keydown', { key: 'ArrowDown' });
     assert.equal(isOpen(), true);
@@ -146,21 +172,59 @@ test('profile menu', async (t) => {
     assert.equal(document.activeElement, task);
   });
 
-  await t.test('a cancelled or dragged-off press does not swallow the next keyboard activation', async () => {
-    button.click();
-    dispatch(button, 'pointerdown');
+  // Models the browser: moving focus fires focusout on the menu (if it had focus) and focusin.
+  const focusTo = (target) => {
+    const previous = document.activeElement;
+    target.focus();
+    if (previous && menu.contains(previous) && !menu.contains(target)) dispatch(menu, 'focusout', { relatedTarget: target });
+    dispatch(document, 'focusin', { target });
+  };
+  const keyboardClick = () => dispatch(button, 'click', { detail: 0 });
+  const pointerClick = () => dispatch(button, 'click', { detail: 1 });
+  const openMenuFromKeyboard = () => {
+    focusTo(button);
+    keyboardClick();
+  };
+
+  await t.test('a cancelled press does not swallow the next activation', () => {
+    openMenuFromKeyboard();
+    assert.equal(isOpen(), true);
+    dispatch(button, 'pointerdown'); // remembers "open"
+    focusTo(button); // the press moves focus, closing the menu
+    assert.equal(isOpen(), false);
     dispatch(button, 'pointercancel');
-    button.click();
-    assert.equal(isOpen(), false, 'keyboard activation closes the open menu');
-    button.click();
+    keyboardClick();
+    assert.equal(isOpen(), true, 'keyboard click opens the closed menu');
+    keyboardClick();
+    assert.equal(isOpen(), false);
+    // Same again, then a pointer click that has no press of its own: stale state would close.
+    openMenuFromKeyboard();
     dispatch(button, 'pointerdown');
+    focusTo(button);
+    dispatch(button, 'pointercancel');
+    pointerClick();
+    assert.equal(isOpen(), true, 'a later pointer click does not read the cancelled press');
+    keyboardClick();
+  });
+
+  await t.test('a dragged-off press does not swallow the next activation', async () => {
+    openMenuFromKeyboard();
+    dispatch(button, 'pointerdown');
+    focusTo(button);
+    assert.equal(isOpen(), false);
+    dispatch(document, 'pointerup'); // released elsewhere: no click on the button
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    keyboardClick();
+    assert.equal(isOpen(), true);
+    keyboardClick();
+    openMenuFromKeyboard();
+    dispatch(button, 'pointerdown');
+    focusTo(button);
     dispatch(document, 'pointerup');
     await new Promise((resolve) => setTimeout(resolve, 5));
-    button.click();
-    assert.equal(isOpen(), false);
-    button.click();
-    assert.equal(isOpen(), true);
-    button.click();
+    pointerClick();
+    assert.equal(isOpen(), true, 'a later pointer click does not read the dragged-off press');
+    keyboardClick();
   });
 
   await t.test('a press on the button while open closes it instead of reopening', () => {

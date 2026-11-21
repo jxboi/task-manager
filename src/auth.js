@@ -128,6 +128,13 @@ function announceSession(active) {
 }
 
 function setAccount(active) {
+  // Another tab switched accounts: the open menu's Sign out would now act on the new account.
+  const switched = currentSession && (currentSession.csrfToken !== active.csrfToken || currentSession.user.email !== active.user.email);
+  if (switched && !profileMenu.hidden) {
+    const owned = profileMenu.contains(document.activeElement);
+    setMenuOpen(false);
+    if (owned) profileButton.focus();
+  }
   currentSession = active;
   setToken(active.csrfToken);
   const label = active.user.name || active.user.email;
@@ -463,7 +470,9 @@ profileMenu.addEventListener('keydown', (event) => {
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !profileMenu.hidden) {
     event.preventDefault();
-    closeMenu();
+    // Focus may be on the body (a click on the name label blurred Sign out); Escape returns it.
+    setMenuOpen(false);
+    profileButton.focus();
   }
 });
 document.addEventListener('pointerdown', (event) => {
