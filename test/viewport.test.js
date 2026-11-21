@@ -230,11 +230,59 @@ test('only the field that still has focus is revealed, and only for a short whil
   doc.activeElement = null; // blurred (the keyboard's Done)
   vv.set({ height: 300 });
   assert.equal(body.scrollTop, 0, 'a blurred field is not chased');
-  focusIn(layer, doc, elements.other);
+  focusIn(layer, doc, elements.other); // revealed above the 300px viewport
+  // The user scrolls the body away from the field; Safari then pans the visual viewport (offset
+  // only, or a taller viewport), within the reveal window and after it: the user is not pulled back.
+  body.scrollTop = 30;
+  vv.offsetTop = 40;
+  vv.dispatchEvent(new Event('scroll'));
   timers.advance(REVEAL_WINDOW_MS + 1);
-  const before = body.scrollTop;
-  vv.set({ height: 200 }); // a later resize (rotation) long after the focus
-  assert.equal(body.scrollTop, before);
+  vv.offsetTop = 0;
+  vv.dispatchEvent(new Event('scroll'));
+  vv.set({ height: 400, offsetTop: 10 });
+  assert.equal(body.scrollTop, 30);
+});
+
+test('keyboard reopened for the field that kept focus: revealed on the shrink, without a focusin', () => {
+  const { sync, vv, layer, doc, elements, body, timers } = setup({
+    sheet: { bodyTop: 200, bodyHeight: 644, fields: { text: 450 } },
+  });
+  sync.start();
+  focusIn(layer, doc, elements.text);
+  vv.set({ height: 420 });
+  assert.ok(inside(elements.text.getBoundingClientRect(), 0, 420));
+  timers.advance(REVEAL_WINDOW_MS + 1);
+  vv.set({ height: 844 }); // keyboard dismissed; the input keeps focus
+  body.scrollTop = 0; // the user scrolls back up: the field is behind where the keyboard was
+  vv.offsetTop = 30; // an offset-only change does not chase it
+  vv.dispatchEvent(new Event('scroll'));
+  assert.equal(body.scrollTop, 0);
+  vv.set({ height: 420, offsetTop: 0 }); // tap the same field: the keyboard is back, no focusin
+  const box = elements.text.getBoundingClientRect();
+  assert.ok(inside(box, 0, 420), `field at ${box.top} is above the reopened keyboard`);
+  // A shrink with no field focused inside the body moves nothing.
+  vv.set({ height: 844 });
+  body.scrollTop = 0;
+  doc.activeElement = { tagName: 'INPUT' }; // a field outside the sheet
+  vv.set({ height: 420 });
+  assert.equal(body.scrollTop, 0);
+});
+
+test('a very short visual viewport (landscape keyboard) still shows the whole focused input', () => {
+  // The margin shrinks when the field barely fits: 52px of room for a 48px field.
+  const delta = nearestDelta({ top: 300, height: 48 }, { top: 100, height: 52 });
+  assert.ok(inside({ top: 300 - delta, height: 48 }, 100, 52), `delta ${delta}`);
+  assert.equal(nearestDelta({ top: 102, height: 48 }, { top: 100, height: 52 }), 0, 'already whole: no scroll');
+  // A 144px visual viewport with a 52px-high body visible under the header; fields are 44px.
+  const { sync, vv, layer, doc, elements } = setup({
+    vv: fakeViewport({ height: 844 }),
+    sheet: { bodyTop: 92, bodyHeight: 752, fields: { text: 200 } },
+  });
+  sync.start();
+  focusIn(layer, doc, elements.text);
+  vv.set({ height: 144 });
+  const box = elements.text.getBoundingClientRect();
+  assert.ok(inside(box, 92, 52), `field ${box.top}..${box.top + box.height} inside 92..144`);
 });
 
 test('buttons are not revealed; fields outside the body are left alone', () => {

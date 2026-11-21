@@ -10,7 +10,9 @@
 // A focused field is scrolled into view inside the sheet body (block: 'nearest' semantics), by
 // setting the body's scrollTop: Element.scrollIntoView would also scroll the page behind.
 // It runs at once, again when the visual viewport next changes (the keyboard arriving) and once
-// more after the keyboard animation has settled.
+// more after the keyboard animation has settled. Any later shrink of the visual viewport (the
+// keyboard reopened for the field that kept focus, which fires no focusin) reveals the focused
+// field again; offset-only changes (Safari panning) never pull the user back to it.
 
 export const SETTLE_MS = 350; // the iOS keyboard animates in for about 250ms
 export const REVEAL_WINDOW_MS = 1000; // how long a focus waits for the keyboard's resize
@@ -27,8 +29,10 @@ export function viewportBox(win) {
 
 // How far `container` must scroll for `box` to sit inside `visible` (both { top, height }), with
 // block: 'nearest' semantics: no scroll when it already fits; otherwise the least scroll that
-// shows it, its top winning when it is taller than the room.
+// shows it, its top winning when it is taller than the room. When the box barely fits, the
+// margin shrinks so the whole box still shows.
 export function nearestDelta(box, visible, margin = REVEAL_MARGIN) {
+  if (box.height <= visible.height) margin = Math.min(margin, (visible.height - box.height) / 2);
   const top = visible.top + margin;
   const bottom = visible.top + visible.height - margin;
   if (bottom <= top) return 0;
@@ -71,12 +75,17 @@ export function createSheetViewport({
   let pending = null; // the field waiting for the keyboard
   let pendingUntil = 0;
   let timer = null;
+  let lastHeight = null; // the visual viewport's height as last applied
 
+  // Returns the visual viewport's height change since the last call (0 without one).
   function apply() {
     const box = viewportBox(win);
-    if (!box) return;
+    if (!box) return 0;
     layer.style.setProperty('--vv-top', `${box.top}px`);
     layer.style.setProperty('--vvh', `${box.height}px`);
+    const change = lastHeight === null ? 0 : box.height - lastHeight;
+    lastHeight = box.height;
+    return change;
   }
 
   function revealPending() {
@@ -88,9 +97,20 @@ export function createSheetViewport({
     revealIn(body, pending, win);
   }
 
-  function onViewport() {
-    apply();
-    revealPending();
+  // The focused field, if it is one inside the sheet body.
+  function focusedField() {
+    const field = doc?.activeElement;
+    return FIELD.test(field?.tagName ?? '') && body?.contains?.(field) ? field : null;
+  }
+
+  function onViewport(event) {
+    if (apply() < 0) {
+      // Smaller: the keyboard arrived or reopened. Reveal whatever field has focus.
+      const field = focusedField();
+      if (field) revealIn(body, field, win);
+    } else if (event?.type === 'resize') {
+      revealPending();
+    }
   }
 
   function onFocusIn(event) {
@@ -127,6 +147,7 @@ export function createSheetViewport({
       if (timer !== null) clearTimer(timer);
       timer = null;
       pending = null;
+      lastHeight = null;
       layer.style.removeProperty?.('--vv-top');
       layer.style.removeProperty?.('--vvh');
     },

@@ -1085,8 +1085,11 @@ p {
 
 /* The layer covers the visual viewport: src/viewport.js sets --vv-top and --vvh while the sheet
    is open, so on iOS the sheet sits above the keyboard rather than behind it. Without
-   visualViewport they stay unset and the layer covers the whole viewport. */
+   visualViewport they stay unset and the layer covers the whole viewport.
+   --sheet-gutter is the room kept above the sheet: 48px normally, shrinking to 8px in very short
+   visual viewports (a landscape keyboard) so the body still has room for a whole field. */
 .reminder-layer {
+  --sheet-gutter: clamp(8px, calc((var(--vvh, 100dvh) - 200px) / 4), 48px);
   position: fixed;
   top: var(--vv-top, 0px);
   right: 0;
@@ -1111,7 +1114,7 @@ p {
   flex-direction: column;
   width: 100%;
   max-width: 560px;
-  max-height: calc(var(--vvh, 100dvh) - 48px);
+  max-height: calc(var(--vvh, 100dvh) - var(--sheet-gutter));
   border-radius: 20px 20px 0 0;
   background: var(--surface);
   box-shadow: var(--shadow-sheet);
@@ -1622,12 +1625,12 @@ p {
 @media (min-width: 640px) {
   .reminder-layer {
     align-items: center;
-    padding: 24px;
+    padding: calc(var(--sheet-gutter) / 2);
   }
 
   .reminder-editor {
     max-width: 440px;
-    max-height: calc(var(--vvh, 100dvh) - 48px);
+    max-height: calc(var(--vvh, 100dvh) - var(--sheet-gutter));
     border-radius: 20px;
   }
 
