@@ -23,7 +23,7 @@ test('task sheet reminder picker', async (t) => {
     done: '00000000-0000-4000-8000-000000000002',
     late: '00000000-0000-4000-8000-000000000003',
   };
-  const base = { tags: [], due: null, repeat: 'none', notified: null, revision: 1 };
+  const base = { category: null, due: null, repeat: 'none', notified: null, revision: 1 };
   const server = createFakeApi();
   server.rows = [
     { ...base, id: ids.open, text: 'Open task', completed: false, createdAt: 1 },
@@ -275,11 +275,11 @@ test('task sheet reminder picker', async (t) => {
     assert.equal(isFired('late'), false);
   });
 
-  await t.test('the pulse ending updates the row in place and keeps the sheet\'s open "Add tag" field', async () => {
+  await t.test('the pulse ending updates the row in place and keeps the sheet\'s open "New category" field', async () => {
     await fireAgain('late');
     open('open');
-    byId('edit-tag-add').click();
-    const field = byId('edit-tag-field');
+    byId('edit-category-add').click();
+    const field = byId('edit-category-field');
     const lateRow = row('late');
     assert.equal(field.hidden, false);
     assert.equal(document.activeElement, field);
@@ -289,17 +289,17 @@ test('task sheet reminder picker', async (t) => {
     assert.equal(row('late'), lateRow, 'the row was not re-rendered');
     assert.equal(lateRow.style.animationDelay, '');
     assert.equal(isFired('late'), false);
-    assert.equal(field.hidden, false, 'the tag field stays open');
+    assert.equal(field.hidden, false, 'the category field stays open');
     assert.equal(document.activeElement, field);
     cancel();
   });
 
   // The real handler runs in the capture phase, before the field's own Esc handler.
-  await t.test('Esc in the sheet\'s "Add tag" field clears the pulses and closes only the field', async () => {
+  await t.test('Esc in the sheet\'s "New category" field clears the pulses and closes only the field', async () => {
     await fireAgain('late');
     open('open');
-    byId('edit-tag-add').click();
-    const field = byId('edit-tag-field');
+    byId('edit-category-add').click();
+    const field = byId('edit-category-field');
     const escape = dispatch(field, 'keydown', { key: 'Escape', preventDefault() { this.prevented = true; } });
     document.dispatchEvent(escape);
     field.dispatchEvent(escape);

@@ -7,7 +7,7 @@ const sessionA = { user: { name: 'Ana', email: 'ana@example.test' }, csrfToken: 
 const sessionB = { user: { name: 'Ben', email: 'ben@example.test' }, csrfToken: 'token-b' };
 const ID = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const row = (n, text, extra = {}) => ({
-  id: ID(n), text, completed: false, createdAt: n, tags: [], due: null, repeat: 'none', notified: null, revision: 1, ...extra,
+  id: ID(n), text, completed: false, createdAt: n, category: null, due: null, repeat: 'none', notified: null, revision: 1, ...extra,
 });
 
 test('task view against the server API', async (t) => {
@@ -86,7 +86,7 @@ test('task view against the server API', async (t) => {
   });
 
   await t.test('signing in shows a loading state, then the server list', async () => {
-    servers.a.rows = [row(1, 'Existing', { tags: ['home'] })];
+    servers.a.rows = [row(1, 'Existing', { category: 'home' })];
     let open;
     gate = new Promise((resolve) => { open = resolve; });
     signIn(sessionA);
@@ -104,17 +104,17 @@ test('task view against the server API', async (t) => {
     assert.equal(servers.a.requests[0].headers['X-CSRF-Token'], 'token-a');
   });
 
-  await t.test('adding parses inline tags and saves to the server', async () => {
+  await t.test('adding parses an inline #category and saves to the server', async () => {
     await add('Pay rent #bills');
     assert.equal(input.value, '');
     assert.deepEqual(texts(), ['Existing', 'Pay rent']);
     const saved = servers.a.rows.at(-1);
     assert.equal(saved.text, 'Pay rent');
-    assert.deepEqual(saved.tags, ['bills']);
+    assert.equal(saved.category, 'bills');
   });
 
-  await t.test('an active filter tags new tasks, and filters reset is in memory only', async () => {
-    const chip = byId('filter-bar').children.find((item) => item.dataset.tag === 'home');
+  await t.test('the selected category goes on new tasks, and the filter is in memory only', async () => {
+    const chip = byId('filter-bar').children.find((item) => item.dataset.category === 'home');
     chip.click();
     assert.deepEqual(texts(), ['Existing']);
     // Filtering shows only Clear in the summary row, no "N to do in #home".
@@ -122,7 +122,7 @@ test('task view against the server API', async (t) => {
     assert.equal(byId('clear-filters').hidden, false);
     assert.equal(summary.textContent, '');
     await add('Fix tap');
-    assert.deepEqual(servers.a.rows.at(-1).tags, ['home']);
+    assert.equal(servers.a.rows.at(-1).category, 'home');
     assert.deepEqual(texts(), ['Existing', 'Fix tap']);
     byId('clear-filters').click();
     assert.equal(texts().length, 3);
@@ -132,13 +132,13 @@ test('task view against the server API', async (t) => {
     await toggle('Existing');
     assert.equal(servers.a.rows[0].completed, true);
     // Another tab renames nothing but bumps the row.
-    servers.a.rows = servers.a.rows.map((item, i) => (i === 0 ? { ...item, tags: ['home', 'other'], revision: item.revision + 5 } : item));
+    servers.a.rows = servers.a.rows.map((item, i) => (i === 0 ? { ...item, category: 'other', revision: item.revision + 5 } : item));
     await toggle('Existing');
     assert.equal(note.hidden, false);
     assert.match(byId('sync-text').textContent, /changed in another tab/);
     assert.equal(byId('sync-retry').hidden, true);
-    // The list was reloaded: the other tab's tag shows, and the toggle didn't apply.
-    assert.deepEqual(rowOf('Existing').querySelectorAll('.tag-label').map((label) => label.dataset.tag), ['home', 'other']);
+    // The list was reloaded: the other tab's category shows, and the toggle didn't apply.
+    assert.deepEqual(rowOf('Existing').querySelectorAll('.category-label').map((label) => label.dataset.category), ['other']);
     assert.equal(servers.a.rows[0].completed, true);
     byId('sync-dismiss').click();
     assert.equal(note.hidden, true);
@@ -305,8 +305,8 @@ test('task view against the server API', async (t) => {
     assert.equal(input.value, '');
   });
 
-  await t.test('item 3: a retry ID only goes to exactly the same task (text and every tag, filter included)', async () => {
-    const chip = (tag) => byId('filter-bar').children.find((item) => item.dataset.tag === tag);
+  await t.test('item 3: a retry ID only goes to exactly the same task (text and category, filter included)', async () => {
+    const chip = (category) => byId('filter-bar').children.find((item) => item.dataset.category === category);
     await add('Seed #home');
     await add('Seed #work');
     chip('home').click();
@@ -318,7 +318,7 @@ test('task view against the server API', async (t) => {
     await add('Unrelated'); // under #work
     await add('Check supplies'); // a different task: #work, not the #home one
     const rows = servers.a.rows.filter((item) => item.text === 'Check supplies');
-    assert.deepEqual(rows.map((item) => item.tags).sort(), [['home'], ['work']]);
+    assert.deepEqual(rows.map((item) => item.category).sort(), ['home', 'work']);
     assert.equal(new Set(rows.map((item) => item.id)).size, 2);
     byId('clear-filters').click();
     // The #home draft still reconciles to its own row when re-added under #home.
@@ -405,7 +405,7 @@ test('task view against the server API', async (t) => {
     rowOf('Existing').querySelector('.todo-open').click();
     setWhen('2031-05-05T08:00');
     byId('reminder-repeat').value = 'daily';
-    byId('filter-bar').children.find((item) => item.dataset.tag === 'home').click();
+    byId('filter-bar').children.find((item) => item.dataset.category === 'other').click();
     input.value = 'half-typed';
     let open;
     gate = new Promise((resolve) => { open = resolve; });

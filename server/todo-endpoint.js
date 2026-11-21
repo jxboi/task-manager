@@ -3,8 +3,11 @@ import { createInput, patchTodo, readId, readMove, readRevision } from './todo-i
 import { moveTodo } from '../src/todos.js';
 
 const position = 'COALESCE(position, todo_initial_position(created_at, id)) COLLATE "C"';
+// A row written by the tags version during rollout (category still null) reads as its first tag.
+// `tags` is still returned and kept equal to [category], for tabs running the tags version.
 const columns = `id, text, completed, completed_until AS "completedUntil", created_at AS "createdAt",
-  tags, due, repeat, notified, revision, ${position} AS position`;
+  COALESCE(category, tags[1]) AS category, tags, due, repeat, notified, revision, ${position} AS position`;
+const tagsOf = (category) => (category === null ? [] : [category]);
 
 function toTodo(row) {
   return {
@@ -39,12 +42,12 @@ async function listTodos(pool, userId) {
   return rows.map(toTodo);
 }
 
-async function createTodo(pool, userId, { id, text, tags }) {
+async function createTodo(pool, userId, { id, text, category }) {
   // Append in a new whole slot. Concurrent creates may choose the same slot, with UUID
   // suffixes giving them distinct keys and a deterministic order.
   const { rows: [row] } = await pool.query(
-    `INSERT INTO todos (user_id, id, text, tags, created_at, position)
-     VALUES ($1, $2, $3, $4, $5,
+    `INSERT INTO todos (user_id, id, text, category, tags, created_at, position)
+     VALUES ($1, $2, $3, $4, $6, $5,
        lpad(GREATEST(
          $5::bigint::numeric + 9223372036854775808,
          (SELECT max(left(${position}, 20))::numeric + 1 FROM todos WHERE user_id = $1)
@@ -52,7 +55,7 @@ async function createTodo(pool, userId, { id, text, tags }) {
      )
      ON CONFLICT (user_id, id) DO NOTHING
      RETURNING ${columns}`,
-    [userId, id, text, tags, Date.now()],
+    [userId, id, text, category, Date.now(), tagsOf(category)],
   );
   if (!row) throw new RequestError(409, 'DUPLICATE_ID', 'A todo with this ID already exists.');
   return json({ todo: toTodo(row) }, 201);
@@ -75,13 +78,13 @@ async function updateTodo(pool, userId, id, body) {
   if (changed === todo) return json({ todo });
 
   const { rows: [row] } = await pool.query(
-    `UPDATE todos SET completed = $4, tags = $5, due = $6, repeat = $7, notified = $8,
+    `UPDATE todos SET completed = $4, category = $5, tags = $12, due = $6, repeat = $7, notified = $8,
        text = $9, completed_until = $10, position = $11,
        revision = revision + 1
      WHERE user_id = $1 AND id = $2 AND revision = $3
      RETURNING ${columns}`,
-    [userId, id, revision, changed.completed, changed.tags, changed.due, changed.repeat,
-      changed.notified, changed.text, changed.completedUntil, changed.position],
+    [userId, id, revision, changed.completed, changed.category, changed.due, changed.repeat,
+      changed.notified, changed.text, changed.completedUntil, changed.position, tagsOf(changed.category)],
   );
   if (!row) {
     await findTodo(pool, userId, id);

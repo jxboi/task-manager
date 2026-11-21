@@ -77,7 +77,7 @@ test('authRequest posts JSON, sends the CSRF token only when asked and reports B
 });
 
 test('listTodos sends the session token on the read too, so it is bound to that session', async () => {
-  const todos = [{ id: ID, text: 'One', completed: false, createdAt: 1, tags: [], due: null, repeat: 'none', notified: null, revision: 1 }];
+  const todos = [{ id: ID, text: 'One', completed: false, createdAt: 1, category: null, due: null, repeat: 'none', notified: null, revision: 1 }];
   responder = () => respond(200, { todos });
   assert.deepEqual(await listTodos(), todos);
   assert.equal(calls[0].path, '/api/todos');
@@ -89,9 +89,9 @@ test('listTodos sends the session token on the read too, so it is bound to that 
 
 test('createTodo, patchTodo and deleteTodo send JSON with the CSRF token', async () => {
   responder = () => respond(201, { todo: { id: ID } });
-  assert.deepEqual(await createTodo({ id: ID, text: 'Pay rent', tags: ['home'], createdAt: 5, extra: true }), { id: ID });
+  assert.deepEqual(await createTodo({ id: ID, text: 'Pay rent', category: 'home', createdAt: 5, extra: true }), { id: ID });
   assert.equal(calls[0].method, 'POST');
-  assert.equal(calls[0].body, JSON.stringify({ id: ID, text: 'Pay rent', tags: ['home'] }));
+  assert.equal(calls[0].body, JSON.stringify({ id: ID, text: 'Pay rent', category: 'home' }));
 
   responder = () => respond(200, { todo: { id: ID, revision: 3 } });
   await patchTodo(ID, 2, 'setReminder', { due: 10, repeat: 'daily' });

@@ -38,7 +38,7 @@ test('the + button opens the new-task field', async (t) => {
     assert.equal(byId('empty-state').hidden, false);
   });
 
-  await t.test('tapping it reveals and focuses the field; a #tag is saved as a tag', async () => {
+  await t.test('tapping it reveals and focuses the field; a #word is saved as the category', async () => {
     toggle.click();
     assert.equal(form.hidden, false);
     assert.equal(toggle.getAttribute('aria-expanded'), 'true');
@@ -48,7 +48,7 @@ test('the + button opens the new-task field', async (t) => {
     form.dispatchEvent(new Event('submit'));
     await settle();
     assert.deepEqual(texts(), ['Buy milk']);
-    assert.deepEqual(server.rows.at(-1).tags, ['home']);
+    assert.equal(server.rows.at(-1).category, 'home');
     // The field stays open for the next task.
     assert.equal(form.hidden, false);
     assert.equal(input.value, '');

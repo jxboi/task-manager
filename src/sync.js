@@ -5,12 +5,10 @@
 // rejects drops out of the view again. reset() starts a new session: anything still in flight
 // from the old one is ignored when it settles.
 import {
-  addTag,
   appendTodo,
   clearReminder,
   editTodo,
   moveTodo,
-  removeTag,
   removeTodo,
   setReminder,
   sortByPosition,
@@ -189,11 +187,10 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
       return result;
     },
 
-    // Slice 2: call move(id, anchorId, 'before' | 'after', activeTags) with visible IDs.
+    // Slice 2: call move(id, anchorId, 'before' | 'after', activeCategory) with visible IDs.
     // The result follows the normal write contract. An unchanged move resolves with skipped.
-    move(id, anchorId, side, activeTags = []) {
-      const tags = [...activeTags];
-      const apply = (todos) => moveTodo(todos, id, anchorId, side, tags);
+    move(id, anchorId, side, activeCategory = null) {
+      const apply = (todos) => moveTodo(todos, id, anchorId, side, activeCategory);
       if (apply(view) === view) return Promise.resolve({ ok: false, skipped: true });
       return write({
         id,
@@ -230,20 +227,12 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
       });
     },
 
-    addTag(id, tag) {
-      return patch(id, (todos) => addTag(todos, id, tag), 'addTag', { tag });
-    },
-
-    removeTag(id, tag) {
-      return patch(id, (todos) => removeTag(todos, id, tag), 'removeTag', { tag });
-    },
-
     setReminder(id, due, repeat) {
       return patch(id, (todos) => setReminder(todos, id, due, repeat), 'setReminder', { due, repeat });
     },
 
-    // The edit form: title, tags and reminder in one write. `fields` is the whole new state,
-    // {text, tags, due, repeat}, so it applies the same on the server as it did here.
+    // The edit form: title, category and reminder in one write. `fields` is the whole new state,
+    // {text, category, due, repeat}, so it applies the same on the server as it did here.
     edit(id, fields) {
       return patch(id, (todos) => editTodo(todos, id, fields), 'edit', fields);
     },

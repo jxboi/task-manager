@@ -8,7 +8,7 @@ import { createFakeApi, settle } from './fake-api.js';
 test('the composer adds a quick reminder to the next task', async (t) => {
   const server = createFakeApi();
   server.rows = [{
-    id: '00000000-0000-4000-8000-0000000000c1', text: 'Old', tags: ['work'], completed: false,
+    id: '00000000-0000-4000-8000-0000000000c1', text: 'Old', category: 'work', completed: false,
     createdAt: 1, due: null, repeat: 'none', notified: null, revision: 1,
   }];
   const { byId } = installDom(t, { fetch: (...args) => server.fetch(...args) });
@@ -41,9 +41,9 @@ test('the composer adds a quick reminder to the next task', async (t) => {
   });
 
   await t.test('a selected shelf is named', () => {
-    byId('filter-bar').children.find((item) => item.dataset.tag === 'work').click();
+    byId('filter-bar').children.find((item) => item.dataset.category === 'work').click();
     assert.equal(byId('add-shelf').hidden, false);
-    assert.equal(byId('add-shelf').textContent, 'Adds to #work');
+    assert.equal(byId('add-shelf').textContent, 'Adds to work');
   });
 
   await t.test('tomorrow + weekly is saved on the new task, then the choice resets', async () => {
@@ -59,7 +59,7 @@ test('the composer adds a quick reminder to the next task', async (t) => {
     expected.setHours(9, 0, 0, 0);
     assert.equal(row.due, expected.getTime());
     assert.equal(row.repeat, 'weekly');
-    assert.deepEqual(row.tags, ['work']);
+    assert.equal(row.category, 'work');
     assert.deepEqual(pressed(quick), ['none']);
     assert.equal(repeat.hidden, true);
   });

@@ -12,9 +12,9 @@ import { createFakeApi } from './fake-api.js';
 
 const HOUR = 3_600_000;
 const base = (overrides = {}) => ({
-  ...addTodo([], 'Pay rent', ['home'])[0], revision: 1, ...overrides,
+  ...addTodo([], 'Pay rent', 'home')[0], revision: 1, ...overrides,
 });
-const fields = (overrides = {}) => ({ text: 'Pay rent', tags: ['home'], due: null, repeat: 'none', ...overrides });
+const fields = (overrides = {}) => ({ text: 'Pay rent', category: 'home', due: null, repeat: 'none', ...overrides });
 
 function setup() {
   const server = createFakeApi();
@@ -25,12 +25,12 @@ function setup() {
 
 // --- editTodo --------------------------------------------------------------------------------
 
-test('editTodo replaces text, tags and reminder and leaves completion alone', () => {
+test('editTodo replaces text, category and reminder and leaves completion alone', () => {
   const todo = base({ completed: true });
   const due = Date.now() + HOUR;
-  const [next] = editTodo([todo], todo.id, fields({ text: '  Pay rent early ', tags: ['#Home', 'bills'], due, repeat: 'daily' }));
+  const [next] = editTodo([todo], todo.id, fields({ text: '  Pay rent early ', category: 'bills', due, repeat: 'daily' }));
   assert.equal(next.text, 'Pay rent early');
-  assert.deepEqual(next.tags, ['home', 'bills']);
+  assert.equal(next.category, 'bills');
   assert.equal(next.due, due);
   assert.equal(next.repeat, 'daily');
   assert.equal(next.notified, null);
@@ -58,7 +58,8 @@ test('editTodo returns the same array for no change, an unknown id or invalid fi
     { text: '   ' },
     { text: 'x'.repeat(2001) },
     { text: 'a\0b' },
-    { tags: 'home' },
+    { category: '#Home' },
+    { category: ['home'] },
     { due: 1.5, repeat: 'none' },
     { due: null, repeat: 'daily' },
     { due: Date.now(), repeat: 'hourly' },
@@ -69,38 +70,45 @@ test('editTodo returns the same array for no change, an unknown id or invalid fi
 
 // --- Shared add/edit input -------------------------------------------------------------------
 
-test('readTaskInput parses #tags like the add form and reports why a title is invalid', () => {
-  assert.deepEqual(readTaskInput('Pay rent #Home #bills'), { text: 'Pay rent', tags: ['home', 'bills'], error: null });
-  assert.deepEqual(readTaskInput('  #home  '), { text: '', tags: ['home'], error: 'empty' });
+test('readTaskInput parses #category like the add form and reports why a title is invalid', () => {
+  assert.deepEqual(readTaskInput('Pay rent #Home #bills'), { text: 'Pay rent #bills', category: 'home', error: null });
+  assert.deepEqual(readTaskInput('  #home  '), { text: '', category: 'home', error: 'empty' });
   assert.equal(readTaskInput('').error, 'empty');
   assert.equal(readTaskInput('😀'.repeat(2000)).error, null);
   assert.equal(readTaskInput('😀'.repeat(2001)).error, 'invalid');
   assert.equal(readTaskInput('a\0b').error, 'invalid');
-  // The filter's tags come first, as for a new task.
-  assert.deepEqual(readTaskInput('Call #mum', ['family']).tags, ['family', 'mum']);
+  // The selected category is the default; a typed one replaces it, as for a new task.
+  assert.equal(readTaskInput('Call mum', 'family').category, 'family');
+  assert.equal(readTaskInput('Call #mum', 'family').category, 'mum');
   assert.equal(validText(' ok '), true);
   assert.equal(validText(5), false);
 });
 
-test('an untouched edit keeps the title and tags as they are, whatever they contain', () => {
-  const todo = { text: 'Review #42 and C#', tags: ['ref#42', 'c#', 'a#b#c', '##x'] };
-  assert.deepEqual(readTaskEdit(todo.text, todo.text, todo.tags), { ...todo, error: null });
-  assert.deepEqual(readTaskEdit('Review now #new', todo.text, ['ref#42']), { text: 'Review now', tags: ['ref#42', 'new'], error: null });
-  assert.equal(readTaskEdit('', 'Pay', []).error, 'empty');
+test('an untouched edit keeps the title and category as they are, whatever they contain', () => {
+  const todo = { text: 'Review #42 and C#', category: 'ref#42' };
+  assert.deepEqual(readTaskEdit(todo.text, todo.text, todo.category), { ...todo, error: null });
+  assert.deepEqual(readTaskEdit('Review now', todo.text, 'ref#42'), { text: 'Review now', category: 'ref#42', error: null });
+  assert.deepEqual(readTaskEdit('Review now #new', todo.text, 'ref#42'), { text: 'Review now', category: 'new', error: null });
+  assert.equal(readTaskEdit('', 'Pay', null).error, 'empty');
 });
 
 test('the edit action applies the whole edit and rejects invalid fields', () => {
   const todo = base();
   const due = Date.now() + HOUR;
   const body = (overrides) => ({ action: 'edit', revision: 1, ...fields(overrides) });
-  const edited = patchTodo(todo, body({ text: 'New', tags: ['a', 'b'], due, repeat: 'weekly' }));
-  assert.deepEqual([edited.text, edited.tags, edited.due, edited.repeat], ['New', ['a', 'b'], due, 'weekly']);
+  const edited = patchTodo(todo, body({ text: 'New', category: 'A', due, repeat: 'weekly' }));
+  assert.deepEqual([edited.text, edited.category, edited.due, edited.repeat], ['New', 'a', due, 'weekly']);
+  assert.equal(patchTodo(todo, body({ category: null })).category, null, 'null clears the category');
+  // A tab still running the tags version sends `tags`: the first one becomes the category.
+  const { category, ...legacy } = body({ tags: ['b', 'c'] });
+  assert.equal(patchTodo(todo, legacy).category, 'b');
   assert.equal(patchTodo(todo, body()), todo, 'no change returns the row itself');
   const rejected = [
     [{ text: '' }, /title/],
     [{ text: 'x'.repeat(2001) }, /title/],
-    [{ tags: ['ok', '##bad'] }, /tag/],
-    [{ tags: [...Array(11)].map((_, i) => `t${i}`) }, /10 tags/],
+    [{ category: '##bad' }, /category/],
+    [{ category: 'x'.repeat(25) }, /category/],
+    [{ tags: ['home'] }, /not both/],
     [{ due: 'soon' }, /reminder time/],
     [{ due: null, repeat: 'daily' }, /repeat/],
     [{ due, repeat: 'hourly' }, /repeat/],
@@ -122,7 +130,7 @@ test('an edit shows at once, sends one PATCH at the seen revision, and is replac
   await sync.load();
   const id = server.rows[0].id;
   const due = Date.now() + HOUR;
-  const edit = fields({ text: 'Pay rent early', tags: ['home', 'bills'], due, repeat: 'daily' });
+  const edit = fields({ text: 'Pay rent early', category: 'bills', due, repeat: 'daily' });
   const result = sync.edit(id, edit);
   assert.equal(sync.todos[0].text, 'Pay rent early'); // optimistic
   assert.equal(sync.busy, true);
@@ -144,7 +152,7 @@ test('an edit keeps the tick timed while repeating and makes it permanent when r
   server.rows = [todo];
   await sync.load();
 
-  const edit = fields({ text: 'Pay rent early', tags: ['bills'], due: todo.due + HOUR, repeat: 'weekly' });
+  const edit = fields({ text: 'Pay rent early', category: 'bills', due: todo.due + HOUR, repeat: 'weekly' });
   const result = sync.edit(todo.id, edit);
   assert.equal(sync.todos[0].completedUntil, completedUntil);
   assert.equal(isCompleted(sync.todos[0], now), true);
@@ -168,13 +176,13 @@ test('a failed edit rolls back to the confirmed row (server error and network fa
   const id = server.rows[0].id;
   for (const failure of [() => new Response('{}', { status: 500 }), () => new TypeError('Failed to fetch')]) {
     server.failNext = (method) => (method === 'PATCH' ? failure() : undefined);
-    const result = sync.edit(id, fields({ text: 'Doomed', tags: [] }));
+    const result = sync.edit(id, fields({ text: 'Doomed', category: null }));
     assert.equal(sync.todos[0].text, 'Doomed');
     const outcome = await result;
     assert.equal(outcome.ok, false);
     assert.equal(outcome.revision, 1, 'reports the revision it was sent against, for a retry');
     assert.equal(sync.todos[0].text, 'Pay rent');
-    assert.deepEqual(sync.todos[0].tags, ['home']);
+    assert.equal(sync.todos[0].category, 'home');
   }
   assert.equal(server.rows[0].revision, 1);
 });
@@ -183,7 +191,7 @@ test('an edit the server refuses as invalid rolls back with a 400', async () => 
   const { server, sync } = setup();
   server.rows = [base()];
   await sync.load();
-  const outcome = await sync.edit(server.rows[0].id, fields({ tags: ['##bad'] }));
+  const outcome = await sync.edit(server.rows[0].id, fields({ category: '##bad' }));
   assert.equal(outcome.ok, false);
   assert.equal(outcome.error.status, 400);
   assert.deepEqual(sync.todos, server.rows);
