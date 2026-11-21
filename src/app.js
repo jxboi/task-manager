@@ -355,6 +355,8 @@ function renderTodo(todo, now) {
   item.classList.toggle('is-overdue', overdue);
   item.classList.toggle('is-editing', reminderId === todo.id);
   item.dataset.id = todo.id;
+  // The card takes its first tag's shelf color (styles.css [data-color]).
+  if (todo.tags.length > 0) item.dataset.color = tagColor(todo.tags[0]);
   if (fired.has(todo.id)) {
     item.classList.add('is-fired');
     // Re-renders continue the pulse where it was instead of restarting it.
@@ -805,6 +807,9 @@ function renderDraftTags() {
     return chip;
   }));
   tagAdd.hidden = !tagField.hidden || draftTags.length >= MAX_TAGS;
+  // The sheet is tinted with its first tag's shelf color, like the task's card.
+  if (draftTags.length > 0) editor.dataset.color = tagColor(draftTags[0]);
+  else delete editor.dataset.color;
 }
 
 // "Add tag" becomes an inline field: Enter adds and stays open, Esc closes.

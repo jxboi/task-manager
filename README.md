@@ -2,7 +2,7 @@
 
 A small todo list app. Sign in, then add a task, tick it off, tap it to edit or delete it.
 Each account's tasks are saved on the server, so they follow you to any browser you sign in from, and two accounts on the same device never see each other's lists. Signed out, no tasks are shown or kept in the browser.
-Type `#tags` in a new task (`Pay rent #home`) to tag it; each tag gets a fixed color dot from its name, and the filter bar's chips filter the list (any selected tag matches). Tags on a row don't filter; tapping a row opens its task sheet.
+Type `#tags` in a new task (`Pay rent #home`) to tag it; each tag gets a fixed color from its name (a pastel "shelf" color for its filter tab and for the cards of tasks whose first tag it is), and the filter bar's tabs filter the list (any selected tag matches). Tags on a row don't filter; tapping a row opens its task sheet.
 Give a task a reminder in its task sheet (the Reminder switch, then a date from the inline calendar, a time, and Repeat: never, daily or weekly). Overdue tasks are marked and listed first.
 Checking a repeating task keeps it checked until the start of the next scheduled occurrence's day. The reminder shows the next occurrence as soon as you check the task.
 Reminders fire only while the page is open in a browser tab; ones missed while it was closed alert once when you next open it. With several tabs open, each reminder alerts in one of them.

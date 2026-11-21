@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
     <title>Tasks</title>
     <link rel="icon" href="data:,">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&display=swap">
     <link rel="stylesheet" href="styles.css">
     <script type="module" src="src/app.js"></script>
     <script type="module" src="src/auth.js"></script>
@@ -17,6 +20,7 @@
           <button class="icon-button add-toggle" id="add-toggle" type="button" aria-label="Add task" aria-expanded="false"
             aria-controls="add-form" hidden>
             <span class="icon-disc" aria-hidden="true"><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg></span>
+            <span class="add-toggle-label" aria-hidden="true">New task</span>
           </button>
         </div>
         <div class="account" id="account" hidden>
@@ -142,6 +146,7 @@ Clear</button>
         <div class="empty-state" id="empty-state" hidden>
           <div class="empty-page" aria-hidden="true"><i></i><i></i><i></i></div>
           <h2 class="empty-title">No tasks yet</h2>
+          <p class="empty-hint">Add one with New task. Type #tags to put it on a shelf.</p>
         </div>
       </div>
     </main>
