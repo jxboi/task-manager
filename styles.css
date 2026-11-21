@@ -178,7 +178,8 @@ p {
   margin-bottom: 16px;
 }
 
-/* Signed out, loading or a load error: the row collapses; its live region stays for screen readers. */
+/* Unfiltered, signed out, loading or a load error: the row collapses; its live region stays for
+   screen readers. */
 .summary-row.is-quiet {
   position: absolute;
   width: 1px;
@@ -756,13 +757,6 @@ p {
   .todo.is-fired {
     animation: none;
   }
-}
-
-.footer {
-  margin-top: 12px;
-  color: var(--text-3);
-  font-size: 13px;
-  line-height: 20px;
 }
 
 /* Loading: three static skeleton rows. */

@@ -30,7 +30,6 @@ const clearFilters = document.getElementById('clear-filters');
 const hintLimit = document.getElementById('hint-limit');
 const filterWrap = document.getElementById('filter-wrap');
 const filterBar = document.getElementById('filter-bar');
-const footer = document.getElementById('footer');
 const banner = document.getElementById('banner');
 const bannerIcon = document.getElementById('banner-icon');
 const bannerText = document.getElementById('banner-text');
@@ -166,8 +165,8 @@ function findTodo(id) {
   return state.find((todo) => todo.id === id);
 }
 
-// The list as shown: the tag filter, then overdue todos on top. Used by the list, the footer and
-// fallback focus, so they always agree.
+// The list as shown: the tag filter, then overdue todos on top. Used by the list and fallback
+// focus, so they always agree.
 function visibleTodos(now) {
   return sortByUrgency(filterByTags(state, activeTags), now);
 }
@@ -200,28 +199,6 @@ function icon(template) {
 
 function plural(count, word) {
   return `${count} ${word}${count === 1 ? '' : 's'}`;
-}
-
-function hashtags(tags, conjunction) {
-  const names = tags.map((tag) => `#${tag}`);
-  return names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} ${conjunction} ${names.at(-1)}`;
-}
-
-function filterPhrase() {
-  return activeTags.length >= 3 ? plural(activeTags.length, 'tag') : hashtags(activeTags, 'or');
-}
-
-// Counts only: "4 to do", "0 to do", "All done", "4 to do in #home".
-function summaryText(todos, now) {
-  const remaining = todos.filter((todo) => !isCompleted(todo, now)).length;
-  const text = remaining === 0 && todos.length > 0 ? 'All done' : `${remaining} to do`;
-  return activeTags.length === 0 ? text : `${text} in ${filterPhrase()}`;
-}
-
-function footerText(todos, now) {
-  const completed = todos.filter((todo) => isCompleted(todo, now)).length;
-  const text = `${completed} of ${todos.length} completed`;
-  return activeTags.length === 0 ? text : `${text} in ${filterPhrase()}`;
 }
 
 // Due text in the browser's locale and zone: "Today 5:30 PM", "Tomorrow 9:00 AM", "Mon 7:00 PM"
@@ -445,12 +422,11 @@ function render(focusKeys) {
 
   const ready = phase === 'ready';
   const loading = phase === 'loading';
-  // Counts only, and only once the list is shown. While loading the row collapses and the live
-  // region says "Loading your tasks" to screen readers alone.
-  if (loading) summary.textContent = 'Loading your tasks';
-  else summary.textContent = ready ? summaryText(visible, now) : '';
+  // No counts: the row shows only Clear while a filter is on. While loading, its live region says
+  // "Loading your tasks" to screen readers alone.
+  summary.textContent = loading ? 'Loading your tasks' : '';
   summary.setAttribute('aria-busy', String(loading));
-  summaryRow.classList.toggle('is-quiet', !ready);
+  summaryRow.classList.toggle('is-quiet', !ready || !filtering);
   syncAddButton();
   clearFilters.hidden = !filtering || !ready;
   // A load error is a card in the list slot; other sync notes are a line above the list.
@@ -470,8 +446,6 @@ function render(focusKeys) {
   list.setAttribute('aria-busy', String(loading));
   list.hidden = !loading && visible.length === 0;
   emptyState.hidden = !ready || visible.length > 0;
-  footer.hidden = !ready || visible.length === 0;
-  footer.textContent = footerText(visible, now);
 
   const controls = new Map(
     [...app.querySelectorAll('[data-focus-key]')].map((element) => [element.dataset.focusKey, element]),
