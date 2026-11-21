@@ -535,16 +535,6 @@ p {
   padding: 0 16px 0 4px;
 }
 
-.todo + .todo::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 50px;
-  right: 0;
-  height: 1px;
-  background: var(--hairline);
-}
-
 /* Checkbox: a 22px circle with a 44×44 hit area. */
 .todo-checkbox {
   flex: none;
@@ -782,10 +772,6 @@ p {
   gap: 16px;
   min-height: 56px;
   padding: 16px;
-}
-
-.skeleton + .skeleton {
-  border-top: 1px solid var(--hairline);
 }
 
 .skeleton::before {
