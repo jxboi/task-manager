@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readMove } from '../server/todo-input.js';
-import { appendTodo, filterByTags, moveTodo, sortByPosition } from '../src/todos.js';
+import { appendTodo, filterByCategory, moveTodo, sortByPosition } from '../src/todos.js';
 
-const fixture = (n, tags = []) => ({
-  id: `00000000-0000-0000-0000-${String(n).padStart(12, '0')}`, createdAt: n, tags,
+const fixture = (n, category = null) => ({
+  id: `00000000-0000-0000-0000-${String(n).padStart(12, '0')}`, createdAt: n, category,
 });
 const ids = (todos) => todos.map(({ id }) => id);
 
@@ -38,15 +38,15 @@ test('repeated moves can narrow the same gap without rounding or relabeling othe
 
 test('filtered moves stay next to their visible anchor while hidden tasks keep their order', () => {
   const [a, hidden, b, otherHidden, c] = [
-    fixture(1, ['work']), fixture(2), fixture(3, ['work']), fixture(4), fixture(5, ['work']),
+    fixture(1, 'work'), fixture(2), fixture(3, 'work'), fixture(4), fixture(5, 'work'),
   ];
   const todos = [a, hidden, b, otherHidden, c];
-  const moved = moveTodo(todos, c.id, b.id, 'before', ['work']);
+  const moved = moveTodo(todos, c.id, b.id, 'before', 'work');
   assert.deepEqual(ids(moved), ids([a, hidden, c, b, otherHidden]));
-  assert.deepEqual(ids(filterByTags(moved, ['work'])), ids([a, c, b]));
-  assert.deepEqual(moved.filter((todo) => !todo.tags.length), [hidden, otherHidden]);
-  assert.equal(moveTodo(todos, b.id, a.id, 'after', ['work']), todos);
-  assert.equal(moveTodo(todos, b.id, hidden.id, 'before', ['work']), todos);
+  assert.deepEqual(ids(filterByCategory(moved, 'work')), ids([a, c, b]));
+  assert.deepEqual(moved.filter((todo) => todo.category === null), [hidden, otherHidden]);
+  assert.equal(moveTodo(todos, b.id, a.id, 'after', 'work'), todos);
+  assert.equal(moveTodo(todos, b.id, hidden.id, 'before', 'work'), todos);
   assert.equal(moveTodo(todos, b.id, b.id, 'before'), todos);
   assert.equal(moveTodo(todos, b.id, c.id, 'around'), todos);
 });

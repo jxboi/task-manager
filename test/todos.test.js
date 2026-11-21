@@ -4,10 +4,8 @@ import {
   addTodo,
   toggleTodo,
   removeTodo,
-  addTag,
-  removeTag,
-  allTags,
-  filterByTags,
+  allCategories,
+  filterByCategory,
   setReminder,
   clearReminder,
   markNotified,
@@ -19,7 +17,6 @@ import { isCompleted, nextOccurrence } from '../src/reminders.js';
 
 function deepFreeze(todos) {
   for (const todo of todos) {
-    if (todo.tags) Object.freeze(todo.tags);
     Object.freeze(todo);
   }
   return Object.freeze(todos);
@@ -47,31 +44,25 @@ test('addTodo appends a new incomplete todo at the end', () => {
   assert.equal(typeof added.createdAt, 'number');
 });
 
-function makeTagged() {
+function makeCategorized() {
   return deepFreeze([
-    { id: 'a', text: 'Set up the repo', completed: true, createdAt: 1, tags: ['work', 'dev'] },
-    { id: 'b', text: 'Review preview', completed: false, createdAt: 2, tags: ['work', 'blocked'] },
-    { id: 'c', text: 'Dentist', completed: false, createdAt: 3, tags: ['home'] },
-    { id: 'd', text: 'Draft email', completed: false, createdAt: 4, tags: [] },
+    { id: 'a', text: 'Set up the repo', completed: true, createdAt: 1, category: 'work' },
+    { id: 'b', text: 'Review preview', completed: false, createdAt: 2, category: 'work' },
+    { id: 'c', text: 'Dentist', completed: false, createdAt: 3, category: 'home' },
+    { id: 'd', text: 'Draft email', completed: false, createdAt: 4, category: null },
   ]);
 }
 
 const ids = (todos) => todos.map((todo) => todo.id);
 
-test('addTodo without tags gives tags: []', () => {
+test('addTodo without a category gives category: null', () => {
   const [added] = addTodo([], 'Plain');
-  assert.deepEqual(added.tags, []);
+  assert.equal(added.category, null);
 });
 
-test('addTodo keeps tags in the given order (active filter tags first), deduped', () => {
-  const [added] = addTodo([], 'call Sam', ['urgent', 'work', 'phone', 'work']);
-  assert.deepEqual(added.tags, ['urgent', 'work', 'phone']);
-});
-
-test('addTodo normalizes tags and caps them at 10', () => {
-  const tags = ['#Work', 'WORK', '  ', ...Array.from({ length: 12 }, (_, i) => `t${i}`)];
-  const [added] = addTodo([], 'Many', tags);
-  assert.deepEqual(added.tags, ['work', 't0', 't1', 't2', 't3', 't4', 't5', 't6', 't7', 't8']);
+test('addTodo normalizes the category', () => {
+  const [added] = addTodo([], 'Call Sam', '#Work');
+  assert.equal(added.category, 'work');
 });
 
 test('addTodo trims surrounding whitespace', () => {
@@ -131,22 +122,16 @@ test('functions return new arrays and never mutate their input', () => {
   assert.notEqual(toggled[0], todos[0]);
   assert.deepEqual(todos, snapshot);
 
-  const tagged = makeTagged();
-  const taggedSnapshot = structuredClone(tagged);
+  const categorized = makeCategorized();
+  const categorizedSnapshot = structuredClone(categorized);
 
-  const withTags = addTodo(tagged, 'New', ['x']);
-  const addedTag = addTag(tagged, 'c', 'health');
-  const removedTag = removeTag(tagged, 'a', 'work');
-  allTags(tagged);
-  const filtered = filterByTags(tagged, ['work']);
+  const withCategory = addTodo(categorized, 'New', 'x');
+  allCategories(categorized);
+  const filtered = filterByCategory(categorized, 'work');
 
-  assert.notEqual(withTags, tagged);
-  assert.notEqual(addedTag, tagged);
-  assert.notEqual(removedTag, tagged);
-  assert.notEqual(filtered, tagged);
-  assert.notEqual(addedTag[2], tagged[2]);
-  assert.notEqual(removedTag[0].tags, tagged[0].tags);
-  assert.deepEqual(tagged, taggedSnapshot);
+  assert.notEqual(withCategory, categorized);
+  assert.notEqual(filtered, categorized);
+  assert.deepEqual(categorized, categorizedSnapshot);
 
   const reminders = makeReminders();
   const remindersSnapshot = structuredClone(reminders);
@@ -178,72 +163,22 @@ test('ids are stable across toggle and remove', () => {
   assert.equal(afterToggle[1].completed, true);
 });
 
-test('addTag adds a normalized tag to the matching todo only', () => {
-  const todos = makeTagged();
-  const result = addTag(todos, 'c', '  #Health ');
-  assert.deepEqual(result[2].tags, ['home', 'health']);
-  assert.deepEqual(result.filter((todo) => todo.id !== 'c'), todos.filter((todo) => todo.id !== 'c'));
-});
-
-test('addTag treats Work, #work and " work " as the same tag', () => {
-  for (const raw of ['Work', '#work', ' work ']) {
-    assert.deepEqual(addTag(makeTagged(), 'd', raw)[3].tags, ['work'], raw);
-  }
-});
-
-test('addTag ignores duplicates, invalid input, the 11th tag and unknown ids', () => {
-  const todos = makeTagged();
-  for (const raw of ['work', 'WORK', '#Work', '', '   ', '#', '##work', 'x'.repeat(25)]) {
-    assert.equal(addTag(todos, 'a', raw), todos, JSON.stringify(raw));
-  }
-  assert.equal(addTag(todos, 'missing', 'new'), todos);
-
-  const full = deepFreeze([
-    { id: 'f', text: 'Full', completed: false, createdAt: 1, tags: Array.from({ length: 10 }, (_, i) => `t${i}`) },
+test('allCategories lists categories in use A to Z with counts', () => {
+  assert.deepEqual(allCategories(makeCategorized()), [
+    { category: 'home', count: 1 },
+    { category: 'work', count: 2 },
   ]);
-  assert.equal(addTag(full, 'f', 'eleventh'), full);
+  assert.deepEqual(allCategories([]), []);
 });
 
-test('removeTag removes the tag from the matching todo only', () => {
-  const todos = makeTagged();
-  const result = removeTag(todos, 'a', 'work');
-  assert.deepEqual(result[0].tags, ['dev']);
-  assert.deepEqual(result[1].tags, ['work', 'blocked']);
+test('filterByCategory with null returns every todo', () => {
+  const todos = makeCategorized();
+  assert.equal(filterByCategory(todos, null), todos);
 });
 
-test('removeTag with an unknown tag or id is a no-op', () => {
-  const todos = makeTagged();
-  assert.equal(removeTag(todos, 'a', 'home'), todos);
-  assert.equal(removeTag(todos, 'missing', 'work'), todos);
-});
-
-test('allTags lists tags in use A to Z with counts', () => {
-  assert.deepEqual(allTags(makeTagged()), [
-    { tag: 'blocked', count: 1 },
-    { tag: 'dev', count: 1 },
-    { tag: 'home', count: 1 },
-    { tag: 'work', count: 2 },
-  ]);
-});
-
-test('allTags omits tags no todo uses any more', () => {
-  const todos = removeTag(removeTag(makeTagged(), 'a', 'work'), 'b', 'work');
-  assert.deepEqual(allTags(todos).map(({ tag }) => tag), ['blocked', 'dev', 'home']);
-  assert.deepEqual(allTags([]), []);
-});
-
-test('filterByTags with no active tags returns every todo', () => {
-  const todos = makeTagged();
-  assert.deepEqual(filterByTags(todos, []), todos);
-});
-
-test('filterByTags with one tag returns the todos carrying it', () => {
-  assert.deepEqual(ids(filterByTags(makeTagged(), ['work'])), ['a', 'b']);
-});
-
-test('filterByTags with two tags returns todos with either (OR), each once, in order', () => {
-  assert.deepEqual(ids(filterByTags(makeTagged(), ['home', 'work'])), ['a', 'b', 'c']);
-  assert.deepEqual(ids(filterByTags(makeTagged(), ['blocked', 'work'])), ['a', 'b']);
+test('filterByCategory returns the todos in that category, in order', () => {
+  assert.deepEqual(ids(filterByCategory(makeCategorized(), 'work')), ['a', 'b']);
+  assert.deepEqual(ids(filterByCategory(makeCategorized(), 'none-such')), []);
 });
 
 // Reminders. Instants are plain numbers here; local wall-clock math is covered in reminders.test.js.
@@ -256,13 +191,13 @@ const none = { due: null, repeat: 'none', notified: null };
 
 function makeReminders() {
   return deepFreeze([
-    { id: 'later', text: 'Upcoming', completed: false, createdAt: 1, tags: ['work'], due: NOW + HOUR, repeat: 'none', notified: null },
-    { id: 'none', text: 'No reminder', completed: false, createdAt: 2, tags: ['home'], ...none },
-    { id: 'newer', text: 'Overdue a little', completed: false, createdAt: 3, tags: ['home'], due: NOW - MINUTE, repeat: 'none', notified: null },
-    { id: 'done', text: 'Done, past due', completed: true, createdAt: 4, tags: ['work'], due: NOW - DAY, repeat: 'none', notified: null },
-    { id: 'old', text: 'Overdue a lot', completed: false, createdAt: 5, tags: ['work'], due: NOW - 3 * DAY, repeat: 'none', notified: null },
-    { id: 'daily', text: 'Water the plants', completed: false, createdAt: 6, tags: ['home'], due: NOW - 3 * DAY, repeat: 'daily', notified: NOW - 3 * DAY },
-    { id: 'soon', text: 'Very soon', completed: false, createdAt: 7, tags: [], due: NOW + MINUTE, repeat: 'weekly', notified: null },
+    { id: 'later', text: 'Upcoming', completed: false, createdAt: 1, category: 'work', due: NOW + HOUR, repeat: 'none', notified: null },
+    { id: 'none', text: 'No reminder', completed: false, createdAt: 2, category: 'home', ...none },
+    { id: 'newer', text: 'Overdue a little', completed: false, createdAt: 3, category: 'home', due: NOW - MINUTE, repeat: 'none', notified: null },
+    { id: 'done', text: 'Done, past due', completed: true, createdAt: 4, category: 'work', due: NOW - DAY, repeat: 'none', notified: null },
+    { id: 'old', text: 'Overdue a lot', completed: false, createdAt: 5, category: 'work', due: NOW - 3 * DAY, repeat: 'none', notified: null },
+    { id: 'daily', text: 'Water the plants', completed: false, createdAt: 6, category: 'home', due: NOW - 3 * DAY, repeat: 'daily', notified: NOW - 3 * DAY },
+    { id: 'soon', text: 'Very soon', completed: false, createdAt: 7, category: null, due: NOW + MINUTE, repeat: 'weekly', notified: null },
   ]);
 }
 
@@ -281,7 +216,7 @@ test('setReminder sets due and repeat on the matching todo only and resets notif
 
   const added = setReminder(todos, 'none', NOW - HOUR, 'none');
   assert.deepEqual(added[1], { ...todos[1], due: NOW - HOUR, repeat: 'none', notified: null });
-  assert.deepEqual(added[1].tags, ['home']);
+  assert.equal(added[1].category, 'home');
   assert.equal(added[1].text, 'No reminder');
 });
 
@@ -341,7 +276,7 @@ test('nextFireTime is the smallest future due of an incomplete, un-alerted todo'
 });
 
 test('nextFireTime ignores completed, alerted, past and no-reminder todos', () => {
-  const base = { text: 'x', createdAt: 1, tags: [] };
+  const base = { text: 'x', createdAt: 1, category: null };
   const todos = deepFreeze([
     { ...base, id: 'done', completed: true, due: NOW + MINUTE, repeat: 'none', notified: null },
     { ...base, id: 'alerted', completed: false, due: NOW + 2 * MINUTE, repeat: 'none', notified: NOW + 2 * MINUTE },
@@ -361,7 +296,7 @@ test('sortByUrgency puts overdue todos first by due, and keeps everything else i
 });
 
 test('sortByUrgency keeps ties in their original order and leaves the input unchanged', () => {
-  const base = { text: 'x', createdAt: 1, tags: [], completed: false, repeat: 'none', notified: null };
+  const base = { text: 'x', createdAt: 1, category: null, completed: false, repeat: 'none', notified: null };
   const todos = deepFreeze([
     { ...base, id: 'b', due: NOW - HOUR },
     { ...base, id: 'a', due: NOW - HOUR },
@@ -381,10 +316,10 @@ test('sortByUrgency with nothing overdue keeps the order; empty stays empty', ()
   assert.deepEqual(ids(sortByUrgency(makeTodos(), NOW)), ['a', 'b', 'c']);
 });
 
-test('sortByUrgency after filterByTags keeps only the filtered todos, overdue first', () => {
+test('sortByUrgency after filterByCategory keeps only the filtered todos, overdue first', () => {
   const todos = makeReminders();
-  assert.deepEqual(ids(sortByUrgency(filterByTags(todos, ['work']), NOW)), ['old', 'later', 'done']);
-  assert.deepEqual(ids(sortByUrgency(filterByTags(todos, ['home']), NOW)), ['daily', 'newer', 'none']);
+  assert.deepEqual(ids(sortByUrgency(filterByCategory(todos, 'work'), NOW)), ['old', 'later', 'done']);
+  assert.deepEqual(ids(sortByUrgency(filterByCategory(todos, 'home'), NOW)), ['daily', 'newer', 'none']);
 });
 
 test('toggleTodo keeps a daily todo checked while scheduling tomorrow', () => {
@@ -395,7 +330,7 @@ test('toggleTodo keeps a daily todo checked while scheduling tomorrow', () => {
   assert.equal(todo.due, nextOccurrence(todos[5].due, 'daily', NOW));
   assert.ok(todo.due > NOW);
   assert.equal(todo.text, 'Water the plants');
-  assert.deepEqual(todo.tags, ['home']);
+  assert.equal(todo.category, 'home');
   assert.equal(todo.repeat, 'daily');
   assert.equal(todo.notified, null);
   for (const index of [0, 1, 2, 3, 4, 6]) assert.equal(result[index], todos[index]);
@@ -455,7 +390,7 @@ test('toggleTodo on a todo without a reminder flips completed as before', () => 
 
 test('toggleTodo defaults now to the current time', () => {
   const due = Date.now() - DAY - HOUR;
-  const todos = deepFreeze([{ id: 'r', text: 'x', completed: false, createdAt: 1, tags: [], due, repeat: 'daily', notified: null }]);
+  const todos = deepFreeze([{ id: 'r', text: 'x', completed: false, createdAt: 1, category: null, due, repeat: 'daily', notified: null }]);
   const before = Date.now();
   const [todo] = toggleTodo(todos, 'r');
   assert.ok(todo.due > before);

@@ -94,8 +94,8 @@ export async function listTodos() {
   return (await send('/api/todos', { csrf: true })).todos;
 }
 
-export async function createTodo({ id, text, tags }) {
-  return (await send('/api/todos', { method: 'POST', body: { id, text, tags }, csrf: true })).todo;
+export async function createTodo({ id, text, category }) {
+  return (await send('/api/todos', { method: 'POST', body: { id, text, category }, csrf: true })).todo;
 }
 
 export async function patchTodo(id, revision, action, fields = {}) {

@@ -142,7 +142,7 @@ Clear</button>
         </div>
 
         <div class="filter-wrap" id="filter-wrap" hidden>
-          <div class="filter-bar" id="filter-bar" role="group" aria-label="Filter by tag"></div>
+          <div class="filter-bar" id="filter-bar" role="group" aria-label="Filter by category"></div>
         </div>
 
         <ul class="todo-list" id="todo-list" hidden></ul>
@@ -152,7 +152,7 @@ Clear</button>
         <div class="empty-state" id="empty-state" hidden>
           <div class="empty-page" aria-hidden="true"><i></i><i></i><i></i></div>
           <h2 class="empty-title">No tasks yet</h2>
-          <p class="empty-hint">Add one with New task. Type #tags to put it on a shelf.</p>
+          <p class="empty-hint">Add one with New task. Type #work to put it in a category.</p>
         </div>
       </div>
     </main>
@@ -173,16 +173,15 @@ Clear</button>
             <input class="reminder-control" id="edit-text" type="text" autocomplete="off" enterkeyhint="done">
           </div>
           <div class="sheet-section">
-            <span class="reminder-label" id="edit-tags-label">Tags</span>
-            <div class="edit-tags-row">
-              <div class="edit-tags" id="edit-tags" role="group" aria-labelledby="edit-tags-label"></div>
-              <button class="text-button tag-add" id="edit-tag-add" type="button">
-                <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg>Add tag
+            <span class="reminder-label" id="edit-category-label">Category</span>
+            <div class="category-picker" id="edit-categories" role="group" aria-labelledby="edit-category-label"></div>
+            <div class="category-new">
+              <button class="text-button category-add" id="edit-category-add" type="button">
+                <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg>New category
               </button>
-              <input class="tag-field" id="edit-tag-field" type="text" autocomplete="off" autocapitalize="none"
-                enterkeyhint="done" aria-label="New tag" hidden>
+              <input class="category-field" id="edit-category-field" type="text" autocomplete="off" autocapitalize="none"
+                enterkeyhint="done" aria-label="New category" hidden>
             </div>
-            <div class="tag-suggestions" id="edit-tag-suggestions" role="group" aria-label="Your tags" hidden></div>
           </div>
           <div class="sheet-section">
             <div class="picker" id="picker">

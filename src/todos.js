@@ -1,4 +1,4 @@
-import { MAX_TAGS, normalizeTag, normalizeTags } from './tags.js';
+import { normalizeCategory } from './categories.js';
 import { isCompleted, isOverdue, nextReminderAfterToday, normalizeReminder } from './reminders.js';
 
 // The title rule the server enforces too: 1 to 2,000 characters once trimmed, and no NUL.
@@ -10,7 +10,7 @@ export function validText(text) {
   return trimmed !== '' && !trimmed.includes('\0') && [...trimmed].length <= MAX_TEXT_LENGTH;
 }
 
-export function addTodo(todos, text, tags = []) {
+export function addTodo(todos, text, category = null) {
   const trimmed = text.trim();
   if (trimmed === '') return todos;
   return [
@@ -20,7 +20,7 @@ export function addTodo(todos, text, tags = []) {
       text: trimmed,
       completed: false,
       createdAt: Date.now(),
-      tags: normalizeTags(tags),
+      category: category === null ? null : normalizeCategory(category),
       due: null,
       repeat: 'none',
       notified: null,
@@ -66,10 +66,10 @@ function between(lower, upper) {
 }
 
 // Slice 2: pass the full position-ordered list, two visible IDs, 'before' or 'after', and the
-// active tag filter. Only the moved row changes. Reminder urgency still determines view groups.
-export function moveTodo(todos, id, anchorId, side, activeTags = []) {
+// active category filter (null for All). Only the moved row changes. Reminder urgency still determines view groups.
+export function moveTodo(todos, id, anchorId, side, activeCategory = null) {
   if (id === anchorId || (side !== 'before' && side !== 'after')) return todos;
-  const visible = filterByTags(todos, activeTags);
+  const visible = filterByCategory(todos, activeCategory);
   const from = visible.findIndex((todo) => todo.id === id);
   const anchor = visible.findIndex((todo) => todo.id === anchorId);
   const offset = side === 'before' ? 0 : 1;
@@ -117,37 +117,18 @@ export function removeTodo(todos, id) {
   return todos.filter((todo) => todo.id !== id);
 }
 
-// Returns `todos` itself when nothing changes (invalid, duplicate, over the cap, unknown id).
-export function addTag(todos, id, raw) {
-  const tag = normalizeTag(raw);
-  const todo = todos.find((item) => item.id === id);
-  if (tag === null || !todo || todo.tags.includes(tag) || todo.tags.length >= MAX_TAGS) return todos;
-  return todos.map((item) => (item === todo ? { ...item, tags: [...item.tags, tag] } : item));
-}
-
-// Returns `todos` itself when the todo doesn't have the tag.
-export function removeTag(todos, id, tag) {
-  const todo = todos.find((item) => item.id === id);
-  if (!todo || !todo.tags.includes(tag)) return todos;
-  return todos.map((item) =>
-    item === todo ? { ...item, tags: item.tags.filter((existing) => existing !== tag) } : item,
-  );
-}
-
-// Every tag in use with the number of todos carrying it, A to Z.
-export function allTags(todos) {
+// Every category in use with the number of todos in it, A to Z.
+export function allCategories(todos) {
   const counts = new Map();
-  for (const todo of todos) {
-    for (const tag of todo.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+  for (const { category } of todos) {
+    if (category != null) counts.set(category, (counts.get(category) ?? 0) + 1);
   }
-  return [...counts.keys()].sort().map((tag) => ({ tag, count: counts.get(tag) }));
+  return [...counts.keys()].sort().map((category) => ({ category, count: counts.get(category) }));
 }
 
-// OR: todos with at least one of the active tags. No active tags means every todo.
-export function filterByTags(todos, activeTags) {
-  const active = new Set(activeTags);
-  if (active.size === 0) return todos;
-  return todos.filter((todo) => todo.tags.some((tag) => active.has(tag)));
+// The todos in `category`; null means every todo.
+export function filterByCategory(todos, category) {
+  return category === null ? todos : todos.filter((todo) => todo.category === category);
 }
 
 // Replaces the reminder and re-arms it. Returns `todos` itself for an unknown id, a `due` that
@@ -159,20 +140,21 @@ export function setReminder(todos, id, due, repeat) {
   return todos.map((item) => (item === todo ? { ...item, due, repeat, notified: null } : item));
 }
 
-// Replaces the text, tags and reminder in one change (the edit form). `due` null means no
+// Replaces the text, category and reminder in one change (the edit form). `due` null means no
 // reminder (then `repeat` must be 'none'). The reminder re-arms only if its time changes (a repeat
 // change alone keeps the claim on the same occurrence), so it doesn't alert again. Today's tick
 // keeps its expiration while the task repeats and becomes permanent if repetition stops.
 // Returns `todos` itself for an unknown id, invalid fields, or when nothing changes.
-export function editTodo(todos, id, { text, tags, due, repeat } = {}) {
+export function editTodo(todos, id, { text, category, due, repeat } = {}) {
   const todo = todos.find((item) => item.id === id);
-  if (!todo || !validText(text) || !Array.isArray(tags)) return todos;
+  if (!todo || !validText(text)) return todos;
+  if (category !== null && normalizeCategory(category) !== category) return todos;
   const reminder = normalizeReminder({ due, repeat });
   if (reminder.due !== due || reminder.repeat !== repeat) return todos;
   const next = {
     ...todo,
     text: text.trim(),
-    tags: normalizeTags(tags),
+    category,
     due: reminder.due,
     repeat: reminder.repeat,
     notified: reminder.due === todo.due ? todo.notified : null,
@@ -180,8 +162,7 @@ export function editTodo(todos, id, { text, tags, due, repeat } = {}) {
   if (reminder.repeat === 'none' && todo.completedUntil != null) next.completedUntil = null;
   const same = next.text === todo.text && next.due === todo.due && next.repeat === todo.repeat &&
     next.completedUntil === todo.completedUntil && next.notified === todo.notified &&
-    next.tags.length === todo.tags.length &&
-    next.tags.every((tag, index) => tag === todo.tags[index]);
+    next.category === (todo.category ?? null);
   return same ? todos : todos.map((item) => (item === todo ? next : item));
 }
 
