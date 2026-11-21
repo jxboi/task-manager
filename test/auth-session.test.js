@@ -10,10 +10,15 @@ const signedOut = { user: null, csrfToken: null };
 test('auth module follows session changes from other tabs', async (t) => {
   // Each /api/session read waits until the test answers it, in any order.
   const reads = [];
+  const demoPosts = [];
   let signOutStatus = 401;
-  const fetch = async (path) => {
+  const fetch = async (path, options) => {
     if (path === '/api/auth/sign-out') return new Response(null, { status: signOutStatus });
     if (path === '/api/auth/sign-in/email') return new Response('{}', { status: 200 });
+    if (path === '/api/auth/demo') {
+      demoPosts.push({ method: options.method, body: JSON.parse(options.body) });
+      return new Response('{}', { status: 200 });
+    }
     assert.equal(new URL(path, 'http://localhost').pathname, '/api/session');
     const body = await new Promise((resolve) => reads.push(resolve));
     return new Response(JSON.stringify(body), { status: 200 });
@@ -80,6 +85,8 @@ test('auth module follows session changes from other tabs', async (t) => {
     broadcast(); // another tab signed out
     await answer(3, signedOut);
     assert.equal(byId('auth-view').hidden, false);
+    assert.equal(byId('auth-demo').hidden, true);
+    assert.equal(byId('auth-alt').hidden, true);
     assert.equal(sessions.at(-1), null);
     // This tab is now on the sign-in form: a later sign-in elsewhere leaves the form alone.
     broadcast();
@@ -135,5 +142,34 @@ test('auth module follows session changes from other tabs', async (t) => {
     assert.equal(byId('auth-view').hidden, false);
     await answer(first + 2, signedOut);
     assert.equal(sessions.length, before);
+  });
+
+  await t.test('shows demo only on the enabled sign-in form and opens its session', async () => {
+    const first = reads.length;
+    const demoButton = byId('auth-demo');
+    const demo = { user: { name: 'Demo', email: 'demo@example.test' }, csrfToken: 'token-demo' };
+    byId('auth-retry-button').click();
+    await answer(first, { ...signedOut, demoLoginEnabled: true });
+    assert.equal(demoButton.hidden, false);
+    assert.equal(byId('auth-alt').hidden, false);
+    radios[1].dispatchEvent(new Event('change'));
+    assert.equal(demoButton.hidden, true);
+    assert.equal(byId('auth-alt').hidden, true);
+    demoButton.click();
+    assert.equal(demoPosts.length, 0);
+    radios[0].dispatchEvent(new Event('change'));
+    assert.equal(demoButton.hidden, false);
+    demoButton.click();
+    assert.equal(demoButton.getAttribute('aria-busy'), 'true');
+    assert.equal(byId('auth-demo-spinner').hidden, false);
+    assert.equal(byId('auth-demo-text').textContent, 'Signing in…');
+    assert.equal(byId('auth-submit').getAttribute('aria-busy'), 'false');
+    demoButton.click();
+    await answer(first + 1, { ...demo, demoLoginEnabled: true });
+    assert.deepEqual(demoPosts, [{ method: 'POST', body: {} }]);
+    signedInAs('Demo');
+    assert.equal(sessions.at(-1), demo.user.email);
+    assert.equal(byId('auth-demo-text').textContent, 'Continue as demo');
+    assert.equal(byId('auth-demo-spinner').hidden, true);
   });
 });

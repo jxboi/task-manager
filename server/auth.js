@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { betterAuth } from 'better-auth';
 import pg from 'pg';
 import { resolveAuthOrigins } from './auth-origins.js';
+import { demoLoginPlugin, demoUserId, isDemoLoginEnabled } from './demo-login.js';
 
 let services;
 
@@ -41,7 +42,12 @@ export function getServices() {
       disableSessionRefresh: true,
       cookieCache: { enabled: false },
     },
-    rateLimit: { enabled: true, storage: 'database' },
+    plugins: [demoLoginPlugin(pool)],
+    rateLimit: {
+      enabled: true,
+      storage: 'database',
+      customRules: { '/demo': { window: 10, max: 3 } },
+    },
     advanced: {
       useSecureCookies: origin.startsWith('https:'),
       defaultCookieAttributes: { httpOnly: true, sameSite: 'lax', path: '/' },
@@ -55,8 +61,10 @@ export function getServices() {
   return services;
 }
 
-export function getSession(auth, request) {
-  return auth.api.getSession({ headers: request.headers, query: { disableCookieCache: true } });
+export async function getSession(auth, request) {
+  const active = await auth.api.getSession({ headers: request.headers, query: { disableCookieCache: true } });
+  if (active?.user.id === demoUserId && !isDemoLoginEnabled()) return null;
+  return active;
 }
 
 export function csrfToken(csrfKey, sessionId) {
