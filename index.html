@@ -68,45 +68,47 @@
       </section>
 
       <div id="task-view" hidden>
-        <div class="summary-row">
+        <div class="summary-row is-quiet" id="summary-row">
           <p class="summary" id="summary" aria-live="polite"></p>
-          <button class="clear-filters" id="clear-filters" type="button" aria-label="Clear filters" hidden>
-            <span class="clear-long">Clear filters</span><span class="clear-short">Clear</span>
-          </button>
+          <button class="text-button clear-filters" id="clear-filters" type="button" aria-label="Clear filters" hidden>
+Clear</button>
         </div>
 
         <form class="add-form" id="add-form">
           <div class="add-field">
             <label class="visually-hidden" for="new-todo">New task</label>
             <input class="add-input" id="new-todo" type="text" placeholder="New task" autocomplete="off" enterkeyhint="done"
-              aria-describedby="add-hint">
+              aria-describedby="hint-limit">
             <button class="add-button" id="add-button" type="submit" disabled>Add</button>
           </div>
         </form>
-        <p class="hint" id="add-hint">
-          <span id="hint-default">Add tags with <code>#</code>, like <code>Pay rent #home</code></span>
-          <span id="hint-auto" hidden></span>
-          <span id="hint-limit" hidden></span>
-        </p>
+        <p class="add-error" id="hint-limit" hidden></p>
 
         <div class="auth-signout-note" id="auth-signout-note" hidden>
-          <p role="status">Couldn't sign out. Try again.</p>
-          <button class="auth-link" id="auth-dismiss-note" type="button" aria-label="Dismiss sign-out error">×</button>
+          <p class="sync-text" role="status">Couldn't sign out. Try again.</p>
+          <button class="text-button sync-dismiss" id="auth-dismiss-note" type="button" aria-label="Dismiss sign-out error">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
         </div>
 
         <div class="sync-note" id="sync-note" role="alert" hidden>
+          <span class="sync-icon" aria-hidden="true">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="m2 2 20 20M5.78 5.78A7 7 0 0 0 9 19h8.5a4.5 4.5 0 0 0 1.31-.2M21.53 16.05A4.5 4.5 0 0 0 17.5 10h-1.79A7 7 0 0 0 9.26 5.05"/></svg>
+          </span>
           <p class="sync-text" id="sync-text"></p>
-          <button class="auth-link" id="sync-retry" type="button" hidden>Try again</button>
-          <button class="auth-link sync-dismiss" id="sync-dismiss" type="button" aria-label="Dismiss message">×</button>
+          <button class="text-button sync-retry" id="sync-retry" type="button" hidden>Try again</button>
+          <button class="text-button sync-dismiss" id="sync-dismiss" type="button" aria-label="Dismiss message">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
         </div>
 
         <div class="status" id="status" role="status">
           <div class="banner" id="banner" hidden>
             <span class="banner-icon" id="banner-icon"></span>
             <p class="banner-text" id="banner-text"></p>
-            <button class="banner-dismiss" id="banner-dismiss" type="button" aria-label="Dismiss">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true" focusable="false">
-                <path d="M6 6l12 12M18 6L6 18"/>
+            <button class="banner-dismiss" id="banner-dismiss" type="button" aria-label="Dismiss notifications notice">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true" focusable="false">
+                <path d="M18 6 6 18M6 6l12 12"/>
               </svg>
             </button>
           </div>
@@ -120,14 +122,8 @@
         <ul class="todo-list" id="todo-list" hidden></ul>
 
         <div class="empty-state" id="empty-state" hidden>
-          <div class="empty-icon" aria-hidden="true">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M9 11l3 3 8-8"/>
-              <path d="M20 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
-            </svg>
-          </div>
+          <div class="empty-page" aria-hidden="true"><i></i><i></i><i></i></div>
           <h2 class="empty-title">No tasks yet</h2>
-          <p class="empty-body">Add your first task above to get started.</p>
         </div>
 
         <p class="footer" id="footer" hidden></p>
@@ -181,43 +177,49 @@
     </div>
 
     <template id="trash-icon">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-        <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/>
+      <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+        <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
       </svg>
     </template>
 
     <template id="pencil-icon">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+      <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
         <path d="M17 3l4 4L8 20l-5 1 1-5L17 3z"/>
       </svg>
     </template>
 
     <template id="x-icon">
-      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true" focusable="false">
-        <path d="M6 6l12 12M18 6L6 18"/>
+      <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+        <path d="M18 6 6 18M6 6l12 12"/>
       </svg>
     </template>
 
     <template id="bell-icon">
-      <svg class="icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+      <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
         <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0"/>
       </svg>
     </template>
 
     <template id="repeat-icon">
-      <svg class="icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-        <path d="M17 2l4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3"/>
+      <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+        <path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>
       </svg>
     </template>
 
     <template id="alert-icon">
-      <svg class="icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+      <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
         <circle cx="12" cy="12" r="10"/><path d="M12 7v6M12 17h.01"/>
       </svg>
     </template>
 
+    <template id="clock-icon">
+      <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+        <circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>
+      </svg>
+    </template>
+
     <template id="info-icon">
-      <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+      <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
         <circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>
       </svg>
     </template>

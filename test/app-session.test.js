@@ -42,8 +42,10 @@ test('task view against the server API', async (t) => {
   const input = byId('new-todo');
   const summary = byId('summary');
   const note = byId('sync-note');
-  const texts = () => list.children.map((item) => item.querySelector('.todo-text').textContent);
-  const rowOf = (text) => list.children.find((item) => item.querySelector('.todo-text').textContent === text);
+  // Task rows only: while loading the list holds skeleton rows.
+  const rows = () => list.children.filter((item) => item.className.split(' ').includes('todo'));
+  const texts = () => rows().map((item) => item.querySelector('.todo-text').textContent);
+  const rowOf = (text) => rows().find((item) => item.querySelector('.todo-text').textContent === text);
   const event = (target, type) => {
     const value = new Event(type);
     Object.defineProperty(value, 'target', { value: target });
@@ -73,7 +75,7 @@ test('task view against the server API', async (t) => {
     gate = new Promise((resolve) => { open = resolve; });
     signIn(sessionA);
     await settle(1);
-    assert.equal(summary.textContent, 'Loading your tasks…');
+    assert.equal(summary.textContent, 'Loading your tasks');
     assert.equal(byId('empty-state').hidden, true);
     assert.equal(byId('add-button').disabled, true);
     gate = null;
@@ -185,7 +187,7 @@ test('task view against the server API', async (t) => {
     assert.deepEqual(events, ['tasks:expired', 'tasks:revalidate']);
     // The list stays hidden while the session is re-read.
     assert.deepEqual(texts(), []);
-    assert.equal(summary.textContent, 'Loading your tasks…');
+    assert.equal(summary.textContent, 'Loading your tasks');
     servers.a.session = { ...sessionA };
     signIn(sessionA); // the auth module found the same session
     await settle();
@@ -202,7 +204,7 @@ test('task view against the server API', async (t) => {
     // auth.js got a BroadcastChannel message from another tab.
     window.dispatchEvent(new CustomEvent('tasks:invalidate'));
     assert.deepEqual(texts(), []);
-    assert.equal(summary.textContent, 'Loading your tasks…');
+    assert.equal(summary.textContent, 'Loading your tasks');
     assert.equal(byId('add-button').disabled, true);
     gate = null;
     open(); // the already-authorized answer arrives: ignored
@@ -414,7 +416,7 @@ test('task view against the server API', async (t) => {
     await settle();
     assert.deepEqual(texts(), []);
     assert.equal(byId('empty-state').hidden, false);
-    assert.equal(summary.textContent, 'Nothing to do yet');
+    assert.equal(summary.textContent, '0 to do');
     await add('Ben only');
     assert.deepEqual(texts(), ['Ben only']);
     assert.equal(servers.a.rows.some((item) => item.text === 'Ben only'), false);
@@ -435,7 +437,11 @@ test('task view against the server API', async (t) => {
     signIn({ ...sessionA, csrfToken: 'token-a3' });
     servers.a.session = { ...sessionA, csrfToken: 'token-a3' };
     await settle();
-    assert.equal(summary.textContent, "Couldn't load your tasks");
+    // The summary row collapses; the error card in the list slot says it, with Try again.
+    assert.equal(summary.textContent, '');
+    assert.equal(byId('summary-row').className.split(' ').includes('is-quiet'), true);
+    assert.equal(byId('sync-text').textContent, "Couldn't load your tasks");
+    assert.equal(byId('sync-note').className.split(' ').includes('is-block'), true);
     assert.equal(byId('sync-retry').hidden, false);
     assert.equal(byId('empty-state').hidden, true);
     byId('sync-retry').click();
