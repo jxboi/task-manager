@@ -461,6 +461,13 @@ profileButton.addEventListener('keydown', (event) => {
   openMenu();
 });
 profileMenu.addEventListener('keydown', (event) => {
+  // Tab or Shift+Tab always leaves the one-item menu, possibly for the browser's own controls
+  // (Sign out is last when the composer is closed), which fires no focusin and a focusout with
+  // no relatedTarget. Let the browser move focus, then close without moving it.
+  if (event.key === 'Tab') {
+    setTimeout(() => setMenuOpen(false), 0);
+    return;
+  }
   if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
   event.preventDefault();
   signOut.focus();
@@ -488,7 +495,8 @@ document.addEventListener('pointerdown', (event) => {
     }, 0);
   }
 });
-// Focus leaving the menu for anywhere else (Tab, Shift+Tab onto the button) closes it.
+// Focus leaving the menu for anywhere else closes it, including Shift+Tab back onto the profile
+// button: the test is the menu, not the account wrapper that also holds the button.
 profileMenu.addEventListener('focusout', (event) => {
   if (event.relatedTarget && !profileMenu.contains(event.relatedTarget)) setMenuOpen(false);
 });

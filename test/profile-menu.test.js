@@ -186,6 +186,43 @@ test('profile menu', async (t) => {
     keyboardClick();
   };
 
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  await t.test('Tab and Shift+Tab on Sign out close it after the browser moves focus, which stays put', async () => {
+    for (const shiftKey of [false, true]) {
+      openMenuFromKeyboard();
+      assert.equal(document.activeElement, signOut);
+      const key = dispatch(menu, 'keydown', { key: 'Tab', shiftKey });
+      assert.equal(key.defaultPrevented, false);
+      // Shift+Tab lands on the profile button, inside the account wrapper but outside the menu.
+      const target = shiftKey ? button : byId('todo-list');
+      focusTo(target);
+      await tick();
+      assert.equal(isOpen(), false);
+      assert.equal(document.activeElement, target);
+    }
+  });
+
+  await t.test('Tab out to the browser chrome (no relatedTarget, no focusin) still closes it', async () => {
+    openMenuFromKeyboard();
+    const key = dispatch(menu, 'keydown', { key: 'Tab' });
+    assert.equal(key.defaultPrevented, false);
+    dispatch(menu, 'focusout', { relatedTarget: null });
+    assert.equal(isOpen(), true);
+    await tick();
+    assert.equal(isOpen(), false);
+    // Focus is not pulled back to the profile button.
+    assert.equal(document.activeElement, signOut);
+  });
+
+  await t.test('Shift+Tab with no focus events (WebKit-style) still closes it, without moving focus', async () => {
+    openMenuFromKeyboard();
+    dispatch(menu, 'keydown', { key: 'Tab', shiftKey: true });
+    await tick();
+    assert.equal(isOpen(), false);
+    assert.equal(document.activeElement, signOut);
+  });
+
   await t.test('a cancelled press does not swallow the next activation', () => {
     openMenuFromKeyboard();
     assert.equal(isOpen(), true);

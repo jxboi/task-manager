@@ -281,8 +281,9 @@ p {
   display: flex;
   align-items: center;
   gap: 12px;
-  min-height: 20px;
-  margin-bottom: 16px;
+  /* Clear's 44px target sits inside the row; the 4px margin keeps 16px under its label. */
+  min-height: 44px;
+  margin-bottom: 4px;
 }
 
 /* Unfiltered, signed out, loading or a load error: the row collapses; its live region stays for
@@ -305,9 +306,10 @@ p {
 }
 
 .clear-filters {
-  min-height: 20px;
-  margin: -12px -4px;
-  padding: 12px 4px;
+  justify-content: flex-end;
+  min-width: 44px;
+  min-height: 44px;
+  margin-right: -4px; /* the label's right edge lines up with the list's */
   font-size: 13px;
   line-height: 20px;
 }
