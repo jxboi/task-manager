@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import pg from 'pg';
+import demo from '../api/auth/demo.js';
 import signUp from '../api/auth/sign-up/email.js';
 import signIn from '../api/auth/sign-in/email.js';
 import signOut from '../api/auth/sign-out.js';
@@ -18,7 +19,12 @@ const appOrigin = 'https://task-manager.test';
 const branchOrigin = 'https://task-manager-git-feature.test';
 const otherOrigin = 'https://other.test';
 const password = 'A disposable test password';
+const demoPath = '/api/auth/demo';
+const demoEmail = 'demo@example.test';
+const signedOut = { user: null, csrfToken: null };
+const previewSignedOut = { ...signedOut, demoLoginEnabled: true };
 const handlers = {
+  [demoPath]: demo,
   '/api/auth/sign-up/email': signUp,
   '/api/auth/sign-in/email': signIn,
   '/api/auth/sign-out': signOut,
@@ -61,7 +67,7 @@ async function authenticated(response, name, email, site = appOrigin) {
   assert.equal(active.status, 200);
   assert.deepEqual(active.data.user, { name, email });
   assert.match(active.data.csrfToken, /^[\w-]{43}$/);
-  return { cookie, csrfToken: active.data.csrfToken, token: response.data.token, userId: response.data.user.id };
+  return { cookie, csrfToken: active.data.csrfToken, token: response.data.token, userId: response.data.user?.id };
 }
 
 test('auth and todo API against PostgreSQL', {
@@ -98,6 +104,31 @@ test('auth and todo API against PostgreSQL', {
   const signupPath = '/api/auth/sign-up/email';
   const signinPath = '/api/auth/sign-in/email';
   const signoutPath = '/api/auth/sign-out';
+  await t.test('disabled demo returns 404 without touching auth tables', async () => {
+    const authCounts = async () => (await admin.query(
+      `SELECT (SELECT count(*) FROM "user") AS users,
+              (SELECT count(*) FROM "session") AS sessions,
+              (SELECT count(*) FROM account) AS accounts,
+              (SELECT count(*) FROM "rateLimit") AS limits`,
+    )).rows;
+    const before = await authCounts();
+    process.env.VERCEL_ENV = 'production';
+    try {
+      const response = await demo.fetch(new Request(new URL(demoPath, appOrigin), {
+        method: 'POST',
+        headers: { Origin: appOrigin, 'Content-Type': 'application/json' },
+        body: '{}',
+      }));
+      assert.equal(response.status, 404);
+      assert.equal(response.headers.has('Set-Cookie'), false);
+      assert.equal(await response.text(), '');
+      assert.deepEqual((await request('/api/session')).data, signedOut);
+      assert.deepEqual(await authCounts(), before);
+    } finally {
+      process.env.VERCEL_ENV = 'preview';
+    }
+  });
+
   const alice = { name: 'Alice', email: 'alice@example.test', password };
   const bob = { name: 'Bob', email: 'bob@example.test', password };
   const short = await post(signupPath, { ...alice, password: '11 chars!!!' });
@@ -114,8 +145,80 @@ test('auth and todo API against PostgreSQL', {
   const bId = randomUUID();
   const create = (account, id, text, tags = []) => post('/api/todos', { id, text, tags }, { account });
 
+  await t.test('demo cannot claim an existing account with the reserved email', async () => {
+    const id = randomUUID();
+    await admin.query(
+      `INSERT INTO "user" (id, email, name, "createdAt", "updatedAt")
+       VALUES ($1, $2, 'Existing account', now(), now())`, [id, demoEmail],
+    );
+    try {
+      const result = await post(demoPath, {}, { ip: '192.0.2.50' });
+      assert.equal(result.status, 409);
+      assert.equal(result.headers.has('Set-Cookie'), false);
+      assert.equal((await admin.query('SELECT 1 FROM "session" WHERE "userId" = $1', [id])).rowCount, 0);
+    } finally {
+      await admin.query('DELETE FROM "user" WHERE id = $1', [id]);
+    }
+  });
+
+  await t.test('preview demo issues real sessions, reserves its email and limits attempts', async () => {
+    const demoIp = '192.0.2.51';
+    const attempt = (body = {}) => post(demoPath, body, { ip: demoIp });
+    assert.deepEqual((await request('/api/session')).data, previewSignedOut);
+    assert.equal((await post(demoPath, {}, { origin: null })).status, 403);
+    assert.equal((await post(demoPath, {}, { origin: branchOrigin })).status, 403);
+    assert.equal((await post(demoPath, {}, { contentType: 'text/plain' })).status, 400);
+    assert.equal((await post(demoPath, [], { ip: demoIp })).status, 400);
+
+    const reserved = await post(signupPath, { name: 'Other', email: demoEmail.toUpperCase(), password }, { ip: demoIp });
+    assert.equal(reserved.status, 422);
+    assert.equal(reserved.headers.has('Set-Cookie'), false);
+    assert.equal((await admin.query('SELECT 1 FROM "user" WHERE email = $1', [demoEmail])).rowCount, 0);
+
+    const firstLogins = await Promise.all([attempt(), attempt({ id: a.userId, email: alice.email })]);
+    const branchLogin = await post(demoPath, {}, { ip: demoIp, site: branchOrigin });
+    const [first, second, third] = await Promise.all(
+      [...firstLogins.map((response) => authenticated(response, 'Demo', demoEmail)),
+        authenticated(branchLogin, 'Demo', demoEmail, branchOrigin)],
+    );
+    assert.equal(new Set([first.cookie, second.cookie, third.cookie]).size, 3);
+    const { rows: users } = await admin.query('SELECT id FROM "user" WHERE email = $1', [demoEmail]);
+    assert.equal(users.length, 1);
+    const [user] = users;
+    assert.equal((await admin.query('SELECT 1 FROM "session" WHERE "userId" = $1', [user.id])).rowCount, 3);
+    assert.equal((await admin.query('SELECT 1 FROM account WHERE "userId" = $1', [user.id])).rowCount, 0);
+
+    const throttled = await attempt();
+    assert.equal(throttled.status, 429);
+    assert.ok(throttled.headers.get('x-retry-after'));
+    const emailSignIn = await post(signinPath, { email: demoEmail, password }, { ip: demoIp });
+    assert.equal(emailSignIn.status, 401);
+    assert.equal(emailSignIn.headers.has('Set-Cookie'), false);
+
+    const demoTodoId = randomUUID();
+    const aliceTodoId = randomUUID();
+    assert.equal((await create(first, demoTodoId, 'Demo task')).status, 201);
+    assert.equal((await create(a, aliceTodoId, 'Alice task')).status, 201);
+    for (const [account, ownId, foreignId] of [[second, demoTodoId, aliceTodoId], [a, aliceTodoId, demoTodoId]]) {
+      const list = await request('/api/todos', { account });
+      assert.equal(list.status, 200);
+      assert.deepEqual(list.data.todos.map(({ id }) => id), [ownId]);
+      assert.equal((await request(`/api/todos?id=${foreignId}`, { account })).status, 404);
+      assert.equal((await patch(account, foreignId, { action: 'clearReminder', revision: 1 })).status, 404);
+      assert.equal((await remove(account, foreignId, 1)).status, 404);
+    }
+    assert.equal((await remove(a, aliceTodoId, 1)).status, 204);
+    process.env.VERCEL_ENV = 'production';
+    try {
+      assert.deepEqual((await request('/api/session', { account: first })).data, signedOut);
+      assert.equal((await request('/api/todos', { account: first })).status, 401);
+    } finally {
+      process.env.VERCEL_ENV = 'preview';
+    }
+  });
+
   await t.test('denies signed-out requests and enforces Origin, JSON and CSRF', async () => {
-    assert.deepEqual((await request('/api/session')).data, { user: null, csrfToken: null });
+    assert.deepEqual((await request('/api/session')).data, previewSignedOut);
     assert.equal((await request('/api/todos')).status, 401);
     assert.equal((await create(undefined, aId, 'Signed out')).status, 401);
     assert.equal((await patch(undefined, aId, { action: 'clearReminder', revision: 1 })).status, 401);
@@ -341,7 +444,7 @@ test('auth and todo API against PostgreSQL', {
     assert.equal((await request('/api/todos', { account: renewed })).status, 200);
     assert.equal((await request('/api/todos', { account: renewed, csrf: null })).status, 200);
     await admin.query('UPDATE "session" SET "expiresAt" = now() - interval \'1 second\' WHERE token = $1', [b.token]);
-    assert.deepEqual((await request('/api/session', { account: b })).data, { user: null, csrfToken: null });
+    assert.deepEqual((await request('/api/session', { account: b })).data, previewSignedOut);
     assert.equal((await request('/api/todos', { account: b })).status, 401);
   });
 

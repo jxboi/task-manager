@@ -53,7 +53,7 @@ async function send(path, { method = 'GET', body, csrf = false } = {}) {
 
 // --- Session and auth --------------------------------------------------------------------------
 
-// {user:{name,email}|null, csrfToken}. Also remembers the token for later requests.
+// {user:{name,email}|null, csrfToken, demoLoginEnabled?}
 export async function readSession() {
   let response;
   try {
@@ -64,7 +64,9 @@ export async function readSession() {
   if (response.status === 401) return { user: null, csrfToken: null };
   if (!response.ok) throw new ApiError(response.status, 'SESSION_CHECK_FAILED', 'Session check failed.');
   const active = await response.json();
-  return active?.user ? active : { user: null, csrfToken: null };
+  if (active?.user) return active;
+  const demo = active?.demoLoginEnabled === true ? { demoLoginEnabled: true } : {};
+  return { user: null, csrfToken: null, ...demo };
 }
 
 // Better Auth endpoints. Resolves {ok, status, code}; rejects only on a network failure.
