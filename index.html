@@ -13,8 +13,10 @@
     <main class="app">
       <header class="app-header">
         <h1 class="title" id="app-title" tabindex="-1">Tasks</h1>
-        <span class="account-name" id="account-name" hidden></span>
-        <button class="auth-link account-sign-out" id="account-sign-out" type="button" hidden>Sign out</button>
+        <div class="account">
+          <span class="account-name" id="account-name" hidden></span>
+          <button class="text-button account-sign-out" id="account-sign-out" type="button" hidden>Sign out</button>
+        </div>
       </header>
       <p class="visually-hidden" id="auth-status" role="status"></p>
       <div class="auth-loading" id="auth-loading" aria-busy="true"><p hidden>Loading…</p></div>
@@ -74,9 +76,12 @@
         </div>
 
         <form class="add-form" id="add-form">
-          <label class="visually-hidden" for="new-todo">New task</label>
-          <input class="add-input" id="new-todo" type="text" placeholder="Add a task…" autocomplete="off" aria-describedby="add-hint">
-          <button class="add-button" id="add-button" type="submit" disabled>Add</button>
+          <div class="add-field">
+            <label class="visually-hidden" for="new-todo">New task</label>
+            <input class="add-input" id="new-todo" type="text" placeholder="New task" autocomplete="off" enterkeyhint="done"
+              aria-describedby="add-hint">
+            <button class="add-button" id="add-button" type="submit" disabled>Add</button>
+          </div>
         </form>
         <p class="hint" id="add-hint">
           <span id="hint-default">Add tags with <code>#</code>, like <code>Pay rent #home</code></span>

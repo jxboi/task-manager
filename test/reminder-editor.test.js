@@ -259,8 +259,8 @@ test('reminder editor', async (t) => {
 
   await t.test('the pulse starts and ends on the base overdue tint, so it shows on a hovered row', () => {
     const keyframes = styles.match(/@keyframes reminder-pulse \{([\s\S]*?)\n\}/)[1];
-    assert.match(keyframes, /0%,\s*100% \{\s*background: var\(--color-over-bg\);/);
-    assert.match(keyframes, /50% \{\s*background: var\(--color-over-bg-hover\);/);
+    assert.match(keyframes, /0%,\s*100% \{\s*background: var\(--over-bg\);/);
+    assert.match(keyframes, /50% \{\s*background: var\(--over-peak\);/);
   });
 
   // Saves a future time; the next test saves a past one again, so no timer keeps node:test alive.
