@@ -1083,9 +1083,15 @@ p {
 
 /* --- Task sheet ----------------------------------------------------------------------------- */
 
+/* The layer covers the visual viewport: src/viewport.js sets --vv-top and --vvh while the sheet
+   is open, so on iOS the sheet sits above the keyboard rather than behind it. Without
+   visualViewport they stay unset and the layer covers the whole viewport. */
 .reminder-layer {
   position: fixed;
-  inset: 0;
+  top: var(--vv-top, 0px);
+  right: 0;
+  left: 0;
+  height: var(--vvh, 100%);
   z-index: 10;
   display: flex;
   align-items: flex-end;
@@ -1105,7 +1111,7 @@ p {
   flex-direction: column;
   width: 100%;
   max-width: 560px;
-  max-height: calc(100dvh - 48px);
+  max-height: calc(var(--vvh, 100dvh) - 48px);
   border-radius: 20px 20px 0 0;
   background: var(--surface);
   box-shadow: var(--shadow-sheet);
@@ -1621,7 +1627,7 @@ p {
 
   .reminder-editor {
     max-width: 440px;
-    max-height: calc(100dvh - 48px);
+    max-height: calc(var(--vvh, 100dvh) - 48px);
     border-radius: 20px;
   }
 

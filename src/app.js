@@ -18,6 +18,7 @@ import {
   CALENDAR_KEYS, DEFAULT_TIME, addDays, addMonths, canGoBack, dayLabel, dayName, defaultReminder,
   EARLIEST_DAY, localDate, monthGrid, monthLabel, parseDate, pickerDue, splitDue,
 } from './picker.js';
+import { createSheetViewport } from './viewport.js';
 
 const app = document.querySelector('.app');
 const form = document.getElementById('add-form');
@@ -41,6 +42,7 @@ const editorAnnouncer = document.getElementById('reminder-announcer');
 const layer = document.getElementById('reminder-layer');
 const scrim = document.getElementById('reminder-scrim');
 const editor = document.getElementById('reminder-editor');
+const sheetBody = document.getElementById('sheet-body');
 const textInput = document.getElementById('edit-text');
 const editTags = document.getElementById('edit-tags');
 const tagAdd = document.getElementById('edit-tag-add');
@@ -75,6 +77,8 @@ const syncNote = document.getElementById('sync-note');
 const syncText = document.getElementById('sync-text');
 const syncRetry = document.getElementById('sync-retry');
 const syncDismiss = document.getElementById('sync-dismiss');
+
+const sheetViewport = createSheetViewport({ layer, body: sheetBody });
 
 const INVALID_FLASH_MS = 400;
 const MAX_DELAY = 2 ** 31 - 1; // setTimeout's limit (about 24.8 days); check() re-arms when it fires
@@ -744,6 +748,9 @@ function openEditor(id) {
   repeatSelect.value = todo.repeat;
   setCalendarOpen(false);
   layer.hidden = false;
+  // Before the focus below: the sheet follows the visual viewport, and the focus (which brings up
+  // the iOS keyboard, inside the tap's gesture) is revealed once the keyboard is up.
+  sheetViewport.start();
   render(); // the opener shows aria-expanded; the page behind goes inert
   syncEditor();
   textInput.focus({ preventScroll: true });
@@ -754,6 +761,7 @@ function openEditor(id) {
 function closeEditor() {
   reminderId = null;
   layer.hidden = true;
+  sheetViewport.stop();
   app.inert = false;
   editorAnnouncer.textContent = '';
   closeTagField();
@@ -1510,11 +1518,6 @@ editor.addEventListener('keydown', (event) => {
     event.preventDefault();
     saveButton.click(); // the same path as clicking Save (the only place permission is asked)
   }
-});
-
-// A focused field scrolls into view inside the sheet (above the iOS keyboard).
-editor.addEventListener('focusin', (event) => {
-  event.target.scrollIntoView?.({ block: 'nearest' });
 });
 
 // Tab stays inside the sheet and wraps: focus reaching an edge guard goes round to the other end.
