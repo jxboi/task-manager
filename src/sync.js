@@ -110,7 +110,9 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
   // (or null for a create) and resolves to the server's row (or null after a delete).
   // `holds(row)`, if given, is the change's assumption about the confirmed row when its turn comes;
   // if it no longer holds (another tab changed the row), the change is refused as a conflict.
-  function write({ id, apply, send, needsRow = true, commit, holds, skipIf }) {
+  // `base` (set on a retry) is the row state the retry was captured against: {revision, ...fields}.
+  // If the confirmed row differs at dispatch time, the whole retry is cancelled, nothing is sent.
+  function write({ id, apply, send, needsRow = true, commit, holds, skipIf, base }) {
     const isCurrent = captureSession();
     const seen = needsRow
       ? (seenRevision ? seenRevision(id) : view.find((todo) => todo.id === id)?.revision)
@@ -158,6 +160,11 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
         changed();
         return { ok: false, cancelled: true };
       }
+      if (base && needsRow && Object.keys(base).some((key) => (row[key] ?? null) !== (base[key] ?? null))) {
+        settle();
+        changed();
+        return { ok: false, cancelled: true };
+      }
       if (skipIf?.(row)) {
         settle();
         changed();
@@ -197,11 +204,12 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
     });
   }
 
-  function patch(id, apply, action, fields, holds) {
+  function patch(id, apply, action, fields, holds, base) {
     return write({
       id,
       apply,
       holds,
+      base,
       send: (row) => api.patchTodo(id, row.revision, action, typeof fields === 'function' ? fields(row) : fields),
       commit: replace,
     });
@@ -322,12 +330,13 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
 
     // Moves a task before or after another one in the whole list. The result follows the normal
     // write contract. An unchanged move resolves with skipped.
-    move(id, anchorId, side) {
+    move(id, anchorId, side, base) {
       const apply = (todos) => moveTodo(todos, id, anchorId, side);
       if (apply(view) === view) return Promise.resolve({ ok: false, skipped: true });
       return write({
         id,
         apply,
+        base,
         send: (row) => {
           if (confirmed.some((todo) => todo.id === anchorId) && apply(confirmed) === confirmed) return row;
           return api.patchTodo(id, row.revision, 'move', { anchorId, side });
@@ -340,12 +349,12 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
     // checks the transition.
     // `before` is the row as shown when it was clicked: completing is only sent if the server's row
     // is still in that state, so a queued click can't undo another tab's completion.
-    toggle(id, now, before) {
+    toggle(id, now, before, base) {
       return patch(id, (todos) => toggleTodo(todos, id, now), 'complete', (row) => {
         const after = toggleTodo([row], id, now)[0];
         return { completed: after.completed, due: after.due, completedUntil: after.completedUntil ?? undefined };
       }, before && ((row) => row.completed === before.completed && row.due === before.due &&
-        (row.completedUntil ?? null) === (before.completedUntil ?? null)));
+        (row.completedUntil ?? null) === (before.completedUntil ?? null)), base);
     },
 
     remove(id) {
@@ -360,8 +369,8 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
       });
     },
 
-    setReminder(id, due, repeat) {
-      return patch(id, (todos) => setReminder(todos, id, due, repeat), 'setReminder', { due, repeat });
+    setReminder(id, due, repeat, base) {
+      return patch(id, (todos) => setReminder(todos, id, due, repeat), 'setReminder', { due, repeat }, undefined, base);
     },
 
     // The edit form: title, reminder and category in one write. `fields` is {text, due, repeat}
@@ -370,21 +379,15 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
     // `rearm` ({due, repeat}) re-sends an unchanged, already-fired reminder in the queue slot right
     // after the edit, only if the edit was accepted and the row's reminder is still that one. The
     // result's `rearmed` is that write's outcome.
-    // `guard` ({revision, categoryId}, set on a retry) drops the category from the write when the
-    // row has moved on by the time it is sent, so it can't undo a newer assignment.
-    edit(id, fields, rearm, guard) {
+    // `base` ({revision}, set on a retry): the retry is cancelled whole if the row has moved on.
+    edit(id, fields, rearm, base) {
       let accepted = false;
       const result = write({
         id,
         apply: (todos) => editTodo(todos, id, fields),
+        base,
         send: async (row) => {
-          let body = fields;
-          if (guard && fields.categoryId !== undefined &&
-            (row.revision !== guard.revision || (row.categoryId ?? null) !== guard.categoryId)) {
-            const { categoryId, ...rest } = fields;
-            body = rest;
-          }
-          const saved = await api.patchTodo(id, row.revision, 'edit', body);
+          const saved = await api.patchTodo(id, row.revision, 'edit', fields);
           accepted = true;
           return saved;
         },

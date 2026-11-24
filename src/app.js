@@ -897,21 +897,28 @@ function saveEditor() {
   render(keys);
 }
 
-function rearmReminder(id, due, repeat) {
-  saved(id, sync.setReminder(id, due, repeat), () => {
-    const todo = findTodo(id);
-    if (todo && todo.notified === todo.due && todo.due === due && todo.repeat === repeat) rearmReminder(id, due, repeat);
+// `base` (on a retry): the row's revision and reminder as captured; the queue cancels the write
+// if any of it differs at dispatch time.
+function rearmReminder(id, due, repeat, base) {
+  saved(id, sync.setReminder(id, due, repeat, base), () => {
+    const todo = sync.confirmed.find((row) => row.id === id);
+    if (todo && todo.notified === todo.due && todo.due === due && todo.repeat === repeat) {
+      rearmReminder(id, due, repeat, { revision: todo.revision, due: todo.due, repeat: todo.repeat, notified: todo.notified });
+    }
   });
   check();
 }
 
 // `retry` (after an uncertain failure) re-sends only if the row doesn't already match the edit.
-function saveEdit(id, fields, originalCategoryId, rearm, guard) {
-  const edit = sync.edit(id, fields, rearm, guard);
+function saveEdit(id, fields, originalCategoryId, rearm, base) {
+  const edit = sync.edit(id, fields, rearm, base);
   if (rearm) {
     // Queued right behind the edit, so no later save can slip in between; it skips itself when the
     // edit was refused or the reminder has changed.
-    saved(id, edit.rearmed, () => rearmReminder(id, rearm.due, rearm.repeat)).then((ok) => {
+    saved(id, edit.rearmed, () => {
+      const todo = sync.confirmed.find((row) => row.id === id);
+      if (todo) rearmReminder(id, rearm.due, rearm.repeat, { revision: todo.revision, due: todo.due, repeat: todo.repeat, notified: todo.notified });
+    }).then((ok) => {
       if (ok) {
         fired.delete(id);
         check();
@@ -925,7 +932,7 @@ function saveEdit(id, fields, originalCategoryId, rearm, guard) {
     const retryFields = categoryId !== undefined && (!sync.categories ||
       (todo.categoryId ?? null) !== originalCategoryId ||
       (categoryId !== null && !findCategory(categoryId))) ? otherFields : fields;
-    if (editTodo([todo], id, retryFields)[0] !== todo) saveEdit(id, retryFields, originalCategoryId, rearm, { revision: todo.revision, categoryId: originalCategoryId });
+    if (editTodo([todo], id, retryFields)[0] !== todo) saveEdit(id, retryFields, originalCategoryId, rearm, { revision: todo.revision });
   });
   check();
   return done;
@@ -1499,17 +1506,17 @@ list.addEventListener('change', (event) => {
   render([key('checkbox', id)]);
 });
 
-function toggle(id) {
+function toggle(id, base) {
   const before = findTodo(id);
   if (!before) return;
   const now = Date.now();
   const [after] = toggleTodo([before], id, now);
   fired.delete(id);
-  saved(id, sync.toggle(id, now, before), () => {
+  saved(id, sync.toggle(id, now, before, base), () => {
     const current = findTodo(id);
     if (current && current.due === before.due &&
         (current.completedUntil ?? null) === (before.completedUntil ?? null) &&
-        isCompleted(current, Date.now()) === isCompleted(before, now)) toggle(id);
+        isCompleted(current, Date.now()) === isCompleted(before, now)) toggle(id, { revision: sync.confirmed.find((row) => row.id === id)?.revision });
   });
   if (after.due !== before.due) {
     // The row's stamp shows it; screen readers hear it from the status region.
@@ -1547,12 +1554,12 @@ function reorderableIds(now = Date.now()) {
 
 // Sends one move (applied at once, rolled back if the server refuses it) and says where the task
 // went, counted among the rows shown.
-function reorder(id, target) {
+function reorder(id, target, base) {
   if (reorderLocked()) return;
   const todo = findTodo(id);
   if (!todo) return;
-  saved(id, sync.move(id, target.anchorId, target.side), () => {
-    if (findTodo(id) && findTodo(target.anchorId)) reorder(id, target);
+  saved(id, sync.move(id, target.anchorId, target.side, base), () => {
+    if (findTodo(id) && findTodo(target.anchorId)) reorder(id, target, { revision: sync.confirmed.find((row) => row.id === id)?.revision });
   });
   const ids = reorderableIds();
   announce(`Moved “${todo.text}” to position ${ids.indexOf(id) + 1} of ${ids.length}.`);

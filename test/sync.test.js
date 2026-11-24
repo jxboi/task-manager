@@ -751,20 +751,49 @@ test('reset drops the catalog and ignores a category answer from the previous se
   globalThis.fetch = real;
 });
 
-test('a category retry reaching the queue after a newer assignment sends no categoryId', async () => {
+test('a retry whose base revision is stale is cancelled whole: newer title kept, no stale PATCH', async () => {
   const { server, sync } = setup();
-  const todo = { ...newTodo('Assign me'), revision: 1, categoryId: null };
+  const todo = { ...newTodo('Original'), revision: 1, categoryId: null };
   server.rows = [todo];
-  server.categories = [{ id: HOME, name: 'Home', revision: 1 }, { id: WORK, name: 'work', revision: 1 }];
+  server.categories = [{ id: HOME, name: 'Home', revision: 1 }];
   await sync.load();
-  const fields = (categoryId) => ({ text: todo.text, due: null, repeat: 'none', categoryId });
-  const guard = { revision: 1, categoryId: null };
+  const base = { revision: 1 };
   const refresh = sync.load(); // the retry's pending refresh
-  const newer = sync.edit(todo.id, fields(HOME)); // assigned while it is pending
-  const retry = sync.edit(todo.id, fields(WORK), undefined, guard); // the older retry, after the refresh
-  await Promise.all([refresh, newer, retry]);
-  assert.equal(server.rows[0].categoryId, HOME, 'the newer assignment wins');
-  const sent = server.requests.filter(({ method }) => method === 'PATCH').map(({ body }) => JSON.parse(body));
-  assert.equal(sent[0].categoryId, HOME);
-  assert.equal('categoryId' in sent[1], false, 'the stale retry sends no categoryId');
+  const newer = sync.edit(todo.id, { text: 'Newer title', due: null, repeat: 'none' });
+  const retry = sync.edit(todo.id, { text: 'Original', due: null, repeat: 'none', categoryId: HOME }, undefined, base);
+  const [, , outcome] = await Promise.all([refresh, newer, retry]);
+  assert.equal(outcome.cancelled, true);
+  assert.equal(server.rows[0].text, 'Newer title');
+  assert.equal(server.rows[0].categoryId, null);
+  const patches = server.requests.filter(({ method }) => method === 'PATCH');
+  assert.equal(patches.length, 1, 'only the newer save was sent');
+});
+
+test('a re-arm retry is cancelled when the reminder was cleared meanwhile; nothing is claimed', async () => {
+  const { server, sync } = setup();
+  const due = Date.parse('2001-01-01T09:00:00');
+  const todo = { ...newTodo('Late'), revision: 1, due, repeat: 'none', notified: due };
+  server.rows = [todo];
+  await sync.load();
+  const base = { revision: 1, due, repeat: 'none', notified: due };
+  const refresh = sync.load();
+  const clear = sync.clearReminder(todo.id);
+  const retry = sync.setReminder(todo.id, due, 'none', base);
+  const [, , outcome] = await Promise.all([refresh, clear, retry]);
+  assert.equal(outcome.cancelled, true);
+  assert.equal(server.rows[0].due, null);
+  const sent = server.requests.filter(({ method }) => method === 'PATCH').map(({ body }) => String(body));
+  assert.equal(sent.some((body) => /setReminder/.test(body)), false, 'no setReminder after the clear');
+});
+
+test('a retry with an unchanged base still goes through', async () => {
+  const { server, sync } = setup();
+  const todo = { ...newTodo('Same'), revision: 1, categoryId: null };
+  server.rows = [todo];
+  server.categories = [{ id: HOME, name: 'Home', revision: 1 }];
+  await sync.load();
+  await sync.load();
+  const outcome = await sync.edit(todo.id, { text: 'Same', due: null, repeat: 'none', categoryId: HOME }, undefined, { revision: 1 });
+  assert.equal(outcome.ok, true);
+  assert.equal(server.rows[0].categoryId, HOME);
 });
