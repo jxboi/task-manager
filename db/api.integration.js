@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { copyFile, mkdtemp, rm } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import pg from 'pg';
 import demo from '../api/auth/demo.js';
 import signUp from '../api/auth/sign-up/email.js';
@@ -38,13 +39,14 @@ async function request(path, {
   method = 'GET', account, site = appOrigin, origin = site, csrf = account?.csrfToken,
   ip = '192.0.2.1',
   body, contentType = 'application/json', pathname = new URL(path, appOrigin).pathname,
+  handler = handlers[pathname],
 } = {}) {
   const headers = new Headers({ 'x-vercel-forwarded-for': ip });
   if (origin) headers.set('Origin', origin);
   if (account) headers.set('Cookie', account.cookie);
   if (csrf) headers.set('X-CSRF-Token', csrf);
   if (method !== 'GET' && contentType) headers.set('Content-Type', contentType);
-  const response = await handlers[pathname].fetch(new Request(new URL(path, site), {
+  const response = await handler.fetch(new Request(new URL(path, site), {
     method, headers, body: body === undefined ? undefined : JSON.stringify(body),
   }));
   assert.equal(response.headers.get('cache-control'), 'no-store');
@@ -70,6 +72,45 @@ async function authenticated(response, name, email, site = appOrigin) {
   assert.deepEqual(active.data.user, { name, email });
   assert.match(active.data.csrfToken, /^[\w-]{43}$/);
   return { cookie, csrfToken: active.data.csrfToken, token: response.data.token, userId: response.data.user?.id };
+}
+
+const pr2Commit = 'ae37a58';
+const repo = fileURLToPath(new URL('../', import.meta.url));
+const pr2Files = [
+  'api/todos.js',
+  'server/auth-origins.js', 'server/auth.js', 'server/demo-login.js', 'server/http.js',
+  'server/schema-guard.js', 'server/todo-endpoint.js', 'server/todo-input.js', 'server/transaction.js',
+  'src/reminders.js', 'src/tags.js', 'src/todos.js',
+  'db/runner.js', 'db/migrations/0001_auth.sql', 'db/migrations/0002_todos.sql',
+  'db/migrations/0003_recurring_completion.sql', 'db/migrations/0004_todo_position.sql',
+  'db/migrations/0005_categories.sql',
+];
+
+async function loadPr2Todos(t) {
+  const check = spawnSync('git', ['cat-file', '-e', `${pr2Commit}^{commit}`], { cwd: repo });
+  if (check.error?.code === 'ENOENT') {
+    t.skip('Git is unavailable for the PR 2 handler test');
+    return;
+  }
+  if (check.error) throw check.error;
+  if (check.status !== 0) {
+    t.skip(`PR 2 commit ${pr2Commit} is unavailable (for example, in a shallow clone)`);
+    return;
+  }
+  const directory = await mkdtemp(join(tmpdir(), 'task-manager-pr2-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await writeFile(join(directory, 'package.json'), '{"type":"module"}');
+  await symlink(join(repo, 'node_modules'), join(directory, 'node_modules'), 'dir');
+  for (const file of pr2Files) {
+    const target = join(directory, file);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, execFileSync('git', ['show', `${pr2Commit}:${file}`], { cwd: repo }));
+  }
+  const load = (file) => import(pathToFileURL(join(directory, file)));
+  const { getServices: getPr2Services } = await load('server/auth.js');
+  const { pool } = getPr2Services();
+  t.after(() => pool.end());
+  return (await load('api/todos.js')).default;
 }
 
 test('auth and todo API against PostgreSQL', {
@@ -158,8 +199,8 @@ test('auth and todo API against PostgreSQL', {
     }
   });
 
-  const alice = { name: 'Alice', email: 'alice@example.test', password };
-  const bob = { name: 'Bob', email: 'bob@example.test', password };
+  const alice = { name: 'Alice', email: 'cli-alice@example.test', password };
+  const bob = { name: 'Bob', email: 'cli-bob@example.test', password };
   const short = await post(signupPath, { ...alice, password: '11 chars!!!' });
   assert.equal(short.status, 400, JSON.stringify(short.data));
   const a = await authenticated(await post(signupPath, alice), alice.name, alice.email);
@@ -174,7 +215,7 @@ test('auth and todo API against PostgreSQL', {
   const bId = randomUUID();
   const create = (account, id, text, tags = []) => post('/api/todos', { id, text, tags }, { account });
 
-  await t.test('previous todo handlers preserve assigned categories on the upgraded schema', async () => {
+  await t.test('the current handler folds legacy tags and preserves assigned categories', async () => {
     const user = { name: 'Compatibility', email: 'cli-compat@example.test', password };
     const account = await authenticated(await post(signupPath, user, { ip: '192.0.2.70' }), user.name, user.email);
     const { userId } = account;
@@ -191,8 +232,13 @@ test('auth and todo API against PostgreSQL', {
     const links = async (id) => (await admin.query(
       'SELECT category_id FROM todos WHERE user_id = $1 AND id = $2', [userId, id],
     )).rows;
+    const stored = async (id) => (await admin.query(
+      'SELECT text, tags, category_id FROM todos WHERE user_id = $1 AND id = $2', [userId, id],
+    )).rows[0];
+    // A row the previous artifact wrote with tags reads with them folded into the title.
+    assert.equal((await request(`/api/todos?id=${assigned}`, { account })).data.todo.text, 'Assigned #work');
     assert.equal((await create(account, created, 'Old create', ['work'])).status, 201);
-    assert.deepEqual(await links(created), [{ category_id: null }]);
+    assert.deepEqual(await stored(created), { text: 'Old create #work', tags: [], category_id: null });
 
     const due = Date.now() - 10_000;
     const update = async (revision, changes) => {
@@ -203,7 +249,8 @@ test('auth and todo API against PostgreSQL', {
       return response.data.todo;
     };
     const edited = await update(1, { action: 'edit', text: 'Edited', tags: ['home'], due, repeat: 'daily' });
-    assert.deepEqual(edited.tags, ['home']);
+    assert.deepEqual([edited.text, edited.tags], ['Edited #home', []]);
+    assert.deepEqual(await stored(assigned), { text: 'Edited #home', tags: [], category_id: category });
     const moved = await update(2, { action: 'move', anchorId: anchor, side: 'after' });
     assert.notEqual(moved.position, edited.position);
     assert.equal((await update(3, { action: 'markNotified', due })).notified, due);
@@ -223,6 +270,53 @@ test('auth and todo API against PostgreSQL', {
     assert.equal((await remove(account, assigned, completed.revision)).status, 204);
     assert.deepEqual(await links(assigned), []);
     assert.equal((await admin.query('SELECT 1 FROM categories WHERE user_id = $1 AND id = $2', [userId, category])).rowCount, 1);
+  });
+
+  await t.test('the PR 2 todo handler works on 0006 and preserves category links', async (t) => {
+    const handler = await loadPr2Todos(t);
+    if (!handler) return;
+    assert.equal((await admin.query(
+      "SELECT 1 FROM schema_migrations WHERE filename = '0006_tags_to_categories.sql'",
+    )).rowCount, 1);
+    const user = { name: 'Rollback', email: 'cli-rollback@example.test', password };
+    const account = await authenticated(await post(signupPath, user, { ip: '192.0.2.71' }), user.name, user.email);
+    const [id, anchor, category] = Array.from({ length: 3 }, () => randomUUID());
+    const oldRequest = (path, options) => request(path, { account, handler, ...options });
+    for (const [todoId, title] of [[id, 'Old create'], [anchor, 'Anchor']]) {
+      const created = await oldRequest('/api/todos', { method: 'POST', body: { id: todoId, text: title, tags: ['work'] } });
+      assert.equal(created.status, 201, JSON.stringify(created.data));
+      assert.deepEqual(created.data.todo.tags, ['work']);
+      assert.equal(created.data.todo.categoryId, null);
+    }
+    await admin.query("INSERT INTO categories (user_id, id, name) VALUES ($1, $2, 'work')", [account.userId, category]);
+    await admin.query('UPDATE todos SET category_id = $2 WHERE user_id = $1', [account.userId, category]);
+    const links = async () => (await admin.query(
+      'SELECT id, category_id FROM todos WHERE user_id = $1', [account.userId],
+    )).rows;
+    const due = Date.now() - 10_000;
+    const path = `/api/todos?id=${id}`;
+    const update = async (revision, changes) => {
+      const response = await oldRequest(path, { method: 'PATCH', body: { revision, ...changes } });
+      assert.equal(response.status, 200, JSON.stringify(response.data));
+      assert.equal(response.data.todo.revision, revision + 1);
+      assert.equal(response.data.todo.categoryId, category);
+      assert.deepEqual(new Map((await links()).map((row) => [row.id, row.category_id])),
+        new Map([[id, category], [anchor, category]]));
+      return response.data.todo;
+    };
+    const edited = await update(1, { action: 'edit', text: 'Old edit', tags: ['home'], due, repeat: 'none' });
+    assert.deepEqual([edited.text, edited.tags, edited.due], ['Old edit', ['home'], due]);
+    const moved = await update(2, { action: 'move', anchorId: anchor, side: 'after' });
+    assert.notEqual(moved.position, edited.position);
+    assert.equal((await update(3, { action: 'markNotified', due })).notified, due);
+    const toggled = await update(4, { action: 'complete', completed: true, due });
+    assert.equal(toggled.completed, true);
+
+    const list = await oldRequest('/api/todos');
+    assert.equal(list.status, 200);
+    assert.deepEqual(list.data.todos.map((todo) => todo.id), [anchor, id]);
+    assert.equal((await oldRequest(`${path}&revision=${toggled.revision}`, { method: 'DELETE' })).status, 204);
+    assert.deepEqual(await links(), [{ id: anchor, category_id: category }]);
   });
 
   await t.test('demo cannot claim an existing account with the reserved email', async () => {
@@ -322,7 +416,7 @@ test('auth and todo API against PostgreSQL', {
 
   await t.test('serves auth and todo mutations on the exact Preview branch origin', async () => {
     const site = { site: branchOrigin, ip: '192.0.2.2' };
-    const user = { name: 'Branch User', email: 'branch@example.test', password };
+    const user = { name: 'Branch User', email: 'cli-branch@example.test', password };
     const account = await authenticated(await post(signupPath, user, site), user.name, user.email, branchOrigin);
     const todo = { id: randomUUID(), text: 'Branch todo', tags: [] };
     assert.equal((await post('/api/todos', todo, { ...site, account })).status, 201);
@@ -332,11 +426,44 @@ test('auth and todo API against PostgreSQL', {
     await authenticated(await post(signinPath, { email: user.email, password }, site), user.name, user.email, branchOrigin);
   });
 
+  await t.test('legacy tag mutations act on stored tags; untouched titles stay verbatim', async () => {
+    const user = { name: 'Fold order', email: 'cli-fold@example.test', password };
+    const account = await authenticated(await post(signupPath, user, { ip: '192.0.2.71' }), user.name, user.email);
+    const { userId } = account;
+    const [rm, add, keep] = [randomUUID(), randomUUID(), randomUUID()];
+    await admin.query(
+      `INSERT INTO todos (user_id, id, text, tags, created_at) VALUES
+         ($1, $2, 'Remove', '{work}', 1), ($1, $3, 'Add', '{work}', 2), ($1, $4, 'Original task #   ', '{}', 3)`,
+      [userId, rm, add, keep],
+    );
+    const stored = async (id) => (await admin.query(
+      'SELECT text, tags FROM todos WHERE user_id = $1 AND id = $2', [userId, id],
+    )).rows[0];
+    const removed = await patch(account, rm, { action: 'removeTag', revision: 1, tag: 'work' });
+    assert.equal(removed.status, 200, JSON.stringify(removed.data));
+    assert.equal(removed.data.todo.text, 'Remove');
+    assert.deepEqual(await stored(rm), { text: 'Remove', tags: [] });
+    const added = await patch(account, add, { action: 'addTag', revision: 1, tag: 'home' });
+    assert.equal(added.status, 200, JSON.stringify(added.data));
+    assert.equal(added.data.todo.text, 'Add #work #home');
+    assert.deepEqual(await stored(add), { text: 'Add #work #home', tags: [] });
+
+    // A category-only save sends the title as it was; the server stores it unchanged.
+    const category = randomUUID();
+    await admin.query("INSERT INTO categories (user_id, id, name) VALUES ($1, $2, 'home')", [userId, category]);
+    const saved = await patch(account, keep, {
+      action: 'edit', revision: 1, text: 'Original task #   ', tags: [], due: null, repeat: 'none', categoryId: category,
+    });
+    assert.equal(saved.status, 200, JSON.stringify(saved.data));
+    assert.equal(saved.data.todo.text, 'Original task #   ');
+    assert.deepEqual(await stored(keep), { text: 'Original task #   ', tags: [] });
+  });
+
   await t.test('isolates reads, writes, tags and reminders between two users', async () => {
     const left = await create(a, aId, '  Alice todo  ', ['#Work Task', 'work-task', 'home']);
     assert.equal(left.status, 201);
-    assert.equal(left.data.todo.text, 'Alice todo');
-    assert.deepEqual(left.data.todo.tags, ['work-task', 'home']);
+    assert.equal(left.data.todo.text, 'Alice todo #work-task #home');
+    assert.deepEqual(left.data.todo.tags, []);
     assert.equal(typeof left.data.todo.createdAt, 'number');
     assert.equal((await create(a, aId, 'Duplicate')).status, 409);
     const due = Date.now() - 10_000;
@@ -355,7 +482,7 @@ test('auth and todo API against PostgreSQL', {
     assert.deepEqual((await request('/api/todos', { account: b })).data.todos, []);
     assert.equal((await create(b, aId, 'Same ID for Bob', ['shared-id'])).status, 201);
     assert.equal((await create(b, bId, 'Bob only')).status, 201);
-    assert.equal((await request(`/api/todos?id=${aId}`, { account: b })).data.todo.text, 'Same ID for Bob');
+    assert.equal((await request(`/api/todos?id=${aId}`, { account: b })).data.todo.text, 'Same ID for Bob #shared-id');
     const ownerList = await request('/api/todos', { account: a });
     assert.deepEqual(ownerList.data.todos, [reminder.data.todo]);
     assert.equal((await remove(b, aId, 1)).status, 204);
@@ -366,8 +493,10 @@ test('auth and todo API against PostgreSQL', {
     const race = await Promise.all(['one', 'two'].map((tag) => patch(a, aId, { action: 'addTag', revision: 2, tag })));
     assert.deepEqual(race.map(({ status }) => status).sort(), [200, 409]);
     const current = race.find(({ status }) => status === 200).data.todo;
-    const tag = current.tags.at(-1);
-    assert.equal((await patch(a, aId, { action: 'addTag', revision: 3, tag })).data.todo.revision, 3);
+    // A legacy addTag appends to the title; nothing stores tags, so removeTag changes nothing.
+    const tag = current.text.split('#').at(-1);
+    assert.equal(current.text, `Alice todo #work-task #home #${tag}`);
+    assert.equal((await patch(a, aId, { action: 'removeTag', revision: 3, tag })).data.todo.revision, 3);
     const claims = await Promise.all([1, 2].map(() => patch(a, aId, {
       action: 'markNotified', revision: 3, due: current.due,
     })));
@@ -388,7 +517,8 @@ test('auth and todo API against PostgreSQL', {
     assert.equal(rolled.data.todo.repeat, 'daily');
     assert.equal((await remove(a, aId, 4)).status, 409);
     assert.equal((await patch(a, aId, { action: 'clearReminder', revision: 5 })).data.todo.due, null);
-    assert.equal((await patch(a, aId, { action: 'removeTag', revision: 6, tag })).data.todo.tags.includes(tag), false);
+    assert.equal((await patch(a, aId, { action: 'addTag', revision: 6, tag: 'last' })).data.todo.text,
+      `Alice todo #work-task #home #${tag} #last`);
     assert.equal((await remove(a, aId, 7)).status, 204);
     assert.equal((await request(`/api/todos?id=${aId}`, { account: a })).status, 404);
   });
@@ -401,7 +531,10 @@ test('auth and todo API against PostgreSQL', {
     const tenTags = [...Array(10)].map((_, i) => `tag${i}`);
     const valid = await create(a, aId, '😀'.repeat(2000), tenTags);
     assert.equal(valid.status, 201);
-    assert.equal((await patch(a, aId, { action: 'addTag', revision: 1, tag: 'overflow' })).status, 400);
+    // Legacy tags that would push the title past 2,000 characters are dropped.
+    assert.deepEqual([valid.data.todo.text, valid.data.todo.tags], ['😀'.repeat(2000), []]);
+    const full = await patch(a, aId, { action: 'addTag', revision: 1, tag: 'overflow' });
+    assert.deepEqual([full.status, full.data.todo.text, full.data.todo.revision], [200, '😀'.repeat(2000), 1]);
     assert.equal((await patch(a, aId, { action: 'setReminder', revision: 1, due: 1.2, repeat: 'daily' })).status, 400);
     assert.equal((await patch(a, aId, { action: 'complete', revision: 1, completed: true, due: Date.now() })).status, 400);
     const completed = await patch(a, aId, { action: 'complete', revision: 1, completed: true, due: null });
@@ -418,10 +551,10 @@ test('auth and todo API against PostgreSQL', {
     assert.equal(edited.status, 200, JSON.stringify(edited.data));
     assert.deepEqual(
       (({ text, tags, due: when, repeat, revision, completed }) => ({ text, tags, when, repeat, revision, completed }))(edited.data.todo),
-      { text: 'After', tags: ['two', 'three'], when: due, repeat: 'weekly', revision: 2, completed: false },
+      { text: 'After #two #three', tags: [], when: due, repeat: 'weekly', revision: 2, completed: false },
     );
     assert.equal((await patch(a, id, edit)).status, 409, 'a stale revision conflicts');
-    // Same state again: no write, the revision stays.
+    // Same state again, legacy tags folding back to the same title: no write, the revision stays.
     const same = { ...edit, revision: 2, text: 'After', tags: ['two', 'three'] };
     assert.equal((await patch(a, id, same)).data.todo.revision, 2);
     for (const bad of [{ text: ' ' }, { text: 'x'.repeat(2001) }, { tags: ['##x'] }, { due: null }, { repeat: 'hourly' }, { completed: true }]) {
@@ -451,7 +584,7 @@ test('auth and todo API against PostgreSQL', {
     const due = today + 3_600_000;
     const edited = await patch(a, id, { ...edit, revision: 3, due, repeat: 'weekly' });
     assert.equal(edited.status, 200);
-    const expected = { ...ticked.data.todo, text: edit.text, tags: edit.tags, due, repeat: 'weekly', revision: 4 };
+    const expected = { ...ticked.data.todo, text: 'Edited routine #weekly', due, repeat: 'weekly', revision: 4 };
     assert.deepEqual(edited.data.todo, expected);
     assert.deepEqual((await request(`/api/todos?id=${id}`, { account: a })).data.todo, expected);
 

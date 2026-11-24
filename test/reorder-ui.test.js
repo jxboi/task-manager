@@ -1,6 +1,6 @@
 // The drag handle in src/app.js, run against the fake API: its name, keyboard reorder with the
-// announcement, a pointer drag (lifted row, sliding rows, the gap, drop and cancel), the tag filter
-// and new tasks. The drag math itself is in drag.test.js.
+// announcement, a pointer drag (lifted row, sliding rows, the gap, drop and cancel), reorder
+// turned off under a category filter, and new tasks. The drag math itself is in drag.test.js.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createFakeApi, settle } from './fake-api.js';
@@ -35,13 +35,15 @@ test('drag handle reorder', async (t) => {
   const base = { completed: false, due: null, repeat: 'none', notified: null, revision: 1 };
   const due = Date.now() - HOUR;
   const server = createFakeApi();
+  const WORK = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
+  server.categories = [{ id: WORK, name: 'Work', revision: 1 }];
   server.rows = [
     // Overdue (and already alerted): on top by due time, with no handle.
     { ...base, id: ids.late, text: 'Late', tags: [], createdAt: 5, due, notified: due },
     { ...base, id: ids.alpha, text: 'Alpha', tags: [], createdAt: 1 },
-    { ...base, id: ids.bravo, text: 'Bravo', tags: ['work'], createdAt: 2 },
+    { ...base, id: ids.bravo, text: 'Bravo', tags: [], categoryId: WORK, createdAt: 2 },
     { ...base, id: ids.charlie, text: 'Charlie', tags: [], createdAt: 3 },
-    { ...base, id: ids.delta, text: 'Delta', tags: ['work'], createdAt: 4 },
+    { ...base, id: ids.delta, text: 'Delta', tags: [], categoryId: WORK, createdAt: 4 },
   ];
   const touchMoves = new Map();
   const addListener = document.addEventListener.bind(document);
@@ -112,6 +114,7 @@ test('drag handle reorder', async (t) => {
     const event = press(handle('alpha'), 'ArrowDown');
     assert.equal(event.defaultPrevented, true, 'the page does not scroll');
     assert.deepEqual(shown(), ['late', 'bravo', 'alpha', 'charlie', 'delta'], 'shown at once');
+
     assert.equal(focusKey(), JSON.stringify(['handle', ids.alpha]));
     assert.equal(announcer.textContent, 'Moved “Alpha” to position 2 of 4.');
     await settle();
@@ -220,27 +223,36 @@ test('drag handle reorder', async (t) => {
     assert.equal(moves().length, sent);
   });
 
-  await t.test('with a tag filter on, moves are among the visible tasks; hidden ones keep their order', async () => {
-    const chip = byId('filter-bar').children.find((item) => item.dataset.tag === 'work');
-    chip.click();
+  await t.test('under a category filter the handles are disabled: no key or drag moves anything', async () => {
+    const filter = byId('category-filter');
+    const select = (value) => {
+      filter.value = value;
+      filter.dispatchEvent(new Event('change'));
+    };
+    select(WORK);
     assert.deepEqual(shown(), ['bravo', 'delta']);
-    assert.equal(byId('app-title').textContent, 'work', 'one tag on: the title names the shelf');
+    assert.equal(byId('app-title').textContent, 'Work', 'one category on: the title names the shelf');
     assert.ok(byId('app-header').dataset.color !== undefined, 'and the header takes its color');
-    const hiddenBefore = serverOrder().filter((name) => !['bravo', 'delta'].includes(name));
-    press(handle('bravo'), 'ArrowDown');
-    assert.deepEqual(shown(), ['delta', 'bravo']);
-    assert.equal(announcer.textContent, 'Moved “Bravo” to position 2 of 2.');
+    assert.deepEqual(rows().map((item) => item.querySelector('.todo-handle').disabled), [true, true]);
+    const sent = moves().length;
+    const order = serverOrder();
+    const key = press(handle('bravo'), 'ArrowDown');
+    assert.equal(key.defaultPrevented, false, 'the arrow key is left to the page');
     layout();
     const grip = handle('bravo');
-    pointer(grip, 'pointerdown', 230);
+    assert.equal(pointer(grip, 'pointerdown', 230).defaultPrevented, false);
     pointer(grip, 'pointermove', 100);
     pointer(grip, 'pointerup', 100);
-    assert.deepEqual(shown(), ['bravo', 'delta']);
     await settle();
-    assert.deepEqual(moves().slice(-2), [['delta', 'after'], ['delta', 'before']]);
-    assert.deepEqual(serverOrder().filter((name) => !['bravo', 'delta'].includes(name)), hiddenBefore);
-    byId('clear-filters').click();
+    assert.equal(moves().length, sent);
+    assert.deepEqual(serverOrder(), order);
+    assert.deepEqual(shown(), ['bravo', 'delta']);
+    // Uncategorized is a filter too.
+    select('none');
+    assert.ok(rows().filter((item) => item.querySelector('.todo-handle')).every((item) => item.querySelector('.todo-handle').disabled));
+    select('all');
     assert.deepEqual(shown(), ['late', 'alpha', 'charlie', 'bravo', 'delta']);
+    assert.ok(rows().slice(1).every((item) => item.querySelector('.todo-handle').disabled === false));
     assert.equal(byId('app-title').textContent, 'Tasks');
     assert.equal(byId('app-header').dataset.color, undefined);
   });
@@ -303,5 +315,72 @@ test('drag handle reorder', async (t) => {
       assert.equal(touchMove(), false, `after ${reason}`);
       await settle();
     }
+  });
+
+  await t.test('a category save rebuilding the list mid-drag ends the drag, even if release is lost', async () => {
+    const touchMove = () => {
+      const event = new Event('touchmove', { cancelable: true });
+      document.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    const first = () => rows()[1]; // the first draggable row, whatever it is called now
+    const lose = {
+      // The old handle is detached, so its own events go nowhere: only document hears the release.
+      pointerup: () => document.dispatchEvent(Object.assign(new Event('pointerup'), { pointerId: 7, button: 0 })),
+      'lost capture': () => document.dispatchEvent(Object.assign(new Event('lostpointercapture'), { pointerId: 7 })),
+    };
+    for (const [reason, release] of Object.entries(lose)) {
+      layout();
+      const dragged = first();
+      const grip = first().querySelector('.todo-handle');
+      const y = first().getBoundingClientRect().top + ROW / 2;
+      pointer(grip, 'pointerdown', y);
+      assert.equal(touchMove(), true, `dragging before ${reason}`);
+
+      byId('category-name').value = `cli-${reason.replace(' ', '-')}`;
+      byId('category-form').dispatchEvent(new Event('submit'));
+      await settle(); // the save resolves and the list is rebuilt again
+      assert.equal(dragged.isConnected, false, `${reason}: the dragged row was replaced`);
+      release();
+      assert.equal(touchMoves.size, 0, `touchmove listener removed after ${reason}`);
+      assert.equal(touchMove(), false, `swipes are not blocked after ${reason}`);
+      assert.equal(list.classList.contains('is-reordering'), false);
+      assert.equal(document.documentElement.classList.contains('is-reordering'), false);
+
+      // A later drag and the keyboard still reorder.
+      layout();
+      const before = shown();
+      const next = first().querySelector('.todo-handle');
+      const top = first().getBoundingClientRect().top + ROW / 2;
+      pointer(next, 'pointerdown', top);
+      assert.equal(touchMoves.size, 1, `a new drag starts after ${reason}`);
+      pointer(next, 'pointermove', top + ROW + 10); // past the next row's centre
+      pointer(next, 'pointerup', top + ROW + 10);
+      assert.equal(touchMoves.size, 0);
+      assert.notDeepEqual(shown(), before, `drag reorders after ${reason}`);
+      await settle();
+      const kbd = shown();
+      press(first().querySelector('.todo-handle'), 'ArrowDown');
+      assert.notDeepEqual(shown(), kbd, `keyboard reorders after ${reason}`);
+      await settle();
+    }
+  });
+
+  await t.test('retry cannot resend a failed move while a category filter is active', async () => {
+    server.failNext = (method) => (method === 'PATCH' ? new Response('{}', { status: 500 }) : undefined);
+    press(handle('bravo'), 'ArrowDown');
+    await settle();
+    assert.equal(byId('sync-retry').hidden, false);
+    const sent = moves().length;
+    const order = serverOrder();
+    const filter = byId('category-filter');
+    filter.value = WORK;
+    filter.dispatchEvent(new Event('change'));
+    byId('sync-retry').click();
+    await settle();
+    assert.equal(moves().length, sent);
+    assert.deepEqual(serverOrder(), order);
+    filter.value = 'all';
+    filter.dispatchEvent(new Event('change'));
   });
 });

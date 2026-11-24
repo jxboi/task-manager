@@ -29,8 +29,8 @@
   --card: var(--surface);
 }
 
-/* Tag colors. --dot: the small decorative dot (the "#name" carries the meaning). --shelf: the
-   pastel a tag's filter tab, its tasks' cards and the task sheet are filled with. Text on every
+/* Category colors, hashed from the name (src/tags.js categoryColor). --dot: a small decorative dot.
+   --shelf: the pastel a category's cards, the task sheet and the one-category header are filled with. Text on every
    --shelf is --text (#111), well above 4.5:1. */
 [data-color="0"] { --dot: #b4472c; --shelf: #ffd9cc; }
 [data-color="1"] { --dot: #a86a12; --shelf: #ffe2b3; }
@@ -144,9 +144,11 @@ p {
 }
 
 .title {
+  min-width: 0; /* a long category name shrinks with the row instead of running under Account */
   font-size: 28px;
   line-height: 36px;
   font-weight: 500;
+  overflow-wrap: anywhere;
 }
 
 .title:focus {
@@ -305,15 +307,6 @@ p {
   flex: 1;
   min-width: 0;
   color: var(--text-2);
-  font-size: 13px;
-  line-height: 20px;
-}
-
-.clear-filters {
-  justify-content: flex-end;
-  min-width: 44px;
-  min-height: 44px;
-  padding-right: 0; /* the label's right edge lines up with the list's */
   font-size: 13px;
   line-height: 20px;
 }
@@ -524,105 +517,6 @@ p {
 
 /* --- Filter bar ----------------------------------------------------------------------------- */
 
-.filter-wrap {
-  position: relative;
-  margin: 16px calc(-1 * var(--side)) 0 0;
-}
-
-.filter-wrap::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 24px;
-  background: linear-gradient(to right, rgb(244 244 241 / 0), var(--page));
-  pointer-events: none;
-}
-
-.filter-bar {
-  display: flex;
-  gap: 8px;
-  margin: -6px 0;
-  padding: 6px 24px 6px 4px;
-  margin-left: -4px;
-  overflow-x: auto;
-  scroll-snap-type: x proximity;
-  scrollbar-width: none;
-}
-
-.filter-bar::-webkit-scrollbar {
-  display: none;
-}
-
-.filter-chip {
-  position: relative;
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  gap: 8px;
-  height: 32px;
-  padding: 0 10px;
-  border: 1px solid var(--hairline);
-  border-radius: 10px;
-  background: var(--surface);
-  color: var(--text);
-  font-size: 13px;
-  line-height: 20px;
-  white-space: nowrap;
-  scroll-snap-align: start;
-  transition: background-color 120ms var(--ease), transform 120ms var(--ease);
-}
-
-.filter-chip::after {
-  content: "";
-  position: absolute;
-  inset: -6px -2px;
-}
-
-.filter-chip:active {
-  transform: scale(0.98);
-}
-
-.filter-chip[data-color]::before {
-  content: "";
-  flex: none;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--dot);
-}
-
-.filter-count {
-  color: var(--text-3);
-  font-family: var(--mono);
-  font-variant-numeric: tabular-nums;
-}
-
-.filter-chip[aria-pressed="true"] {
-  border-color: var(--ink);
-  background: var(--ink);
-  color: #fff;
-}
-
-.filter-chip[aria-pressed="true"] .filter-count {
-  color: #fff;
-}
-
-/* Selected: a check in place of the dot. */
-.filter-chip[aria-pressed="true"]::before {
-  content: "";
-  flex: none;
-  width: 9px;
-  height: 5px;
-  margin: -3px 1px 0;
-  border: solid #fff;
-  border-width: 0 0 1.5px 1.5px;
-  border-radius: 0;
-  background: none;
-  transform: rotate(-45deg);
-}
-
 /* --- List ----------------------------------------------------------------------------------- */
 
 .todo-list {
@@ -637,7 +531,7 @@ p {
   list-style: none;
 }
 
-#task-view > .add-form + .auth-signout-note[hidden] + .sync-note[hidden] + .status + .filter-wrap[hidden] + .todo-list,
+#task-view > .add-form + .auth-signout-note[hidden] + .sync-note[hidden] + .status + .category-row[hidden] + .category-panel[hidden] + .todo-list,
 .todo-list.is-loading {
   margin-top: 28px;
 }
@@ -799,39 +693,8 @@ p {
 
 .todo.is-done .stamp,
 .todo.is-done .stamp .icon,
-.todo.is-done .tag {
+.todo.is-done .todo-category {
   color: var(--text-3);
-}
-
-/* Tags: #name with a 6px dot on a raised chip. */
-.tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 100%;
-  height: 24px;
-  padding: 0 8px;
-  border-radius: 6px;
-  background: var(--raised);
-  color: var(--text-2);
-  font-size: 13px;
-  line-height: 20px;
-  white-space: nowrap;
-}
-
-.tag::before {
-  content: "";
-  flex: none;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--dot, var(--text-3));
-}
-
-.tag-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /* Overdue: tint, a 3px inset bar, and the stamp as one outlined chip with words. */
@@ -1147,8 +1010,7 @@ p {
   .text-button,
   .add-button,
   .icon-button,
-  .icon-disc,
-  .filter-chip {
+  .icon-disc {
     transition: none;
   }
 
@@ -1244,76 +1106,6 @@ p {
 }
 
 .reminder-control[aria-invalid="true"] {
-  outline-color: var(--over);
-}
-
-.edit-tags-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
-.edit-tags {
-  display: contents;
-}
-
-.edit-tags .tag {
-  height: 32px;
-  padding: 0 0 0 10px;
-}
-
-.tag-remove {
-  /* A 44x44 hit area that lays out as the old 28x32 slot: negative margins absorb the extra. */
-  position: relative;
-  display: grid;
-  place-items: center;
-  width: 44px;
-  height: 44px;
-  margin: -6px -8px;
-  padding: 0;
-  border: 0;
-  border-radius: 6px;
-  background: none;
-  color: var(--text-2);
-}
-
-.tag-remove:focus-visible {
-  outline-offset: -8px;
-}
-
-.tag-add {
-  height: 32px;
-  min-height: 32px;
-  color: var(--text-2);
-  font-weight: 400;
-  position: relative;
-}
-
-.tag-add::after {
-  content: "";
-  position: absolute;
-  inset: -6px 0;
-}
-
-.tag-field {
-  width: 140px;
-  height: 32px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: 6px;
-  background: var(--surface);
-  font-size: 16px;
-  outline: 1px solid var(--field);
-  outline-offset: -1px;
-}
-
-.tag-field:focus-visible {
-  outline: 2px solid var(--ink);
-  outline-offset: -1px;
-}
-
-.tag-field[aria-invalid="true"] {
   outline-color: var(--over);
 }
 
@@ -1649,10 +1441,6 @@ p {
 
   .reminder-grab {
     display: none;
-  }
-
-  .filter-wrap {
-    margin-right: 0;
   }
 }
 
@@ -2073,48 +1861,6 @@ body {
   font-weight: 600;
 }
 
-/* Tag tabs: 40px pills in the tag's pastel; the selected ones go black. All is outlined. */
-.filter-chip {
-  height: 40px;
-  padding: 0 14px;
-  border: 1.5px solid transparent;
-  border-radius: 20px;
-  background: var(--shelf, var(--surface));
-  font-size: 15px;
-  line-height: 20px;
-  font-weight: 600;
-}
-
-.filter-chip::after {
-  inset: -2px -2px;
-}
-
-.filter-chip.filter-all {
-  border-color: var(--ink);
-  background: transparent;
-}
-
-.filter-chip[data-color]::before {
-  display: none;
-}
-
-.filter-count {
-  color: var(--text-2);
-  font-family: var(--font);
-  font-weight: 400;
-}
-
-.filter-chip[aria-pressed="true"],
-.filter-chip.filter-all[aria-pressed="true"] {
-  border-color: var(--ink);
-  background: var(--ink);
-  color: #fff;
-}
-
-.filter-chip[aria-pressed="true"] .filter-count {
-  color: #fff;
-}
-
 /* List: no outer box; each row is a card. The 8px gap is a page-colored bottom border, so the
    rows stay contiguous (src/drag.js measures them that way) while reading as separate cards. */
 .todo-list {
@@ -2173,8 +1919,7 @@ body {
   font-weight: 600;
 }
 
-.stamp,
-.tag {
+.stamp {
   color: var(--text);
 }
 
@@ -2186,15 +1931,6 @@ body {
 
 .stamp .icon {
   color: var(--text);
-}
-
-/* On a colored card the tag chip is a white pill. */
-.tag {
-  height: 26px;
-  padding: 0 10px;
-  border-radius: 13px;
-  background: rgb(255 255 255 / 0.7);
-  font-weight: 600;
 }
 
 .todo.is-done {
@@ -2383,19 +2119,6 @@ body {
   background: var(--surface);
 }
 
-.edit-tags .tag {
-  background: var(--surface);
-}
-
-.tag-add {
-  min-height: 40px;
-  padding: 0 14px;
-  border: 1.5px dashed var(--ink);
-  border-radius: 20px;
-  color: var(--ink);
-  font-weight: 600;
-}
-
 .task-delete {
   color: var(--over);
   font-weight: 600;
@@ -2440,10 +2163,6 @@ body {
   background: var(--shelf);
 }
 
-.app:has(.app-header[data-color]) .filter-wrap {
-  margin-top: 28px;
-}
-
 @media (min-width: 640px) {
   .app-header[data-color]::before {
     right: -20px;
@@ -2478,16 +2197,6 @@ body {
   text-transform: uppercase;
 }
 
-/* One shelf: the All tab already clears it, so the Clear row collapses as when unfiltered
-   (its live region stays for screen readers). */
-.app:has(.app-header[data-color]) .summary-row {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-}
 
 /* Under the composer: the shelf a new task goes on. */
 .add-shelf {
@@ -2496,4 +2205,232 @@ body {
   font-size: 14px;
   line-height: 20px;
   font-weight: 600;
+}
+
+/* --- Categories ------------------------------------------------------------------------------ */
+
+/* The filter row: a native select labelled Category, then Manage. 44px targets. */
+.category-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.app:has(.app-header[data-color]) .category-row {
+  margin-top: 28px;
+}
+
+.category-key {
+  flex: none;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.category-select {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 36px 0 16px;
+  border: 0;
+  border-radius: 22px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--surface)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23111111' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")
+    no-repeat right 14px center;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 600;
+  outline: 1.5px solid var(--ink);
+  outline-offset: -1.5px;
+}
+
+.category-select:focus-visible {
+  outline-width: 3px;
+}
+
+.category-manage {
+  flex: none;
+  padding: 0 16px;
+  border: 1.5px solid var(--ink);
+  border-radius: 22px;
+  font-weight: 600;
+}
+
+.category-manage[aria-expanded="true"] {
+  background: var(--ink);
+  color: #fff;
+}
+
+/* The Manage panel: an in-page card, not a dialog. */
+.category-panel {
+  margin-top: 12px;
+  padding: 16px;
+  border-radius: 22px;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1.5px var(--ink);
+}
+
+.category-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.category-panel-title {
+  font-size: 17px;
+  line-height: 24px;
+  font-weight: 600;
+}
+
+.category-done {
+  font-weight: 600;
+}
+
+.category-status {
+  min-height: 20px;
+  margin: 8px 0 0;
+  color: var(--text-2);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.category-status.is-error {
+  color: var(--over);
+  font-weight: 600;
+}
+
+.category-list {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.category-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-height: 52px;
+  padding: 4px 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.category-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.category-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.category-actions .text-button {
+  padding: 0 10px;
+  font-weight: 600;
+}
+
+.category-actions .add-button {
+  height: 44px;
+  border-radius: 22px;
+  font-weight: 600;
+}
+
+.category-delete {
+  color: var(--over);
+}
+
+.category-confirm {
+  background: var(--over);
+}
+
+.category-item [aria-disabled="true"] {
+  opacity: 0.5;
+}
+
+.category-field {
+  flex: 1 1 160px;
+  min-width: 0;
+  height: 44px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--surface);
+  font-size: 16px;
+  outline: 1.5px solid var(--ink);
+  outline-offset: -1.5px;
+}
+
+.category-field[aria-invalid="true"],
+.category-form .add-input[aria-invalid="true"] {
+  color: var(--over);
+}
+
+.category-question {
+  flex: 1 1 100%;
+  margin: 0;
+  font-weight: 600;
+}
+
+.category-empty,
+.filter-empty {
+  margin: 12px 0 0;
+  color: var(--text-2);
+  font-size: 15px;
+  line-height: 22px;
+}
+
+.filter-empty {
+  margin-top: 32px;
+  text-align: center;
+}
+
+/* A card's category: its name in ink on a white pill (the card color carries the hue).
+   A block (not flex) so a long name ends in an ellipsis rather than a hard clip. */
+.todo-category {
+  display: block;
+  max-width: 100%;
+  height: 26px;
+  padding: 0 10px;
+  overflow: hidden;
+  border-radius: 13px;
+  background: rgb(255 255 255 / 0.7);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 26px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.todo.is-done .todo-category {
+  background: var(--raised);
+}
+
+/* Reorder is off under a filter: the grip stays in place, faded. */
+.todo-handle:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* The sheet's Category select reads like the title field, with the chevron. */
+.category-choice {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 40px;
+  background: var(--surface)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23111111' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")
+    no-repeat right 16px center;
+  color: var(--text);
 }

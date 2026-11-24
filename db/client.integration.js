@@ -10,6 +10,7 @@ import pg from 'pg';
 import signUp from '../api/auth/sign-up/email.js';
 import signIn from '../api/auth/sign-in/email.js';
 import signOut from '../api/auth/sign-out.js';
+import categories from '../api/categories.js';
 import session from '../api/session.js';
 import todos from '../api/todos.js';
 import { getServices } from '../server/auth.js';
@@ -25,6 +26,7 @@ const handlers = {
   '/api/auth/sign-up/email': signUp,
   '/api/auth/sign-in/email': signIn,
   '/api/auth/sign-out': signOut,
+  '/api/categories': categories,
   '/api/session': session,
   '/api/todos': todos,
 };
@@ -63,7 +65,12 @@ async function startSession() {
   return active;
 }
 
-const newTodo = (text, tags = []) => addTodo([], text, tags)[0];
+const newTodo = (text) => addTodo([], text)[0];
+// A title-only edit (keeps the reminder shown), used as a generic write.
+const retitle = (sync, id, text) => {
+  const row = sync.todos.find((todo) => todo.id === id);
+  return sync.edit(id, { text, due: row?.due ?? null, repeat: row?.repeat ?? 'none' });
+};
 
 test('browser storage modules against PostgreSQL', {
   skip: testUrl ? false : 'Set TEST_DATABASE_URL to a disposable PostgreSQL database',
@@ -108,31 +115,30 @@ test('browser storage modules against PostgreSQL', {
 
   const shared = browser('192.0.2.10'); // one device, two accounts
   const clean = browser('192.0.2.11'); // a fresh browser context
-  const ana = { name: 'Ana', email: 'ana@example.test', password };
-  const ben = { name: 'Ben', email: 'ben@example.test', password };
+  const ana = { name: 'Ana', email: 'cli-ana@example.test', password };
+  const ben = { name: 'Ben', email: 'cli-ben@example.test', password };
   let tabA;
   let anaTodo;
 
   await t.test('signed out, the list cannot be read', async () => {
     shared.use();
     assert.deepEqual(await startSession(), { user: null, csrfToken: null, demoLoginEnabled: true });
-    await assert.rejects(api.listTodos(), { status: 401 });
+    await assert.rejects(api.readSnapshot(), { status: 401 });
   });
 
-  await t.test('a new account starts empty and saves tasks, tags, reminders and completion', async () => {
+  await t.test('a new account starts empty and saves tasks, titles with #, reminders and completion', async () => {
     assert.equal((await api.authRequest('sign-up/email', ana)).ok, true);
     const active = await startSession();
-    assert.deepEqual(active.user, { name: 'Ana', email: 'ana@example.test' });
+    assert.deepEqual(active.user, { name: 'Ana', email: 'cli-ana@example.test' });
     tabA = createSync(api);
     assert.deepEqual(await tabA.load(), { ok: true });
     assert.deepEqual(tabA.todos, []);
 
-    anaTodo = newTodo('Pay rent', ['home', 'bills']);
+    anaTodo = newTodo('Pay rent #home');
     const other = newTodo('Water plants');
     tabA.create(anaTodo);
     tabA.create(other);
-    tabA.addTag(anaTodo.id, 'urgent');
-    tabA.removeTag(anaTodo.id, 'bills');
+    retitle(tabA, anaTodo.id, 'Pay rent #home #bills #urgent');
     const due = Date.now() + 3_600_000;
     tabA.setReminder(anaTodo.id, due, 'weekly');
     tabA.toggle(other.id, Date.now());
@@ -144,7 +150,8 @@ test('browser storage modules against PostgreSQL', {
 
     const [rent, plants] = tabA.todos;
     assert.equal(tabA.todos.length, 2);
-    assert.deepEqual(rent.tags, ['home', 'urgent']);
+    // A "#" is plain title text: no tags are sent or stored, and the task is uncategorized.
+    assert.deepEqual([rent.text, rent.tags, rent.categoryId], ['Pay rent #home #bills #urgent', [], null]);
     assert.equal(rent.due, due);
     assert.equal(rent.repeat, 'weekly');
     assert.equal(plants.completed, true);
@@ -160,7 +167,7 @@ test('browser storage modules against PostgreSQL', {
     const sync = createSync(api);
     await sync.load();
     assert.deepEqual(sync.todos.map(({ text, completed, tags }) => ({ text, completed, tags })), [
-      { text: 'Pay rent', completed: false, tags: ['home', 'urgent'] },
+      { text: 'Pay rent #home #bills #urgent', completed: false, tags: [] },
       { text: 'Water plants', completed: true, tags: [] },
     ]);
   });
@@ -216,12 +223,13 @@ test('browser storage modules against PostgreSQL', {
   await t.test('an edit from a stale tab conflicts, reloads and leaves the newer change', async () => {
     const tabB = createSync(api);
     await tabB.load();
-    assert.equal((await tabB.addTag(anaTodo.id, 'from-b')).ok, true);
-    const stale = await tabA.removeTag(anaTodo.id, 'home');
+    assert.equal((await retitle(tabB, anaTodo.id, 'Pay rent #home #bills #urgent #from-b')).ok, true);
+    const stale = await retitle(tabA, anaTodo.id, 'Pay rent');
     assert.equal(stale.ok, false);
     assert.equal(stale.error.status, 409);
     assert.equal(stale.reloaded, true);
-    assert.deepEqual(tabA.todos.find((todo) => todo.id === anaTodo.id).tags, ['home', 'urgent', 'from-b']);
+    const reloaded = tabA.todos.find((todo) => todo.id === anaTodo.id);
+    assert.deepEqual([reloaded.text, reloaded.tags], ['Pay rent #home #bills #urgent #from-b', []]);
   });
 
   await t.test('a queued completion is not replayed over another tab\'s completion after a conflict', async () => {
@@ -231,7 +239,7 @@ test('browser storage modules against PostgreSQL', {
     const tabB = createSync(api);
     await tabB.load();
     assert.equal((await tabB.toggle(todo.id, Date.now())).ok, true); // B completes it
-    const tag = tabA.addTag(todo.id, 'mine'); // A's stale tag write conflicts...
+    const tag = retitle(tabA, todo.id, 'Shared chore (mine)'); // A's stale edit conflicts...
     const complete = tabA.toggle(todo.id, Date.now(), before); // ...and A's queued click is cancelled
     assert.equal((await tag).error.status, 409);
     assert.deepEqual(await complete, { ok: false, cancelled: true });
@@ -246,7 +254,7 @@ test('browser storage modules against PostgreSQL', {
     await tabA.create(todo);
     const tabB = createSync(api);
     await tabB.load();
-    assert.equal((await tabB.addTag(todo.id, 'from-b')).ok, true); // revision 2
+    assert.equal((await retitle(tabB, todo.id, 'Recovering #from-b')).ok, true); // revision 2
     // Hold tabA's conflict reload so the delete is clicked on the revision-1 row.
     const real = globalThis.fetch;
     let release;
@@ -256,36 +264,64 @@ test('browser storage modules against PostgreSQL', {
       }
       return real(path, init);
     };
-    const tag = tabA.addTag(todo.id, 'from-a');
+    const tag = retitle(tabA, todo.id, 'Recovering #from-a');
     for (let i = 0; i < 50 && !release; i++) await new Promise((resolve) => setTimeout(resolve, 10));
     const remove = tabA.remove(todo.id);
     globalThis.fetch = real;
     release();
     assert.equal((await tag).error.status, 409);
     assert.deepEqual(await remove, { ok: false, cancelled: true });
-    const { rows } = await admin.query('SELECT tags, revision FROM todos WHERE id = $1', [todo.id]);
-    assert.deepEqual(rows, [{ tags: ['from-b'], revision: 2 }]);
+    const { rows } = await admin.query('SELECT text, tags, revision FROM todos WHERE id = $1', [todo.id]);
+    assert.deepEqual(rows, [{ text: 'Recovering #from-b', tags: [], revision: 2 }]);
     assert.equal((await tabA.remove(todo.id)).ok, true);
   });
 
-  await t.test('a task edit saves text, tags and reminder together; a stale tab conflicts and rolls back', async () => {
-    const todo = newTodo('Draft title', ['old']);
+  await t.test('a task edit saves title and reminder together; a stale tab conflicts and rolls back', async () => {
+    const todo = newTodo('Draft title');
     await tabA.create(todo);
     const tabB = createSync(api);
     await tabB.load();
     const due = Date.now() + 3_600_000;
-    const edit = { text: 'Final title', tags: ['work', 'q4'], due, repeat: 'daily' };
+    const edit = { text: 'Final title #work #q4', due, repeat: 'daily' };
     assert.equal((await tabA.edit(todo.id, edit)).ok, true);
     const { rows } = await admin.query('SELECT text, tags, due, repeat, notified, completed, revision FROM todos WHERE id = $1', [todo.id]);
-    assert.deepEqual(rows, [{ ...edit, due: String(due), notified: null, completed: false, revision: 2 }]);
+    assert.deepEqual(rows, [{
+      ...edit, tags: [], due: String(due), notified: null, completed: false, revision: 2,
+    }]);
     // tabB still has revision 1: its edit shows, then is refused and replaced by tabA's.
-    const stale = tabB.edit(todo.id, { text: 'From B', tags: [], due: null, repeat: 'none' });
+    const stale = tabB.edit(todo.id, { text: 'From B', due: null, repeat: 'none' });
     assert.equal(tabB.todos.find((item) => item.id === todo.id).text, 'From B');
     const outcome = await stale;
     assert.equal(outcome.error.status, 409);
     assert.equal(outcome.reloaded, true);
     assert.deepEqual(tabB.todos.find((item) => item.id === todo.id), tabA.todos.find((item) => item.id === todo.id));
-    assert.equal((await admin.query('SELECT text FROM todos WHERE id = $1', [todo.id])).rows[0].text, 'Final title');
+    assert.equal((await admin.query('SELECT text FROM todos WHERE id = $1', [todo.id])).rows[0].text, 'Final title #work #q4');
+    assert.equal((await tabA.remove(todo.id)).ok, true);
+  });
+
+  await t.test('categories: create, assign, an edit that omits the link keeps it, delete unlinks with new revisions', async () => {
+    const todo = newTodo('Book flights');
+    await tabA.create(todo);
+    const created = await tabA.createCategory('Travel');
+    assert.equal(created.ok, true);
+    const { id } = created.category;
+    const fresh = createSync(api);
+    await fresh.load();
+    assert.deepEqual(fresh.categories, tabA.categories, 'the snapshot carries the catalog');
+    assert.equal((await tabA.edit(todo.id, { text: 'Book flights', due: null, repeat: 'none', categoryId: id })).ok, true);
+    assert.equal((await retitle(tabA, todo.id, 'Book flights today')).ok, true);
+    let { rows } = await admin.query('SELECT category_id, revision FROM todos WHERE id = $1', [todo.id]);
+    assert.deepEqual(rows, [{ category_id: id, revision: 3 }]);
+    assert.equal((await tabA.renameCategory(id, 'Trips')).ok, true);
+    const stale = await fresh.renameCategory(id, 'Holidays');
+    assert.equal(stale.error.code, 'REVISION_CONFLICT');
+    assert.equal(fresh.categories.find((item) => item.id === id).name, 'Trips');
+    assert.equal((await tabA.deleteCategory(id)).ok, true);
+    const row = tabA.todos.find((item) => item.id === todo.id);
+    assert.deepEqual([row.categoryId, row.revision], [null, 4]);
+    assert.equal(tabA.categories.some((item) => item.id === id), false);
+    ({ rows } = await admin.query('SELECT category_id, revision FROM todos WHERE id = $1', [todo.id]));
+    assert.deepEqual(rows, [{ category_id: null, revision: 4 }]);
     assert.equal((await tabA.remove(todo.id)).ok, true);
   });
 
@@ -333,7 +369,7 @@ test('browser storage modules against PostgreSQL', {
   await t.test('sign-out revokes the session; an expired session gets 401', async () => {
     assert.equal((await api.authRequest('sign-out', {}, { csrf: true })).ok, true);
     assert.deepEqual(await startSession(), { user: null, csrfToken: null, demoLoginEnabled: true });
-    await assert.rejects(api.listTodos(), { status: 401 });
+    await assert.rejects(api.readSnapshot(), { status: 401 });
 
     clean.use();
     api.setToken((await api.readSession()).csrfToken);

@@ -1,18 +1,20 @@
 import {
   addTodo,
   editTodo,
+  editFields,
   toggleTodo,
-  allTags,
-  filterByTags,
   dueReminders,
   nextFireTime,
   sortByUrgency,
 } from './todos.js';
-import { MAX_TAGS, normalizeTag, tagColor } from './tags.js';
+import { categoryColor } from './tags.js';
+import {
+  ALL, categoryErrorText, filterByCategory, keepFilter, NAME_MESSAGES, readCategoryName, UNCATEGORIZED,
+} from './categories.js';
 import { isCompleted, isOverdue } from './reminders.js';
 import * as api from './storage.js';
 import { createSync } from './sync.js';
-import { readTaskEdit, readTaskInput } from './task-input.js';
+import { readTaskInput } from './task-input.js';
 import { autoScrollStep, createDrag, keyboardTarget } from './drag.js';
 import {
   CALENDAR_KEYS, DEFAULT_TIME, addDays, addMonths, canGoBack, dayLabel, dayName, defaultReminder,
@@ -32,11 +34,20 @@ const addShelf = document.getElementById('add-shelf');
 const list = document.getElementById('todo-list');
 const emptyState = document.getElementById('empty-state');
 const summary = document.getElementById('summary');
-const summaryRow = document.getElementById('summary-row');
-const clearFilters = document.getElementById('clear-filters');
 const hintLimit = document.getElementById('hint-limit');
-const filterWrap = document.getElementById('filter-wrap');
-const filterBar = document.getElementById('filter-bar');
+const categoryRow = document.getElementById('category-row');
+const categoryFilter = document.getElementById('category-filter');
+const manageButton = document.getElementById('category-manage');
+const panel = document.getElementById('category-panel');
+const panelTitle = document.getElementById('category-panel-title');
+const panelDone = document.getElementById('category-done');
+const categoryForm = document.getElementById('category-form');
+const categoryName = document.getElementById('category-name');
+const categoryAdd = document.getElementById('category-add');
+const categoryStatus = document.getElementById('category-status');
+const categoryList = document.getElementById('category-list');
+const categoryEmpty = document.getElementById('category-empty');
+const filterEmpty = document.getElementById('filter-empty');
 const banner = document.getElementById('banner');
 const bannerIcon = document.getElementById('banner-icon');
 const bannerText = document.getElementById('banner-text');
@@ -48,9 +59,7 @@ const scrim = document.getElementById('reminder-scrim');
 const editor = document.getElementById('reminder-editor');
 const sheetBody = document.getElementById('sheet-body');
 const textInput = document.getElementById('edit-text');
-const editTags = document.getElementById('edit-tags');
-const tagAdd = document.getElementById('edit-tag-add');
-const tagField = document.getElementById('edit-tag-field');
+const editCategory = document.getElementById('edit-category');
 const reminderOn = document.getElementById('reminder-on');
 const pickerDetail = document.getElementById('picker-detail');
 const dateButton = document.getElementById('reminder-date-button');
@@ -72,7 +81,6 @@ const editorEnd = document.getElementById('reminder-end');
 const deleteButton = document.getElementById('task-delete');
 const cancelButton = document.getElementById('reminder-cancel');
 const saveButton = document.getElementById('reminder-save');
-const xIcon = document.getElementById('x-icon');
 const repeatIcon = document.getElementById('repeat-icon');
 const alertIcon = document.getElementById('alert-icon');
 const infoIcon = document.getElementById('info-icon');
@@ -83,8 +91,10 @@ const syncRetry = document.getElementById('sync-retry');
 const syncDismiss = document.getElementById('sync-dismiss');
 
 const sheetViewport = createSheetViewport({ layer, body: sheetBody });
+// Static controls that a render may send focus back to.
+withKey(categoryFilter, 'category-filter');
+withKey(categoryName, 'category-name');
 
-const INVALID_FLASH_MS = 400;
 const MAX_DELAY = 2 ** 31 - 1; // setTimeout's limit (about 24.8 days); check() re-arms when it fires
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 const PULSE_MS = 2 * 1200; // the fired row's 2 pulses (styles.css reminder-pulse)
@@ -94,6 +104,8 @@ const CLAIM_RETRY_MS = 30_000;
 const NOTE_DISMISSED_KEY = 'task-manager.blocked-note-dismissed';
 
 const CHANGED_ELSEWHERE = 'This task changed in another tab or device. The list is up to date now, so try again.';
+const CATEGORY_GONE = 'The category you chose was deleted. The list is up to date now, so try again.';
+const DELETE_QUESTION = 'Delete category? Its tasks will become uncategorized.';
 
 // The list-level notice (permission denied or unsupported).
 const NOTE_TEXT = 'Notifications off';
@@ -122,22 +134,26 @@ let sessionEmail = null;
 let revalidating = false; // a CSRF rejection asked the auth module to re-read the session
 let resuming = false;
 let viewSignature = '[]';
-// Creates that may or may not have reached the server: the parsed task (text and every tag it
-// gets, active filter included) -> their IDs, oldest first. Adding exactly the same task again
-// reuses one of those IDs, so a create that did land can't be doubled. A different task (other
-// text, or the same text under another filter) never takes an ID that isn't its own.
+// Creates that may or may not have reached the server: the title -> their IDs, oldest first.
+// Adding the same title again reuses one of those IDs, so a create that did land can't be
+// doubled. Another title never takes an ID that isn't its own.
 const createDrafts = new Map();
-const draftKey = (text, tags) => JSON.stringify([text, tags]);
 let retryAction = null;
 const claiming = new Set(); // "id:due" occurrences being claimed by this tab
 const claimBackoff = new Map(); // "id:due" -> time before which it isn't claimed again
 let recheckTimer;
 const openNotifications = new Set(); // closed when the session ends
 // View state: never saved, never in the URL.
-let activeTags = []; // A to Z
+let filter = ALL; // ALL, UNCATEGORIZED or a category ID
 let reminderId = null; // todo whose task sheet is open
-let draft = null; // the sheet's starting point: { text, tags, due, repeat } of that todo
-let draftTags = []; // the tags the sheet will save (a copy of the todo's, edited by its chips)
+let draft = null; // the sheet's starting values and the user's category choice
+let optionsSignature = null; // the catalog the two category selects were built from
+// The Manage panel: `panelRow` is the row in rename ({id, mode: 'rename', value, revision}) or delete
+// confirmation ({id, mode: 'confirm', name, revision}); `panelBusy` is the write waiting for the server.
+let panelRow = null;
+let categoryCreateDraft = null; // { id, name }, retained if the create is unconfirmed
+let panelBusy = null; // null | { id, kind: 'create' | 'rename' | 'delete' | 'refresh' }
+let panelSignature = null;
 let reminderTouched = false; // a field was changed, or Save tried: show its error
 const fired = new Map(); // todo id -> when its "just fired" pulse started (performance.now())
 let noteDismissed = readNoteDismissed(); // the blocked-notifications note, for this session
@@ -153,16 +169,22 @@ let bannerTimer;
 
 // The sync model changed: a local change was applied, or the server answered. Re-render only when
 // something visible changed (a confirmed row replacing its optimistic copy usually changes nothing
-// but the revision), so an answer arriving mid-typing doesn't replace the "+ tag" field.
+// but the revision), so an answer arriving mid-typing doesn't replace a field being edited.
 function syncChanged() {
   state = sync.todos;
-  // A filter tag drops out once no todo uses it; with none left the view is back to All.
-  const inUse = new Set(state.flatMap((todo) => todo.tags));
-  activeTags = activeTags.filter((tag) => inUse.has(tag));
-  const signature = JSON.stringify(state.map(({ revision, ...todo }) => todo));
-  if (signature !== viewSignature) {
+  // A deleted category (here or elsewhere) stops filtering: the view goes back to All.
+  filter = keepFilter(filter, sync.categories);
+  if (panelRow) {
+    const category = findCategory(panelRow.id);
+    if (!category || (panelRow.mode === 'confirm' &&
+        (category.revision !== panelRow.revision || category.name !== panelRow.name))) panelRow = null;
+  }
+  if (reminderId !== null && !sync.categories) draft.chosenCategoryId = draft.categoryId;
+  const draftFocus = invalidateDraft();
+  const signature = JSON.stringify([state.map(({ revision, ...todo }) => todo), sync.categories]);
+  if (signature !== viewSignature || draftFocus) {
     viewSignature = signature;
-    renderSoon(renderPending ? pendingFocus : undefined);
+    renderSoon(draftFocus ?? (renderPending ? pendingFocus : undefined));
   } else if (!renderPending) {
     // Nothing visible changed, so the screen already shows these rows.
     noteDisplayed();
@@ -178,22 +200,19 @@ function findTodo(id) {
   return state.find((todo) => todo.id === id);
 }
 
-// The list as shown: the tag filter, then overdue todos on top. Used by the list and fallback
-// focus, so they always agree.
+function findCategory(id) {
+  return id == null ? undefined : sync.categories?.find((category) => category.id === id);
+}
+
+// The list as shown: the category filter, then overdue todos on top. Used by the list and
+// fallback focus, so they always agree.
 function visibleTodos(now) {
-  return sortByUrgency(filterByTags(state, activeTags), now);
+  return sortByUrgency(filterByCategory(state, filter), now);
 }
 
-function setFilter(tags, focusKeys) {
-  activeTags = [...tags].sort();
-  render(focusKeys);
-}
-
-function toggleFilter(tag, focusKeys) {
-  setFilter(
-    activeTags.includes(tag) ? activeTags.filter((active) => active !== tag) : [...activeTags, tag],
-    focusKeys,
-  );
+// Moves are made in the whole list, so they are off while a filter hides some of it.
+function reorderLocked() {
+  return filter !== ALL;
 }
 
 // Every focusable control gets a stable key so focus survives a re-render.
@@ -255,46 +274,12 @@ function formatDue(ms, now) {
 
 const REPEAT_LABELS = { daily: 'Daily', weekly: 'Weekly' };
 
-function renderFilterChip(tag, count) {
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'filter-chip';
-
-  const name = document.createElement('span');
-  const number = document.createElement('span');
-  number.className = 'filter-count';
-  number.textContent = count;
-
-  if (tag === null) {
-    withKey(button, 'filter');
-    button.classList.add('filter-all');
-    button.setAttribute('aria-pressed', String(activeTags.length === 0));
-    button.setAttribute('aria-label', `All, ${plural(count, 'task')}`);
-    name.textContent = 'All';
-  } else {
-    withKey(button, 'filter', tag);
-    button.dataset.tag = tag;
-    button.dataset.color = tagColor(tag);
-    button.setAttribute('aria-pressed', String(activeTags.includes(tag)));
-    button.setAttribute('aria-label', `${tag}, ${plural(count, 'task')}`);
-    name.textContent = `#${tag}`;
-  }
-
-  button.append(name, number);
-  return button;
-}
-
-// A row's tag: "#name" with its dot. Not interactive: the filter bar filters, the sheet edits.
-function renderTagChip(tag) {
-  const chip = document.createElement('span');
-  chip.className = 'tag';
-  chip.dataset.color = tagColor(tag);
+// A row's category: its name in neutral ink. Not interactive: the filter filters, the sheet edits.
+function renderCategoryLabel(category) {
   const label = document.createElement('span');
-  label.className = 'tag-label';
-  label.dataset.tag = tag;
-  label.textContent = `#${tag}`;
-  chip.append(label);
-  return chip;
+  label.className = 'todo-category';
+  label.textContent = category.name;
+  return label;
 }
 
 // A ticked recurring task: checked for today, back tomorrow.
@@ -334,8 +319,8 @@ function renderStamp(todo, overdue, ticked, now) {
   return stamp;
 }
 
-// The body button's name: the title plus what the stamp and tags show, then the action.
-function rowName(todo, overdue, ticked, now) {
+// The body button's name: the title plus what the stamp and category show, then the action.
+function rowName(todo, category, overdue, ticked, now) {
   const parts = [todo.text];
   if (todo.due !== null) {
     const when = formatDue(todo.due, now);
@@ -344,7 +329,7 @@ function rowName(todo, overdue, ticked, now) {
     else if (overdue) parts.push(`Overdue, was due ${when}${repeats}`);
     else parts.push(`Reminder ${when}${repeats}`);
   }
-  if (todo.tags.length > 0) parts.push(`Tags: ${todo.tags.join(', ')}`);
+  if (category) parts.push(`Category: ${category.name}`);
   parts.push('Edit task');
   return parts.join('. ');
 }
@@ -353,14 +338,15 @@ function renderTodo(todo, now) {
   const completed = isCompleted(todo, now);
   const overdue = isOverdue(todo, now);
   const ticked = isTicked(todo, now);
+  const category = findCategory(todo.categoryId);
   const item = document.createElement('li');
   item.className = completed && !ticked ? 'todo is-done' : 'todo';
   item.classList.toggle('is-ticked', ticked);
   item.classList.toggle('is-overdue', overdue);
   item.classList.toggle('is-editing', reminderId === todo.id);
   item.dataset.id = todo.id;
-  // The card takes its first tag's shelf color (styles.css [data-color]).
-  if (todo.tags.length > 0) item.dataset.color = tagColor(todo.tags[0]);
+  // The card takes its category's shelf color (styles.css [data-color]), hashed from the name.
+  if (category) item.dataset.color = categoryColor(category.name);
   if (fired.has(todo.id)) {
     item.classList.add('is-fired');
     // Re-renders continue the pulse where it was instead of restarting it.
@@ -380,18 +366,18 @@ function renderTodo(todo, now) {
   open.className = 'todo-open';
   open.setAttribute('aria-haspopup', 'dialog');
   open.setAttribute('aria-expanded', String(reminderId === todo.id));
-  open.setAttribute('aria-label', rowName(todo, overdue, ticked, now));
+  open.setAttribute('aria-label', rowName(todo, category, overdue, ticked, now));
 
   const title = document.createElement('span');
   title.className = 'todo-text';
   title.textContent = todo.text;
   open.append(title);
 
-  if (todo.due !== null || todo.tags.length > 0) {
+  if (todo.due !== null || category) {
     const meta = document.createElement('span');
     meta.className = 'todo-meta';
     if (todo.due !== null) meta.append(renderStamp(todo, overdue, ticked, now));
-    meta.append(...todo.tags.map(renderTagChip));
+    if (category) meta.append(renderCategoryLabel(category));
     open.append(meta);
   }
 
@@ -409,6 +395,8 @@ function renderTodo(todo, now) {
     handle.className = 'todo-handle';
     handle.setAttribute('aria-label', `Reorder ${todo.text}`);
     handle.setAttribute('aria-describedby', 'reorder-hint');
+    // Under a category filter the grip stays in place but can't be pressed or focused.
+    handle.disabled = reorderLocked();
     handle.append(icon(gripIcon));
     item.append(handle);
   }
@@ -431,9 +419,8 @@ function renderSkeleton() {
 function render(focusKeys) {
   const keys = focusKeys ?? [document.activeElement?.dataset?.focusKey];
   const now = Date.now(); // one instant for the whole render: overdue marks, order and due text agree
-  const tags = allTags(state);
   const visible = visibleTodos(now);
-  const filtering = activeTags.length > 0;
+  const filtering = filter !== ALL;
 
   rendering = true;
   noteDisplayed();
@@ -453,46 +440,53 @@ function render(focusKeys) {
 
   const ready = phase === 'ready';
   const loading = phase === 'loading';
-  // No counts: the row shows only Clear while a filter is on. While loading, its live region says
-  // "Loading your tasks" to screen readers alone.
+  // The row is only a live region: while loading it says "Loading your tasks" to screen readers.
   summary.textContent = loading ? 'Loading your tasks' : '';
   summary.setAttribute('aria-busy', String(loading));
-  summaryRow.classList.toggle('is-quiet', !ready || !filtering);
   syncAddButton();
-  // Under the composer: which shelf a new task goes on (the selected tags).
-  addShelf.hidden = activeTags.length === 0;
-  addShelf.textContent = activeTags.length === 0 ? '' : `Adds to ${activeTags.map((tag) => `#${tag}`).join(', ')}`;
-  clearFilters.hidden = !filtering || !ready;
+  // Under the composer: new tasks start uncategorized, so under a category filter say where they go.
+  const shelf = ready ? findCategory(filter) : undefined;
+  addShelf.hidden = !shelf;
+  addShelf.textContent = shelf ? 'New tasks go to Uncategorized.' : '';
   // A load error is a card in the list slot; other sync notes are a line above the list.
   syncNote.classList.toggle('is-block', phase === 'error');
 
-  // One tag selected: that shelf's view. The title names it and the header takes its color.
-  const shelf = ready && activeTags.length === 1 ? activeTags[0] : null;
-  title.textContent = shelf ?? 'Tasks';
-  if (shelf) header.dataset.color = tagColor(shelf);
+  // One category selected: that shelf's view. The title names it and the header takes its color.
+  title.textContent = shelf?.name ?? 'Tasks';
+  if (shelf) header.dataset.color = categoryColor(shelf.name);
   else delete header.dataset.color;
 
-  const scroll = filterBar.scrollLeft;
-  filterWrap.hidden = !ready || tags.length === 0;
-  filterBar.replaceChildren(
-    renderFilterChip(null, state.length),
-    ...tags.map(({ tag, count }) => renderFilterChip(tag, count)),
-  );
-  filterBar.scrollLeft = scroll;
+  // Category controls need the server's catalog; without one (an older server) they stay hidden.
+  const catalog = ready ? sync.categories : null;
+  categoryRow.hidden = !catalog;
+  if (!catalog && !panel.hidden) closePanel(false);
+  renderCategoryOptions();
+  categoryFilter.value = filter;
+  renderPanel();
 
+  // The dragged row is about to be replaced, and its handle (which holds the drag's listeners)
+  // may never hear the release: put the row back and drop the drag's listeners now.
+  endDrag(false);
   if (loading) list.replaceChildren(...Array.from({ length: SKELETON_ROWS }, renderSkeleton));
   else list.replaceChildren(...visible.map((todo) => renderTodo(todo, now)));
   list.classList.toggle('is-loading', loading);
   list.setAttribute('aria-busy', String(loading));
   list.hidden = !loading && visible.length === 0;
-  emptyState.hidden = !ready || visible.length > 0;
+  // No tasks at all: the welcome page. Tasks (or a filter) but none shown: say the filter did it.
+  emptyState.hidden = !ready || visible.length > 0 || filtering;
+  filterEmpty.hidden = !ready || visible.length > 0 || !filtering;
 
   const controls = new Map(
     [...app.querySelectorAll('[data-focus-key]')].map((element) => [element.dataset.focusKey, element]),
   );
   const target = keys.map((focusKey) => controls.get(focusKey)).find(Boolean);
-  if (target) target.focus();
-  else if (focusKeys) focusComposer();
+  if (target) {
+    target.focus();
+    // A rebuilt rename field keeps the caret at the end of what was typed.
+    if (target.classList.contains('category-field')) target.setSelectionRange?.(target.value.length, target.value.length);
+  } else if (focusKeys) {
+    focusComposer();
+  }
   // Focus moved by the render itself is not the user's: focus handlers ignore it.
   rendering = false;
 
@@ -575,10 +569,9 @@ function rowFallbackKeys(id) {
     .map((todo) => key('checkbox', todo.id));
 }
 
-// Same parse and check as submit (and the edit form): with the active filter tags, which can push
-// a #tag back into the title.
+// Same check as submit (and the edit form).
 function syncAddButton() {
-  const { error } = readTaskInput(input.value, activeTags);
+  const { error } = readTaskInput(input.value);
   addButton.disabled = phase !== 'ready' || error !== null;
   // Say why Add is disabled when it is the length (the one reason that isn't obvious).
   const tooLong = error === 'invalid';
@@ -743,19 +736,21 @@ function dismissAllFired() {
 
 // --- Task sheet ----------------------------------------------------------------------------
 
-// Opens the task sheet, prefilled with the task's title, tags, reminder and repeat.
+// Opens the task sheet, prefilled with the task's title, category, reminder and repeat.
 // The row can outlive its task until the pending render (a failed add rolled it back mid-press).
 function openEditor(id) {
   const todo = findTodo(id);
   if (!todo) return;
   reminderId = id;
   reminderTouched = false;
-  draft = { text: todo.text, tags: [...todo.tags], due: todo.due, repeat: todo.repeat };
-  draftTags = [...todo.tags];
+  const categoryId = todo.categoryId ?? null;
+  draft = { text: todo.text, shownText: '', categoryId, chosenCategoryId: categoryId, due: todo.due, repeat: todo.repeat };
   editor.setAttribute('aria-label', `Edit “${todo.text}”`);
   textInput.value = todo.text;
-  closeTagField();
-  renderDraftTags();
+  // A single-line input may strip line breaks: what it shows is the baseline for "edited".
+  draft.shownText = textInput.value;
+  optionsSignature = null; // rebuild the sheet's select for this task
+  renderCategoryOptions();
   const fields = splitDue(todo.due);
   reminderOn.checked = fields.on;
   dateInput.value = fields.date;
@@ -779,7 +774,6 @@ function closeEditor() {
   sheetViewport.stop();
   app.inert = false;
   editorAnnouncer.textContent = '';
-  closeTagField();
   setCalendarOpen(false);
   hideMessage();
 }
@@ -797,76 +791,66 @@ function cancelEditor() {
 
 function editedElsewhere(todo, opened) {
   return todo.text !== opened.text || todo.due !== opened.due || todo.repeat !== opened.repeat ||
-    todo.tags.length !== opened.tags.length || todo.tags.some((tag, index) => tag !== opened.tags[index]);
+    (todo.categoryId ?? null) !== opened.categoryId;
 }
 
-// The sheet's tags: chips with a ×, for the draft's tags. "Add tag" hides at the cap.
-function renderDraftTags() {
-  editTags.replaceChildren(...draftTags.map((tag) => {
-    const chip = document.createElement('span');
-    chip.className = 'tag';
-    chip.dataset.color = tagColor(tag);
-    const label = document.createElement('span');
-    label.className = 'tag-label';
-    label.dataset.tag = tag;
-    label.textContent = `#${tag}`;
-    const remove = document.createElement('button');
-    remove.type = 'button';
-    remove.className = 'tag-remove';
-    remove.dataset.tag = tag;
-    remove.setAttribute('aria-label', `Remove tag ${tag}`);
-    remove.append(icon(xIcon));
-    chip.append(label, remove);
-    return chip;
-  }));
-  tagAdd.hidden = !tagField.hidden || draftTags.length >= MAX_TAGS;
-  // The sheet is tinted with its first tag's shelf color, like the task's card.
-  if (draftTags.length > 0) editor.dataset.color = tagColor(draftTags[0]);
+// The sheet is tinted with the chosen category's shelf color, like the task's card.
+function tintEditor() {
+  const category = findCategory(draft?.chosenCategoryId);
+  if (category) editor.dataset.color = categoryColor(category.name);
   else delete editor.dataset.color;
 }
 
-// "Add tag" becomes an inline field: Enter adds and stays open, Esc closes.
-function openTagField() {
-  tagField.hidden = false;
-  tagField.value = '';
-  tagAdd.hidden = true;
-  tagField.focus();
+function categoryOption(value, text) {
+  const option = document.createElement('option');
+  option.value = value;
+  option.textContent = text;
+  return option;
 }
 
-function closeTagField() {
-  tagField.hidden = true;
-  tagField.value = '';
-  tagField.removeAttribute('aria-invalid');
-  tagAdd.hidden = draftTags.length >= MAX_TAGS;
+function categoryOptions(catalog, ...builtIns) {
+  if (!catalog?.length) return builtIns;
+  const group = document.createElement('optgroup');
+  group.setAttribute('label', 'Categories');
+  group.append(...catalog.map(({ id, name }) => categoryOption(id, name)));
+  return [...builtIns, group];
 }
 
-// The same rules as "+ tag" (normalized, no duplicates, at most MAX_TAGS), against the draft.
-// Returns false when the tag is refused.
-function addDraftTag(raw) {
-  const tag = normalizeTag(raw);
-  if (tag === null || draftTags.includes(tag) || draftTags.length >= MAX_TAGS) return false;
-  draftTags = [...draftTags, tag];
-  renderDraftTags();
-  syncEditor();
-  return true;
+// The filter select and the sheet's select, rebuilt only when the catalog changes, so a render
+// while one is open doesn't close it. The sheet's selection comes from the draft.
+function renderCategoryOptions() {
+  const catalog = sync.categories;
+  const signature = JSON.stringify(catalog?.map(({ id, name }) => [id, name]) ?? null);
+  if (signature === optionsSignature) return;
+  optionsSignature = signature;
+  categoryFilter.replaceChildren(...categoryOptions(
+    catalog, categoryOption(ALL, 'All categories'), categoryOption(UNCATEGORIZED, 'Uncategorized'),
+  ));
+  categoryFilter.value = filter;
+  const chosen = reminderId === null ? null : draft.chosenCategoryId;
+  editCategory.replaceChildren(...categoryOptions(catalog, categoryOption('', 'Uncategorized')));
+  // Without a catalog the task's category can't be shown or changed; saves leave it as it is.
+  editCategory.disabled = !catalog;
+  editCategory.value = findCategory(chosen) ? chosen : '';
+  if (reminderId !== null) tintEditor();
 }
 
-// Clears the rejected text after the flash, unless the user has typed something new since.
-function rejectTag(field) {
-  const rejected = field.value;
-  field.setAttribute('aria-invalid', 'true');
-  setTimeout(() => {
-    field.removeAttribute('aria-invalid');
-    if (field.value === rejected) field.value = '';
-  }, INVALID_FLASH_MS);
+// An open sheet whose task's category, or the one chosen in it, was deleted can't be saved as it
+// stands: it closes, and the user starts again from the refreshed task. Returns where focus goes.
+function invalidateDraft() {
+  if (reminderId === null || !sync.categories) return undefined;
+  const gone = (id) => id !== null && !findCategory(id);
+  if (!gone(draft.categoryId) && !gone(draft.chosenCategoryId)) return undefined;
+  const id = reminderId;
+  closeEditor();
+  showSync(CATEGORY_GONE);
+  return openerKeys(id);
 }
 
-// Save: one write with the title, tags and reminder, shown at once and rolled back if the server
-// refuses it (a 409 reloads and says the task changed in another tab).
+// Save: one write with the title, reminder and category, shown at once and rolled back if the
+// server refuses it (a 409 reloads and says the task changed in another tab).
 function saveEditor() {
-  // Save can fire without a blur (Enter in Time, a script click): a tag still typed is kept.
-  if (!tagField.hidden && tagField.value.trim() !== '') addDraftTag(tagField.value);
-  const { text, tags, error } = readTaskEdit(textInput.value, draft.text, draftTags);
+  const { text, error } = readTaskInput(textInput.value);
   const due = editorDue();
   if (error !== null || due === undefined) {
     reminderTouched = true;
@@ -885,45 +869,82 @@ function saveEditor() {
     render(todo ? openerKeys(id) : undefined);
     return;
   }
-  const fields = { text, tags, due, repeat: due === null ? 'none' : repeatSelect.value };
-  const reminderChanged = fields.due !== todo.due || fields.repeat !== todo.repeat;
-  // The edited row can leave the view (a filter tag removed): focus then goes to a neighbour.
-  const keys = [...openerKeys(id), ...rowFallbackKeys(id)];
+  // Only what the user edited is sent (per-field dirtiness); the sync queue fills the rest from the
+  // confirmed row at dispatch. An untouched title is never re-sent, so it stays as stored.
+  const dirty = {};
+  if (textInput.value !== draft.shownText) dirty.text = text;
+  const repeat = due === null ? 'none' : repeatSelect.value;
+  const reminderChanged = due !== draft.due || repeat !== draft.repeat;
+  if (reminderChanged) Object.assign(dirty, { due, repeat });
+  // The category is sent only when the user changed it, so an edit made without touching it
+  // can't undo another tab's change to the link.
+  const categoryId = draft.chosenCategoryId;
+  const originalCategoryId = draft.categoryId;
+  if (sync.categories && categoryId !== originalCategoryId) dirty.categoryId = categoryId;
+  const fields = dirty;
+  // The edited row can leave the view (its category changed under a filter): focus then goes to a
+  // neighbour, else the filter.
+  const keys = [...openerKeys(id), ...rowFallbackKeys(id), key('category-filter')];
   if (due !== null) requestPermission(); // the browser's own prompt does the asking
   closeEditor();
   if (due !== null && reminderChanged) {
     if (notificationsBlocked() && !noteDismissed) showBanner('note', NOTE_TEXT);
     else if (!banner.hidden && banner.classList.contains('is-note')) hideBanner();
   }
-  if (editTodo([todo], id, fields)[0] !== todo) {
+  // An unchanged reminder that already fired is saved again to re-arm it (it alerts once more).
+  const rearmFired = due !== null && !reminderChanged && todo.notified === todo.due;
+  if (editTodo([todo], id, editFields(todo, fields))[0] !== todo) {
     if (reminderChanged) fired.delete(id);
     hideSync();
-    saveEdit(id, fields);
-  }
-  // An unchanged reminder that already fired is saved again to re-arm it (it alerts once more).
-  if (due !== null && !reminderChanged && todo.notified === todo.due) {
+    // Re-armed only once the edit has been accepted: a refused one rolls back and touches nothing.
+    saveEdit(id, fields, originalCategoryId, rearmFired ? { due, repeat } : undefined);
+  } else if (rearmFired) {
     fired.delete(id);
     hideSync();
-    rearmReminder(id, due, fields.repeat);
+    rearmReminder(id, due, repeat);
   }
   render(keys);
 }
 
-function rearmReminder(id, due, repeat) {
-  saved(id, sync.setReminder(id, due, repeat), () => {
-    const todo = findTodo(id);
-    if (todo && todo.notified === todo.due && todo.due === due && todo.repeat === repeat) rearmReminder(id, due, repeat);
+// `base` (on a retry): the row's revision and reminder as captured; the queue cancels the write
+// if any of it differs at dispatch time.
+function rearmReminder(id, due, repeat, base) {
+  saved(id, sync.setReminder(id, due, repeat, base), () => {
+    const todo = sync.confirmed.find((row) => row.id === id);
+    if (todo && todo.notified === todo.due && todo.due === due && todo.repeat === repeat) {
+      rearmReminder(id, due, repeat, { revision: todo.revision, due: todo.due, repeat: todo.repeat, notified: todo.notified });
+    }
   });
   check();
 }
 
 // `retry` (after an uncertain failure) re-sends only if the row doesn't already match the edit.
-function saveEdit(id, fields) {
-  saved(id, sync.edit(id, fields), () => {
-    const todo = findTodo(id);
-    if (todo && editTodo([todo], id, fields)[0] !== todo) saveEdit(id, fields);
+function saveEdit(id, fields, originalCategoryId, rearm, base) {
+  const edit = sync.edit(id, fields, rearm, base);
+  if (rearm) {
+    // Queued right behind the edit, so no later save can slip in between; it skips itself when the
+    // edit was refused or the reminder has changed.
+    saved(id, edit.rearmed, () => {
+      const todo = sync.confirmed.find((row) => row.id === id);
+      if (todo) rearmReminder(id, rearm.due, rearm.repeat, { revision: todo.revision, due: todo.due, repeat: todo.repeat, notified: todo.notified });
+    }).then((ok) => {
+      if (ok) {
+        fired.delete(id);
+        check();
+      }
+    });
+  }
+  const done = saved(id, edit, () => {
+    const todo = sync.confirmed.find((row) => row.id === id);
+    if (!todo) return;
+    const { categoryId, ...otherFields } = fields;
+    const retryFields = categoryId !== undefined && (!sync.categories ||
+      (todo.categoryId ?? null) !== originalCategoryId ||
+      (categoryId !== null && !findCategory(categoryId))) ? otherFields : fields;
+    if (editTodo([todo], id, editFields(todo, retryFields))[0] !== todo) saveEdit(id, retryFields, originalCategoryId, rearm, { revision: todo.revision });
   });
   check();
+  return done;
 }
 
 // Delete task: at once, no confirm. Focus goes to the next row's checkbox, or the composer.
@@ -990,7 +1011,7 @@ function syncEditor() {
   const invalid = rawDue === undefined;
   const due = invalid ? null : rawDue;
   const showError = invalid && reminderTouched;
-  const titleError = readTaskEdit(textInput.value, draft.text, draftTags).error;
+  const titleError = readTaskInput(textInput.value).error;
   const showTitleError = titleError !== null && reminderTouched;
   const now = Date.now();
 
@@ -1110,6 +1131,303 @@ function showMonth(delta) {
   renderCalendar();
 }
 
+// --- Categories: the Manage panel ------------------------------------------------------------
+
+// An in-page panel under the filter row (not a dialog, so the task sheet never stacks on it).
+// Category writes wait for the server: the list changes only once it has answered.
+
+function setPanelStatus(text, error = false) {
+  categoryStatus.textContent = text;
+  categoryStatus.classList.toggle('is-error', error);
+}
+
+function openPanel() {
+  panel.hidden = false;
+  panelSignature = null;
+  setPanelStatus('');
+  render();
+  panelTitle.focus();
+}
+
+// Hides the panel and drops its rows; `returnFocus` puts focus back on Manage.
+function closePanel(returnFocus) {
+  panel.hidden = true;
+  panelRow = null;
+  panelSignature = null;
+  categoryList.replaceChildren();
+  categoryName.removeAttribute('aria-invalid');
+  setPanelStatus('');
+  manageButton.setAttribute('aria-expanded', 'false');
+  if (returnFocus) manageButton.focus();
+}
+
+function panelButton(text, action, id, className = 'text-button') {
+  const button = withKey(document.createElement('button'), `category-${action}`, id);
+  button.type = 'button';
+  button.className = className;
+  button.dataset.action = action;
+  button.textContent = text;
+  if (panelBusy !== null) button.setAttribute('aria-disabled', 'true');
+  return button;
+}
+
+// One row: the name with Rename and Delete, the rename field, or the delete question.
+function renderCategoryRow(category) {
+  const { id, name } = category;
+  const item = document.createElement('li');
+  item.className = 'category-item';
+  item.dataset.id = id;
+  if (panelBusy?.id === id) item.setAttribute('aria-busy', 'true');
+  const mode = panelRow?.id === id ? panelRow.mode : null;
+  const actions = document.createElement('div');
+  actions.className = 'category-actions';
+  if (mode === 'rename') {
+    item.classList.add('is-renaming');
+    const field = withKey(document.createElement('input'), 'category-field', id);
+    field.type = 'text';
+    field.className = 'category-field';
+    field.value = panelRow.value;
+    field.autocomplete = 'off';
+    field.enterKeyHint = 'done';
+    field.setAttribute('aria-label', `New name for ${name}`);
+    if (panelRow.invalid) field.setAttribute('aria-invalid', 'true');
+    actions.append(panelButton('Cancel', 'cancel', id), panelButton('Save', 'save', id, 'add-button'));
+    item.append(field, actions);
+  } else if (mode === 'confirm') {
+    item.classList.add('is-confirming');
+    const question = document.createElement('p');
+    question.className = 'category-question';
+    question.id = `category-question-${id}`;
+    question.textContent = DELETE_QUESTION;
+    const cancel = panelButton('Cancel', 'cancel', id);
+    const remove = panelButton('Delete', 'confirm', id, 'add-button category-confirm');
+    for (const button of [cancel, remove]) button.setAttribute('aria-describedby', question.id);
+    remove.setAttribute('aria-label', `Delete ${name}`);
+    actions.append(cancel, remove);
+    item.append(question, actions);
+  } else {
+    const label = document.createElement('span');
+    label.className = 'category-name';
+    label.textContent = name;
+    const rename = panelButton('Rename', 'rename', id);
+    rename.setAttribute('aria-label', `Rename ${name}`);
+    const remove = panelButton('Delete', 'delete', id, 'text-button category-delete');
+    remove.setAttribute('aria-label', `Delete ${name}`);
+    actions.append(rename, remove);
+    item.append(label, actions);
+  }
+  return item;
+}
+
+// Rows are rebuilt only when what they show changes, so a timed render doesn't replace the
+// rename field being typed in.
+function renderPanel() {
+  manageButton.setAttribute('aria-expanded', String(!panel.hidden));
+  if (panel.hidden) return;
+  const catalog = sync.categories ?? [];
+  categoryEmpty.hidden = catalog.length > 0;
+  categoryAdd.setAttribute('aria-disabled', String(panelBusy !== null));
+  const signature = JSON.stringify([catalog, panelRow && [panelRow.id, panelRow.mode], panelBusy]);
+  if (signature === panelSignature) return;
+  panelSignature = signature;
+  categoryList.replaceChildren(...catalog.map(renderCategoryRow));
+}
+
+// Focus for after a row goes away: the next row, the previous one, else the name field.
+function rowNeighbourKeys(id) {
+  const catalog = sync.categories ?? [];
+  const index = catalog.findIndex((category) => category.id === id);
+  return [catalog[index + 1], catalog[index - 1]].filter(Boolean)
+    .map((category) => key('category-rename', category.id)).concat(key('category-name'));
+}
+
+async function createCategory() {
+  if (panelBusy !== null || !sync.categories) return;
+  const { name, error } = readCategoryName(categoryName.value);
+  if (error) {
+    categoryName.setAttribute('aria-invalid', 'true');
+    setPanelStatus(NAME_MESSAGES[error], true);
+    categoryName.focus();
+    return;
+  }
+  const retry = categoryCreateDraft?.name === name;
+  if (!retry) categoryCreateDraft = { id: crypto.randomUUID(), name };
+  const epoch = viewEpoch;
+  panelBusy = { id: null, kind: 'create' };
+  setPanelStatus('Adding…');
+  render();
+  const todos = sync.confirmed;
+  const result = await sync.createCategory(name, categoryCreateDraft.id, retry);
+  if (result.stale || epoch !== viewEpoch) return;
+  panelBusy = null;
+  if (sync.confirmed !== todos) check();
+  if (result.ok) {
+    categoryCreateDraft = null;
+    if (readCategoryName(categoryName.value).name === name) categoryName.value = '';
+    setPanelStatus(`Added “${result.category.name}”.`);
+  } else if (!handleSessionError(result.error)) {
+    setPanelStatus(categoryErrorText(result.error, result.reloaded), true);
+  }
+  render();
+}
+
+async function renameCategory(id) {
+  const category = findCategory(id);
+  if (panelBusy !== null || !category || panelRow?.id !== id) return;
+  const { revision } = panelRow;
+  const { name, error } = readCategoryName(panelRow.value);
+  if (error) {
+    panelRow.invalid = true;
+    panelSignature = null;
+    setPanelStatus(NAME_MESSAGES[error], true);
+    render([key('category-field', id)]);
+    return;
+  }
+  if (name === category.name && revision === category.revision) {
+    panelRow = null;
+    render([key('category-rename', id)]);
+    return;
+  }
+  const epoch = viewEpoch;
+  panelBusy = { id, kind: 'rename' };
+  setPanelStatus('Saving…');
+  render();
+  const result = await sync.renameCategory(id, name, revision);
+  if (result.stale || epoch !== viewEpoch) return;
+  panelBusy = null;
+  if (result.ok) {
+    panelRow = null;
+    setPanelStatus(`Renamed to “${name}”.`);
+    render([key('category-rename', id)]);
+    return;
+  }
+  if (handleSessionError(result.error)) return;
+  if (result.reloaded) check();
+  if (result.error?.status === 409 || sync.categoryRefreshRequired) panelRow = null;
+  setPanelStatus(categoryErrorText(result.error, result.reloaded), true);
+  render([key(panelRow ? 'category-field' : 'category-rename', id), ...rowNeighbourKeys(id)]);
+}
+
+async function deleteCategory(id) {
+  if (panelBusy !== null || panelRow?.mode !== 'confirm' || panelRow.id !== id) return;
+  const { name, revision } = panelRow;
+  const epoch = viewEpoch;
+  const fallback = rowNeighbourKeys(id);
+  panelBusy = { id, kind: 'delete' };
+  setPanelStatus('Deleting…');
+  render();
+  const result = await sync.deleteCategory(id, revision);
+  if (result.stale || epoch !== viewEpoch) return;
+  panelBusy = null;
+  panelRow = null; // after a failure, deleting again needs a fresh confirmation
+  if (handleSessionError(result.error)) return;
+  if (result.ok || result.reloaded || result.repairFailed) check();
+  if (result.repairFailed) {
+    setPanelStatus('');
+    showSync("The task list couldn't be refreshed after deleting the category.", reloadList);
+    render(fallback);
+    return;
+  }
+  if (result.ok || (result.error?.status !== 409 && result.reloaded && !findCategory(id))) {
+    setPanelStatus(`Deleted “${name}”. Its tasks are uncategorized now.`);
+    render(fallback);
+    return;
+  }
+  setPanelStatus(categoryErrorText(result.error, result.reloaded), true);
+  render([key('category-delete', id), ...fallback]);
+}
+
+manageButton.addEventListener('click', () => {
+  if (panel.hidden) openPanel();
+  else closePanel(true);
+});
+panelDone.addEventListener('click', () => closePanel(true));
+
+categoryForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  createCategory();
+});
+categoryName.addEventListener('input', () => categoryName.removeAttribute('aria-invalid'));
+
+categoryList.addEventListener('click', async (event) => {
+  const button = event.target.closest('button');
+  const id = button?.closest('.category-item')?.dataset.id;
+  if (!id || panelBusy !== null) return;
+  const { action } = button.dataset;
+  if (action === 'rename' || action === 'delete') {
+    if (sync.categoryRefreshRequired) {
+      const epoch = viewEpoch;
+      panelBusy = { id, kind: 'refresh' };
+      render();
+      const result = await sync.load();
+      if (result.stale || epoch !== viewEpoch) return;
+      panelBusy = null;
+      if (!result.ok) {
+        if (!handleSessionError(result.error)) setPanelStatus("The latest list couldn't be loaded.", true);
+        render();
+        return;
+      }
+      check();
+      if (panel.hidden || !findCategory(id)) {
+        render(rowNeighbourKeys(id));
+        return;
+      }
+    }
+    const category = findCategory(id);
+    if (!category) return;
+    const renaming = action === 'rename';
+    panelRow = renaming
+      ? { id, mode: 'rename', value: category.name, revision: category.revision }
+      : { id, mode: 'confirm', name: category.name, revision: category.revision };
+    setPanelStatus('');
+    render([key(renaming ? 'category-field' : 'category-cancel', id)]);
+  } else if (action === 'cancel') {
+    const mode = panelRow?.mode;
+    panelRow = null;
+    setPanelStatus('');
+    render([key(mode === 'confirm' ? 'category-delete' : 'category-rename', id)]);
+  } else if (action === 'save') {
+    renameCategory(id);
+  } else if (action === 'confirm') {
+    deleteCategory(id);
+  }
+});
+
+categoryList.addEventListener('input', (event) => {
+  if (!event.target.matches('.category-field') || panelRow?.mode !== 'rename') return;
+  panelRow.value = event.target.value;
+  panelRow.invalid = false;
+  event.target.removeAttribute('aria-invalid');
+});
+
+categoryList.addEventListener('keydown', (event) => {
+  if (!event.target.matches('.category-field') || event.isComposing) return;
+  const { id } = event.target.closest('.category-item').dataset;
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    renameCategory(id);
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    event.stopPropagation();
+    panelRow = null;
+    setPanelStatus('');
+    render([key('category-rename', id)]);
+  }
+});
+
+// Esc backs out one step: a delete question first, else the whole panel.
+panel.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing) return;
+  event.preventDefault();
+  if (panelRow) {
+    const { id } = panelRow;
+    panelRow = null;
+    render([key('category-delete', id)]);
+  } else {
+    closePanel(true);
+  }
+});
+
 // --- Composer: the + button by the title reveals the new-task field --------------------------
 
 function setComposerOpen(open) {
@@ -1145,18 +1463,19 @@ input.addEventListener('input', syncAddButton);
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
   const raw = input.value;
-  const { text, tags, error } = readTaskInput(raw, activeTags);
+  const { text, error } = readTaskInput(raw);
   if (error !== null || phase !== 'ready') return;
-  const [todo] = addTodo([], text, tags);
+  const [todo] = addTodo([], text);
   // Re-adding a draft whose save was uncertain sends the same ID: a 409 then means it was saved.
-  const draft = draftKey(todo.text, todo.tags);
-  const retryIds = createDrafts.get(draft);
+  const retryIds = createDrafts.get(todo.text);
   if (retryIds) {
     todo.id = retryIds.shift();
-    if (retryIds.length === 0) createDrafts.delete(draft);
+    if (retryIds.length === 0) createDrafts.delete(todo.text);
   }
   hideSync();
   const result = sync.create(todo);
+  // Under a category filter the new (uncategorized) task isn't shown: say where it went.
+  if (findCategory(filter)) announce(`Added “${todo.text}” to Uncategorized.`);
   // The field stays open for the next task.
   input.value = '';
   addButton.disabled = true;
@@ -1167,7 +1486,7 @@ form.addEventListener('submit', async (event) => {
   // A duplicate ID whose reload failed is uncertain too: keep the ID for the next try.
   const { status, code } = outcome.error ?? {};
   const uncertain = !outcome.error || status === 0 || status >= 500 || code === 'DUPLICATE_ID';
-  if (uncertain) createDrafts.set(draft, [...(createDrafts.get(draft) ?? []), todo.id]);
+  if (uncertain) createDrafts.set(todo.text, [...(createDrafts.get(todo.text) ?? []), todo.id]);
   const sessionError = handleSessionError(outcome.error);
   // The draft goes back into the field unless something new was typed meanwhile, and the field
   // reopens if it was closed, so the draft can be retried. Not mid-press (that would move the
@@ -1184,15 +1503,9 @@ form.addEventListener('submit', async (event) => {
   });
 });
 
-clearFilters.addEventListener('click', () => {
-  setFilter([], [key('filter')]);
-});
-
-filterBar.addEventListener('click', (event) => {
-  const chip = event.target.closest('.filter-chip');
-  if (!chip) return;
-  if (chip.dataset.tag === undefined) setFilter([], [key('filter')]);
-  else toggleFilter(chip.dataset.tag, [key('filter', chip.dataset.tag)]);
+categoryFilter.addEventListener('change', () => {
+  filter = keepFilter(categoryFilter.value, sync.categories);
+  render();
 });
 
 list.addEventListener('change', (event) => {
@@ -1202,17 +1515,17 @@ list.addEventListener('change', (event) => {
   render([key('checkbox', id)]);
 });
 
-function toggle(id) {
+function toggle(id, base) {
   const before = findTodo(id);
   if (!before) return;
   const now = Date.now();
   const [after] = toggleTodo([before], id, now);
   fired.delete(id);
-  saved(id, sync.toggle(id, now, before), () => {
+  saved(id, sync.toggle(id, now, before, base), () => {
     const current = findTodo(id);
     if (current && current.due === before.due &&
         (current.completedUntil ?? null) === (before.completedUntil ?? null) &&
-        isCompleted(current, Date.now()) === isCompleted(before, now)) toggle(id);
+        isCompleted(current, Date.now()) === isCompleted(before, now)) toggle(id, { revision: sync.confirmed.find((row) => row.id === id)?.revision });
   });
   if (after.due !== before.due) {
     // The row's stamp shows it; screen readers hear it from the status region.
@@ -1221,8 +1534,10 @@ function toggle(id) {
   check();
 }
 
-function removeRow(id) {
-  saved(id, sync.remove(id), () => findTodo(id) && removeRow(id));
+function removeRow(id, base) {
+  saved(id, sync.remove(id, base), () => {
+    if (findTodo(id)) removeRow(id, { revision: sync.confirmed.find((row) => row.id === id)?.revision });
+  });
   check();
 }
 
@@ -1232,7 +1547,7 @@ list.addEventListener('click', (event) => {
   const { id } = row.dataset;
   // Any tap or click on a just-fired row ends its highlight.
   dismissFired(id);
-  // A row's tags don't filter: the body is one button that opens the task sheet.
+  // The body is one button that opens the task sheet.
   const button = event.target.closest('.todo-open');
   if (!button) return;
   if (reminderId === id) cancelEditor();
@@ -1249,13 +1564,13 @@ function reorderableIds(now = Date.now()) {
 }
 
 // Sends one move (applied at once, rolled back if the server refuses it) and says where the task
-// went, counted among the rows shown. `tags` is the filter the move was made under.
-function reorder(id, target, tags = activeTags) {
+// went, counted among the rows shown.
+function reorder(id, target, base) {
+  if (reorderLocked()) return;
   const todo = findTodo(id);
   if (!todo) return;
-  const filter = [...tags];
-  saved(id, sync.move(id, target.anchorId, target.side, filter), () => {
-    if (findTodo(id) && findTodo(target.anchorId)) reorder(id, target, filter);
+  saved(id, sync.move(id, target.anchorId, target.side, base), () => {
+    if (findTodo(id) && findTodo(target.anchorId)) reorder(id, target, { revision: sync.confirmed.find((row) => row.id === id)?.revision });
   });
   const ids = reorderableIds();
   announce(`Moved “${todo.text}” to position ${ids.indexOf(id) + 1} of ${ids.length}.`);
@@ -1264,7 +1579,7 @@ function reorder(id, target, tags = activeTags) {
 // Keyboard: Up/Down (Alt or not) move one place, Home/End to the first/last place.
 list.addEventListener('keydown', (event) => {
   const handle = event.target.closest('.todo-handle');
-  if (!handle || drag || !REORDER_KEYS.has(event.key) || event.ctrlKey || event.metaKey) return;
+  if (!handle || drag || reorderLocked() || !REORDER_KEYS.has(event.key) || event.ctrlKey || event.metaKey) return;
   event.preventDefault(); // the arrows would scroll the page
   const { id } = handle.closest('.todo').dataset;
   const todo = findTodo(id);
@@ -1286,7 +1601,7 @@ let drag = null;
 
 list.addEventListener('pointerdown', (event) => {
   const handle = event.target.closest('.todo-handle');
-  if (!handle || drag || app.inert || event.button !== 0 || event.isPrimary === false) return;
+  if (!handle || drag || reorderLocked() || app.inert || event.button !== 0 || event.isPrimary === false) return;
   event.preventDefault(); // no text selection, and the handle doesn't take focus from a field
   const row = handle.closest('.todo');
   const ids = new Set(reorderableIds());
@@ -1307,7 +1622,6 @@ list.addEventListener('pointerdown', (event) => {
     pointerId: event.pointerId,
     clientY: event.clientY,
     frame: requestAnimationFrame(autoScroll),
-    tags: [...activeTags],
   };
   try {
     handle.setPointerCapture(event.pointerId);
@@ -1376,7 +1690,7 @@ function autoScroll() {
 function endDrag(commit) {
   document.removeEventListener('touchmove', onDragTouchMove);
   if (!drag) return;
-  const { state, row, handle, rows, slot, frame, tags } = drag;
+  const { state, row, handle, rows, slot, frame } = drag;
   drag = null;
   cancelAnimationFrame(frame);
   handle.removeEventListener('pointermove', onDragMove);
@@ -1393,7 +1707,7 @@ function endDrag(commit) {
   if (!target) return;
   const anchor = rows.find((item) => item.dataset.id === target.anchorId);
   anchor.parentNode.insertBefore(row, target.side === 'before' ? anchor : anchor.nextSibling);
-  reorder(row.dataset.id, target, tags);
+  reorder(row.dataset.id, target);
 }
 
 // While dragging: Esc puts the row back, and iOS gets no chance to scroll or zoom.
@@ -1413,8 +1727,8 @@ list.addEventListener('focusin', (event) => {
   if (!rendering) dismissFired(event.target.closest('.todo')?.dataset.id);
 });
 
-// Esc ends every highlight. Capture phase, so it also runs when a "+ tag" field or the reminder
-// editor uses the same Esc to close (they still do; this neither stops nor prevents the event).
+// Esc ends every highlight. Capture phase, so it also runs when the Manage panel or the task
+// sheet uses the same Esc to close (they still do; this neither stops nor prevents the event).
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') dismissAllFired();
 }, true);
@@ -1489,44 +1803,10 @@ calDays.addEventListener('keydown', (event) => {
   focusCalendarDay(date);
 });
 
-editTags.addEventListener('click', (event) => {
-  const button = event.target.closest?.('.tag-remove');
-  if (!button) return;
-  const removed = draftTags.indexOf(button.dataset.tag);
-  draftTags = draftTags.filter((tag) => tag !== button.dataset.tag);
-  renderDraftTags();
-  syncEditor();
-  const removes = editTags.querySelectorAll('.tag-remove');
-  (removes[Math.min(removed, removes.length - 1)] ?? (tagAdd.hidden ? textInput : tagAdd)).focus();
-});
-tagAdd.addEventListener('click', openTagField);
-tagField.addEventListener('keydown', (event) => {
-  if (event.isComposing) return;
-  if (event.key === 'Escape') {
-    // Closes the field only; the sheet stays open.
-    event.preventDefault();
-    event.stopPropagation();
-    closeTagField();
-    tagAdd.focus();
-  } else if (event.key === 'Enter') {
-    event.preventDefault();
-    event.stopPropagation();
-    if (tagField.value.trim() === '') return;
-    if (!addDraftTag(tagField.value)) {
-      rejectTag(tagField);
-    } else if (draftTags.length >= MAX_TAGS) {
-      closeTagField();
-      textInput.focus();
-    } else {
-      tagField.value = '';
-    }
-  }
-});
-// Leaving the field adds what was typed (if it is a valid tag) and closes it.
-tagField.addEventListener('blur', () => {
-  if (tagField.hidden) return;
-  if (tagField.value.trim() !== '') addDraftTag(tagField.value);
-  closeTagField();
+editCategory.addEventListener('change', () => {
+  if (reminderId === null || !sync.categories) return;
+  draft.chosenCategoryId = editCategory.value || null;
+  tintEditor();
 });
 
 saveButton.addEventListener('click', saveEditor);
@@ -1606,22 +1886,23 @@ function handleSessionError(error) {
 // Reports a failed save. The change has already dropped out of the list (and a conflict has
 // reloaded it); `retry` repeats the same change if it still applies.
 async function saved(id, result, retry) {
+  const epoch = viewEpoch;
   const outcome = await result;
-  if (outcome.stale) return;
+  if (outcome.stale || epoch !== viewEpoch) return false;
   if (outcome.ok) {
     rearm(Date.now());
-    return;
+    return true;
   }
   // The change rolled back (a deleted row came back, say): recheck reminders and re-arm the timer.
   check();
-  if (outcome.skipped) return; // the row is gone
+  if (outcome.skipped) return false; // the row is gone
   if (outcome.cancelled) {
     // The user acted before seeing the refreshed row.
     showSync(CHANGED_ELSEWHERE);
-    return;
+    return false;
   }
   const { error } = outcome;
-  if (handleSessionError(error)) return;
+  if (handleSessionError(error)) return false;
   if (error.status === 409 || error.status === 404) {
     if (outcome.reloaded) {
       showSync(CHANGED_ELSEWHERE);
@@ -1631,9 +1912,10 @@ async function saved(id, result, retry) {
   } else if (error.status === 400) {
     showSync("Couldn't save that change.");
   } else {
-    const retryNow = () => reconcileThen(id, outcome.revision, retry);
+    const retryNow = () => reconcileThen(id, outcome.revision, retry, epoch);
     showSync("Couldn't save your change.", retryNow);
   }
+  return false;
 }
 
 // After an uncertain failure the change may have been saved anyway (only the answer was lost),
@@ -1642,12 +1924,13 @@ async function saved(id, result, retry) {
 // Any other revision means the row moved on (this change, or a later edit elsewhere, such as a
 // recurring reminder that was claimed and advanced). The server's row is kept and shown, and
 // nothing is re-sent or re-alerted.
-async function reconcileThen(id, revision, retry) {
+async function reconcileThen(id, revision, retry, epoch) {
+  if (epoch !== viewEpoch) return;
   const result = await sync.load();
-  if (result.stale) return;
+  if (result.stale || epoch !== viewEpoch) return;
   if (!result.ok) {
     if (!handleSessionError(result.error)) {
-      showSync("Couldn't save your change.", () => reconcileThen(id, revision, retry));
+      showSync("Couldn't save your change.", () => reconcileThen(id, revision, retry, epoch));
     }
     return;
   }
@@ -1674,8 +1957,16 @@ function clearView() {
   sync.reset();
   state = [];
   viewSignature = '[]';
-  activeTags = [];
+  filter = ALL;
   if (reminderId !== null) closeEditor();
+  // No category of the old account stays in the selects, the panel or the sheet's tint.
+  closePanel(false);
+  panelBusy = null;
+  categoryCreateDraft = null;
+  categoryName.value = '';
+  optionsSignature = null;
+  renderCategoryOptions();
+  delete editor.dataset.color;
   // Nothing of the old account stays in the hidden sheet or the live regions.
   editor.removeAttribute('aria-label');
   textInput.value = '';
@@ -1684,8 +1975,6 @@ function clearView() {
   const composerFocused = [input, addButton].includes(document.activeElement);
   setComposerOpen(false);
   if (composerFocused) addToggle.focus();
-  draftTags = [];
-  editTags.replaceChildren();
   reminderOn.checked = false;
   dateInput.value = '';
   timeInput.value = '';
@@ -1732,7 +2021,8 @@ async function loadList() {
     if (retryAction === startLoading) hideSync();
     const wasReady = phase === 'ready';
     phase = 'ready';
-    if (wasReady) renderSoon(); // a press may be in progress: don't replace the row under it
+    // A press may be in progress: don't replace the row under it. Keep any focus already queued.
+    if (wasReady) renderSoon(renderPending ? pendingFocus : undefined);
     else render();
     check(); // missed reminders alert once, after the list is current
     return;

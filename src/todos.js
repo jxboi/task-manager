@@ -4,13 +4,32 @@ import { isCompleted, isOverdue, nextReminderAfterToday, normalizeReminder } fro
 // The title rule the server enforces too: 1 to 2,000 characters once trimmed, and no NUL.
 export const MAX_TEXT_LENGTH = 2000;
 
+// Append whole " #tag" words in order, skipping NULLs and stopping at the title limit.
+// Migration 0006 uses the same rule when converting stored tags.
+export function foldTags(text, tags) {
+  let folded = text;
+  let length = [...text].length;
+  for (const tag of tags) {
+    if (tag === null) continue;
+    length += [...tag].length + 2;
+    if (length > MAX_TEXT_LENGTH) break;
+    folded += ` #${tag}`;
+  }
+  return folded;
+}
+
+export function foldLegacyTags(todo) {
+  return todo?.tags?.length ? { ...todo, text: foldTags(todo.text, todo.tags), tags: [] } : todo;
+}
+
 export function validText(text) {
   if (typeof text !== 'string') return false;
   const trimmed = text.trim();
   return trimmed !== '' && !trimmed.includes('\0') && [...trimmed].length <= MAX_TEXT_LENGTH;
 }
 
-export function addTodo(todos, text, tags = []) {
+// A new task starts uncategorized and with no tags.
+export function addTodo(todos, text) {
   const trimmed = text.trim();
   if (trimmed === '') return todos;
   return [
@@ -20,7 +39,8 @@ export function addTodo(todos, text, tags = []) {
       text: trimmed,
       completed: false,
       createdAt: Date.now(),
-      tags: normalizeTags(tags),
+      tags: [],
+      categoryId: null,
       due: null,
       repeat: 'none',
       notified: null,
@@ -65,20 +85,19 @@ function between(lower, upper) {
   }
 }
 
-// Slice 2: pass the full position-ordered list, two visible IDs, 'before' or 'after', and the
-// active tag filter. Only the moved row changes. Reminder urgency still determines view groups.
-export function moveTodo(todos, id, anchorId, side, activeTags = []) {
+// Pass the full position-ordered list, two IDs, and 'before' or 'after'. Only the moved row
+// changes. Reminder urgency still determines view groups.
+export function moveTodo(todos, id, anchorId, side) {
   if (id === anchorId || (side !== 'before' && side !== 'after')) return todos;
-  const visible = filterByTags(todos, activeTags);
-  const from = visible.findIndex((todo) => todo.id === id);
-  const anchor = visible.findIndex((todo) => todo.id === anchorId);
+  const from = todos.findIndex((todo) => todo.id === id);
+  const anchor = todos.findIndex((todo) => todo.id === anchorId);
   const offset = side === 'before' ? 0 : 1;
   if (from < 0 || anchor < 0 || (side === 'before' ? from + 1 === anchor : from - 1 === anchor)) return todos;
 
-  const moved = visible[from];
+  const moved = todos[from];
   const next = todos.filter((todo) => todo !== moved);
-  let index = next.indexOf(visible[anchor]) + offset;
-  const anchorPosition = positionOf(visible[anchor]);
+  let index = next.indexOf(todos[anchor]) + offset;
+  const anchorPosition = positionOf(todos[anchor]);
   // Imported ties have no gap between them. Place the task on the requested side
   // of the tied rows, which retain their existing order.
   if (side === 'before') {
@@ -134,22 +153,6 @@ export function removeTag(todos, id, tag) {
   );
 }
 
-// Every tag in use with the number of todos carrying it, A to Z.
-export function allTags(todos) {
-  const counts = new Map();
-  for (const todo of todos) {
-    for (const tag of todo.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
-  }
-  return [...counts.keys()].sort().map((tag) => ({ tag, count: counts.get(tag) }));
-}
-
-// OR: todos with at least one of the active tags. No active tags means every todo.
-export function filterByTags(todos, activeTags) {
-  const active = new Set(activeTags);
-  if (active.size === 0) return todos;
-  return todos.filter((todo) => todo.tags.some((tag) => active.has(tag)));
-}
-
 // Replaces the reminder and re-arms it. Returns `todos` itself for an unknown id, a `due` that
 // isn't a whole-ms instant, or a repeat that isn't one of REPEATS.
 export function setReminder(todos, id, due, repeat) {
@@ -159,20 +162,28 @@ export function setReminder(todos, id, due, repeat) {
   return todos.map((item) => (item === todo ? { ...item, due, repeat, notified: null } : item));
 }
 
-// Replaces the text, tags and reminder in one change (the edit form). `due` null means no
-// reminder (then `repeat` must be 'none'). The reminder re-arms only if its time changes (a repeat
+// Replaces the text, reminder and, when given, tags and category in one change (the edit form).
+// Omitted `tags` or `categoryId` keep the task's own. `due` null means no reminder (then `repeat`
+// must be 'none'). The reminder re-arms only if its time changes (a repeat
 // change alone keeps the claim on the same occurrence), so it doesn't alert again. Today's tick
 // keeps its expiration while the task repeats and becomes permanent if repetition stops.
 // Returns `todos` itself for an unknown id, invalid fields, or when nothing changes.
-export function editTodo(todos, id, { text, tags, due, repeat } = {}) {
+// The fields of an edit as sent: the user's dirty fields (`text`, `due`+`repeat`, `categoryId`)
+// over the given row's own values, so anything the user didn't touch comes from that row.
+export function editFields(row, dirty) {
+  return { text: row.text, due: row.due, repeat: row.repeat, ...dirty };
+}
+
+export function editTodo(todos, id, { text, tags, due, repeat, categoryId } = {}) {
   const todo = todos.find((item) => item.id === id);
-  if (!todo || !validText(text) || !Array.isArray(tags)) return todos;
+  if (!todo || !validText(text) || (tags !== undefined && !Array.isArray(tags))) return todos;
   const reminder = normalizeReminder({ due, repeat });
   if (reminder.due !== due || reminder.repeat !== repeat) return todos;
   const next = {
     ...todo,
-    text: text.trim(),
-    tags: normalizeTags(tags),
+    text: text === todo.text ? text : text.trim(),
+    tags: tags === undefined ? todo.tags : normalizeTags(tags),
+    categoryId: categoryId === undefined ? todo.categoryId : categoryId,
     due: reminder.due,
     repeat: reminder.repeat,
     notified: reminder.due === todo.due ? todo.notified : null,
@@ -180,6 +191,7 @@ export function editTodo(todos, id, { text, tags, due, repeat } = {}) {
   if (reminder.repeat === 'none' && todo.completedUntil != null) next.completedUntil = null;
   const same = next.text === todo.text && next.due === todo.due && next.repeat === todo.repeat &&
     next.completedUntil === todo.completedUntil && next.notified === todo.notified &&
+    next.categoryId === todo.categoryId &&
     next.tags.length === todo.tags.length &&
     next.tags.every((tag, index) => tag === todo.tags[index]);
   return same ? todos : todos.map((item) => (item === todo ? next : item));

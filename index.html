@@ -91,8 +91,6 @@
       <div id="task-view" hidden>
         <div class="summary-row is-quiet" id="summary-row">
           <p class="summary" id="summary" aria-live="polite"></p>
-          <button class="text-button clear-filters" id="clear-filters" type="button" aria-label="Clear filters" hidden>
-Clear</button>
         </div>
 
         <form class="add-form" id="add-form" hidden>
@@ -137,9 +135,28 @@ Clear</button>
           <span class="visually-hidden" id="announcer"></span>
         </div>
 
-        <div class="filter-wrap" id="filter-wrap" hidden>
-          <div class="filter-bar" id="filter-bar" role="group" aria-label="Filter by tag"></div>
+        <div class="category-row" id="category-row" hidden>
+          <label class="category-key" for="category-filter">Category</label>
+          <select class="category-select" id="category-filter"></select>
+          <button class="text-button category-manage" id="category-manage" type="button" aria-expanded="false"
+            aria-controls="category-panel">Manage</button>
         </div>
+
+        <section class="category-panel" id="category-panel" aria-labelledby="category-panel-title" hidden>
+          <div class="category-panel-head">
+            <h2 class="category-panel-title" id="category-panel-title" tabindex="-1">Categories</h2>
+            <button class="text-button category-done" id="category-done" type="button">Done</button>
+          </div>
+          <form class="add-field category-form" id="category-form" novalidate>
+            <label class="visually-hidden" for="category-name">New category</label>
+            <input class="add-input" id="category-name" type="text" placeholder="New category" autocomplete="off"
+              enterkeyhint="done">
+            <button class="add-button" id="category-add" type="submit">Add</button>
+          </form>
+          <p class="category-status" id="category-status" role="status"></p>
+          <ul class="category-list" id="category-list"></ul>
+          <p class="category-empty" id="category-empty" hidden>No categories yet</p>
+        </section>
 
         <ul class="todo-list" id="todo-list" hidden></ul>
         <span class="visually-hidden" id="reorder-hint">Drag to move, or use the up and down arrow keys.</span>
@@ -148,8 +165,9 @@ Clear</button>
         <div class="empty-state" id="empty-state" hidden>
           <div class="empty-page" aria-hidden="true"><i></i><i></i><i></i></div>
           <h2 class="empty-title">No tasks yet</h2>
-          <p class="empty-hint">Add one with New task. Type #tags to put it on a shelf.</p>
+          <p class="empty-hint">Add one with New task.</p>
         </div>
+        <p class="filter-empty" id="filter-empty" hidden>No tasks match these filters</p>
       </div>
     </main>
 
@@ -169,15 +187,8 @@ Clear</button>
             <input class="reminder-control" id="edit-text" type="text" autocomplete="off" enterkeyhint="done">
           </div>
           <div class="sheet-section">
-            <span class="reminder-label" id="edit-tags-label">Tags</span>
-            <div class="edit-tags-row">
-              <div class="edit-tags" id="edit-tags" role="group" aria-labelledby="edit-tags-label"></div>
-              <button class="text-button tag-add" id="edit-tag-add" type="button">
-                <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg>Add tag
-              </button>
-              <input class="tag-field" id="edit-tag-field" type="text" autocomplete="off" autocapitalize="none"
-                enterkeyhint="done" aria-label="New tag" hidden>
-            </div>
+            <label class="reminder-label" for="edit-category">Category</label>
+            <select class="reminder-control category-choice" id="edit-category"></select>
           </div>
           <div class="sheet-section">
             <div class="picker" id="picker">
@@ -238,12 +249,6 @@ Clear</button>
         <span class="reminder-edge" id="reminder-end" tabindex="0"></span>
       </div>
     </div>
-
-    <template id="x-icon">
-      <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-        <path d="M18 6 6 18M6 6l12 12"/>
-      </svg>
-    </template>
 
     <template id="repeat-icon">
       <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">

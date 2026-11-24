@@ -3,16 +3,22 @@ import assert from 'node:assert/strict';
 import {
   ApiError,
   authRequest,
+  createCategory,
   createTodo,
   currentToken,
+  deleteCategory,
   deleteTodo,
-  listTodos,
   patchTodo,
   readSession,
+  readSnapshot,
+  renameCategory,
   setToken,
 } from '../src/storage.js';
 
 const ID = '0f8fad5b-d9cb-469f-a165-70867728950e';
+const CATEGORY = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
+const row = { id: ID, text: 'One', completed: false, createdAt: 1, tags: [], categoryId: null,
+  due: null, repeat: 'none', notified: null, revision: 1 };
 let calls;
 let responder;
 
@@ -76,10 +82,11 @@ test('authRequest posts JSON, sends the CSRF token only when asked and reports B
   assert.equal(calls[1].headers['X-CSRF-Token'], 'token-a');
 });
 
-test('listTodos sends the session token on the read too, so it is bound to that session', async () => {
-  const todos = [{ id: ID, text: 'One', completed: false, createdAt: 1, tags: [], due: null, repeat: 'none', notified: null, revision: 1 }];
-  responder = () => respond(200, { todos });
-  assert.deepEqual(await listTodos(), todos);
+test('readSnapshot sends the session token on the read too, so it is bound to that session', async () => {
+  const todos = [{ id: ID, text: 'One', completed: false, createdAt: 1, tags: [], categoryId: null, due: null, repeat: 'none', notified: null, revision: 1 }];
+  const categories = [{ id: CATEGORY, name: 'Home', revision: 1 }];
+  responder = () => respond(200, { todos, categories });
+  assert.deepEqual(await readSnapshot(), { todos, categories });
   assert.equal(calls[0].path, '/api/todos');
   assert.equal(calls[0].method, 'GET');
   assert.equal(calls[0].headers['X-CSRF-Token'], 'token-a');
@@ -87,13 +94,18 @@ test('listTodos sends the session token on the read too, so it is bound to that 
   assert.equal(calls[0].body, undefined);
 });
 
-test('createTodo, patchTodo and deleteTodo send JSON with the CSRF token', async () => {
-  responder = () => respond(201, { todo: { id: ID } });
-  assert.deepEqual(await createTodo({ id: ID, text: 'Pay rent', tags: ['home'], createdAt: 5, extra: true }), { id: ID });
-  assert.equal(calls[0].method, 'POST');
-  assert.equal(calls[0].body, JSON.stringify({ id: ID, text: 'Pay rent', tags: ['home'] }));
+test('a snapshot without a catalog (an older server) reads as categories: null', async () => {
+  responder = () => respond(200, { todos: [] });
+  assert.deepEqual(await readSnapshot(), { todos: [], categories: null });
+});
 
-  responder = () => respond(200, { todo: { id: ID, revision: 3 } });
+test('createTodo, patchTodo and deleteTodo send JSON with the CSRF token', async () => {
+  responder = () => respond(201, { todo: row });
+  assert.deepEqual(await createTodo({ id: ID, text: 'Pay rent #home', tags: ['x'], createdAt: 5, extra: true }), row);
+  assert.equal(calls[0].method, 'POST');
+  assert.deepEqual(JSON.parse(calls[0].body), { id: ID, text: 'Pay rent #home', tags: [] });
+
+  responder = () => respond(200, { todo: { ...row, revision: 3 } });
   await patchTodo(ID, 2, 'setReminder', { due: 10, repeat: 'daily' });
   assert.equal(calls[1].path, `/api/todos?id=${ID}`);
   assert.equal(calls[1].method, 'PATCH');
@@ -111,6 +123,52 @@ test('createTodo, patchTodo and deleteTodo send JSON with the CSRF token', async
   }
 });
 
+test('an edit always sends empty tags for the rollback API', async () => {
+  responder = () => respond(200, { todo: { ...row, revision: 3 } });
+  const fields = { text: 'Updated', due: null, repeat: 'none' };
+  await patchTodo(ID, 2, 'edit', fields);
+  await patchTodo(ID, 2, 'edit', { ...fields, tags: ['ignored'], categoryId: CATEGORY });
+  const expected = { ...fields, revision: 2, action: 'edit', tags: [] };
+  assert.deepEqual(calls.map(({ body }) => JSON.parse(body)), [expected, { ...expected, categoryId: CATEGORY }]);
+});
+
+test('todo write responses fold legacy tags within the title code point limit', async () => {
+  const text = '😀'.repeat(1996);
+  const todo = { ...row, text, tags: [null, 'é', 'z'] };
+  const folded = { ...todo, text: `${text} #é`, tags: [] };
+  responder = () => respond(200, { todo });
+  assert.deepEqual(await createTodo({ id: ID, text }), folded);
+  assert.deepEqual(await patchTodo(ID, 1, 'setReminder', { due: 10, repeat: 'daily' }), folded);
+  responder = () => respond(200, { todos: [todo] });
+  assert.deepEqual(await deleteCategory(CATEGORY, 1), [folded]);
+});
+
+test('category writes send JSON with the CSRF token and return the server\'s answer', async () => {
+  const category = { id: CATEGORY, name: 'Home', revision: 1 };
+  responder = () => respond(201, { category });
+  assert.deepEqual(await createCategory({ id: CATEGORY, name: 'Home' }), category);
+  assert.deepEqual({ method: calls[0].method, path: calls[0].path, body: JSON.parse(calls[0].body) },
+    { method: 'POST', path: '/api/categories', body: { id: CATEGORY, name: 'Home' } });
+
+  responder = () => respond(200, { category: { ...category, name: 'House', revision: 2 } });
+  assert.equal((await renameCategory(CATEGORY, 1, 'House')).name, 'House');
+  assert.deepEqual({ method: calls[1].method, path: calls[1].path, body: JSON.parse(calls[1].body) },
+    { method: 'PATCH', path: `/api/categories?id=${CATEGORY}`, body: { name: 'House', revision: 1 } });
+
+  const todos = [{ ...row, revision: 4 }];
+  responder = () => respond(200, { todos });
+  assert.deepEqual(await deleteCategory(CATEGORY, 2), todos);
+  assert.equal(calls[2].method, 'DELETE');
+  assert.equal(calls[2].path, `/api/categories?id=${CATEGORY}&revision=2`);
+  for (const call of calls) {
+    assert.equal(call.headers['X-CSRF-Token'], 'token-a');
+    assert.equal(call.headers['Content-Type'], 'application/json');
+  }
+
+  responder = () => respond(409, { error: { code: 'CATEGORY_LIMIT', message: 'x' } });
+  await assert.rejects(createCategory({ id: CATEGORY, name: 'One more' }), { status: 409, code: 'CATEGORY_LIMIT' });
+});
+
 test('todo errors reject with the API status and code', async () => {
   for (const [status, code] of [[400, 'INVALID_INPUT'], [401, 'UNAUTHENTICATED'], [403, 'INVALID_CSRF'],
     [404, 'NOT_FOUND'], [409, 'REVISION_CONFLICT'], [500, 'INTERNAL_ERROR']]) {
@@ -123,9 +181,9 @@ test('todo errors reject with the API status and code', async () => {
     });
   }
   responder = () => respond(502, 'not json');
-  await assert.rejects(listTodos(), { status: 502, code: 'HTTP_ERROR' });
+  await assert.rejects(readSnapshot(), { status: 502, code: 'HTTP_ERROR' });
   responder = () => Promise.reject(new TypeError('Failed to fetch'));
-  await assert.rejects(listTodos(), { status: 0, code: 'NETWORK' });
+  await assert.rejects(readSnapshot(), { status: 0, code: 'NETWORK' });
 });
 
 test('an answer that arrives after the session changed is discarded', async () => {
@@ -133,7 +191,7 @@ test('an answer that arrives after the session changed is discarded', async () =
   responder = () => new Promise((resolve) => {
     release = () => resolve(respond(200, { todos: [{ id: ID }] }));
   });
-  const pending = listTodos();
+  const pending = readSnapshot();
   await new Promise((resolve) => setTimeout(resolve));
   setToken('token-b');
   release();
@@ -144,6 +202,6 @@ test('an answer that arrives after the session changed is discarded', async () =
 test('no request is made without being asked, and localStorage is never touched', async () => {
   // beforeEach made every localStorage method throw; all of the above ran against it.
   responder = () => respond(200, { todos: [] });
-  await listTodos();
+  await readSnapshot();
   assert.equal(calls.length, 1);
 });

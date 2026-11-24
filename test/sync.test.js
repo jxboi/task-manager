@@ -7,16 +7,21 @@ import { createFakeApi, settle } from './fake-api.js';
 
 const HOUR = 3_600_000;
 
-function setup(options) {
+function setup(options, onChange) {
   const server = createFakeApi(options);
   globalThis.fetch = server.fetch;
   api.setToken(server.session.csrfToken);
   let changes = 0;
-  const sync = createSync(api, { onChange: () => changes++ });
+  const sync = createSync(api, { onChange: () => { changes++; onChange?.(); } });
   return { server, sync, changes: () => changes };
 }
 
-const newTodo = (text, tags = []) => addTodo([], text, tags)[0];
+const newTodo = (text) => addTodo([], text)[0];
+// A plain edit that changes only the title (keeps the reminder shown), used as a generic write.
+const retitle = (sync, id, text) => {
+  const row = sync.todos.find((todo) => todo.id === id);
+  return sync.edit(id, { text, due: row?.due ?? null, repeat: row?.repeat ?? 'none' });
+};
 const strip = ({ revision, createdAt, ...todo }) => todo;
 
 test('load replaces the view with the server list', async () => {
@@ -46,16 +51,16 @@ test('writes are serialized and each uses the revision the previous one returned
   const { server, sync } = setup();
   const todo = newTodo('Plan trip');
   sync.create(todo);
-  sync.addTag(todo.id, 'travel');
-  sync.addTag(todo.id, 'family');
+  retitle(sync, todo.id, 'travel');
+  retitle(sync, todo.id, 'family');
   const due = Date.now() + HOUR;
   sync.setReminder(todo.id, due, 'weekly');
   // All optimistic, before any answer.
-  assert.deepEqual(sync.todos[0].tags, ['travel', 'family']);
+  assert.equal(sync.todos[0].text, 'family');
   assert.equal(sync.todos[0].due, due);
-  const last = await sync.removeTag(todo.id, 'travel');
+  const last = await retitle(sync, todo.id, 'Final');
   assert.equal(last.ok, true);
-  assert.deepEqual(server.rows[0].tags, ['family']);
+  assert.equal(server.rows[0].text, 'Final');
   assert.equal(server.rows[0].due, due);
   assert.equal(server.rows[0].repeat, 'weekly');
   assert.equal(server.rows[0].revision, 5);
@@ -94,7 +99,7 @@ test('remove deletes at the current revision', async () => {
   const { server, sync } = setup();
   const todo = newTodo('Gone soon');
   sync.create(todo);
-  sync.addTag(todo.id, 'x');
+  retitle(sync, todo.id, 'x');
   const result = sync.remove(todo.id);
   assert.deepEqual(sync.todos, []);
   assert.equal((await result).ok, true);
@@ -107,12 +112,12 @@ test('a failed write drops out of the view and keeps the confirmed row', async (
   const todo = newTodo('Keep me');
   await sync.create(todo);
   server.failNext = () => new Response('{}', { status: 500 });
-  const result = sync.addTag(todo.id, 'oops');
-  assert.deepEqual(sync.todos[0].tags, ['oops']);
+  const result = retitle(sync, todo.id, 'oops');
+  assert.equal(sync.todos[0].text, 'oops');
   const outcome = await result;
   assert.equal(outcome.ok, false);
   assert.equal(outcome.error.status, 500);
-  assert.deepEqual(sync.todos[0].tags, []);
+  assert.equal(sync.todos[0].text, 'Keep me');
   server.failNext = () => new TypeError('Failed to fetch');
   const offline = await sync.toggle(todo.id, Date.now());
   assert.equal(offline.error.code, 'NETWORK');
@@ -123,14 +128,14 @@ test('a failed write drops out of the view and keeps the confirmed row', async (
 test('optimistic moves share the revision queue and a failed move rolls back', async () => {
   const { server, sync } = setup();
   const [a, hidden, b, c] = ['A', 'Hidden', 'B', 'C'].map((text, i) => ({
-    ...newTodo(text, text === 'Hidden' ? [] : ['work']), createdAt: i, revision: 1,
+    ...newTodo(text), createdAt: i, revision: 1,
   }));
   server.rows = [a, hidden, b, c];
   await sync.load();
   const texts = () => sync.todos.map(({ text }) => text);
 
-  const moved = sync.move(c.id, a.id, 'before', ['work']);
-  const edit = sync.addTag(c.id, 'another');
+  const moved = sync.move(c.id, a.id, 'before');
+  const edit = sync.setReminder(c.id, Date.now() + HOUR, 'none');
   assert.deepEqual(texts(), ['C', 'A', 'Hidden', 'B']);
   assert.equal((await moved).ok, true);
   assert.equal((await edit).ok, true);
@@ -139,7 +144,7 @@ test('optimistic moves share the revision queue and a failed move rolls back', a
   assert.equal(tag.revision, 2);
 
   server.failNext = () => new Response('{}', { status: 500 });
-  const rejected = sync.move(c.id, b.id, 'after', ['work']);
+  const rejected = sync.move(c.id, b.id, 'after');
   assert.deepEqual(texts(), ['A', 'Hidden', 'B', 'C']);
   assert.equal((await rejected).error.status, 500);
   assert.deepEqual(texts(), ['C', 'A', 'Hidden', 'B']);
@@ -166,8 +171,8 @@ test('a revision conflict reloads the list before resolving', async () => {
   const { server, sync } = setup();
   const todo = newTodo('Shared');
   await sync.create(todo);
-  // Another tab adds a tag: this tab's revision is now stale.
-  server.rows = [{ ...server.rows[0], tags: ['other-tab'], revision: 2 }];
+  // Another tab renames it: this tab's revision is now stale.
+  server.rows = [{ ...server.rows[0], text: 'other-tab', revision: 2 }];
   const outcome = await sync.toggle(todo.id, Date.now());
   assert.equal(outcome.ok, false);
   assert.equal(outcome.error.status, 409);
@@ -181,8 +186,8 @@ test('a write for a todo deleted elsewhere gets 404, reloads, and later writes s
   const todo = newTodo('Deleted elsewhere');
   await sync.create(todo);
   server.rows = [];
-  const first = sync.addTag(todo.id, 'a');
-  const second = sync.addTag(todo.id, 'b');
+  const first = retitle(sync, todo.id, 'a');
+  const second = retitle(sync, todo.id, 'b');
   assert.equal((await first).error.status, 404);
   assert.deepEqual(await second, { ok: false, skipped: true });
   assert.deepEqual(sync.todos, []);
@@ -222,8 +227,8 @@ test('a list reload restores an editable revision for a UUID after empty reconci
 
   server.rows = [{ ...original, createdAt: original.createdAt + 1, revision: 1 }];
   assert.equal((await sync.load()).ok, true);
-  assert.equal((await sync.addTag(todo.id, 'later')).ok, true);
-  assert.deepEqual(server.rows[0].tags, ['later']);
+  assert.equal((await retitle(sync, todo.id, 'later')).ok, true);
+  assert.equal(server.rows[0].text, 'later');
 });
 
 test('reset discards rows, pending writes and late answers from the previous session', async () => {
@@ -236,7 +241,7 @@ test('reset discards rows, pending writes and late answers from the previous ses
   globalThis.fetch = (...args) => new Promise((resolve) => {
     release = () => resolve(slow(...args));
   });
-  const write = sync.addTag(server.rows[0].id, 'late');
+  const write = retitle(sync, server.rows[0].id, 'late');
   await settle(1);
   sync.reset();
   api.setToken('token-b');
@@ -315,7 +320,7 @@ test('item 3: a conflict cancels the queued changes for that todo instead of reb
   const before = sync.todos[0];
   // Another tab completes it: this tab's revision is stale.
   server.rows = [{ ...server.rows[0], completed: true, revision: 2 }];
-  const tag = sync.addTag(todo.id, 'mine');
+  const tag = retitle(sync, todo.id, 'mine');
   const complete = sync.toggle(todo.id, Date.now(), before); // queued behind the tag write
   const create = sync.create(other); // another todo: not affected
   assert.equal((await tag).error.status, 409);
@@ -327,7 +332,7 @@ test('item 3: a conflict cancels the queued changes for that todo instead of reb
   assert.equal(sync.todos.find((item) => item.id === todo.id).completed, true);
   assert.ok(server.rows.some((item) => item.id === other.id));
   // Changes made after the conflict go through.
-  assert.equal((await sync.addTag(todo.id, 'later')).ok, true);
+  assert.equal((await retitle(sync, todo.id, 'later')).ok, true);
 });
 
 test('item 3: a queued completion whose row changed under it (after a reload) is refused', async () => {
@@ -367,10 +372,10 @@ test('item 2: a delete clicked while a conflict reload is on its way is cancelle
   const { server, sync } = setup();
   const todo = newTodo('Shared');
   await sync.create(todo);
-  // Another tab adds a tag: revision 2, which this tab hasn't seen.
-  server.rows = [{ ...server.rows[0], tags: ['theirs'], revision: 2 }];
+  // Another tab renames it: revision 2, which this tab hasn't seen.
+  server.rows = [{ ...server.rows[0], text: 'theirs', revision: 2 }];
   const hold = holdReloads(server);
-  const tag = sync.addTag(todo.id, 'mine'); // 409, then a reload that is held
+  const tag = retitle(sync, todo.id, 'mine'); // 409, then a reload that is held
   await settle();
   assert.equal(sync.todos[0].revision, 1, 'the user still sees revision 1');
   const remove = sync.remove(todo.id); // clicked on the revision-1 row
@@ -379,7 +384,7 @@ test('item 2: a delete clicked while a conflict reload is on its way is cancelle
   assert.equal((await tag).error.status, 409);
   assert.deepEqual(await remove, { ok: false, cancelled: true });
   assert.equal(server.rows.length, 1, 'the other tab\'s revision was not deleted');
-  assert.deepEqual(server.rows[0].tags, ['theirs']);
+  assert.equal(server.rows[0].text, 'theirs');
   assert.equal(server.requests.filter((r) => r.method === 'DELETE').length, 0);
   // Once the refreshed row is what the user sees, edits go through.
   assert.equal((await sync.remove(todo.id)).ok, true);
@@ -390,9 +395,9 @@ test('a focus reload cancels a queued delete after the conflict reload failed', 
   const { server, sync } = setup();
   const todo = newTodo('Shared');
   await sync.create(todo);
-  server.rows = [{ ...server.rows[0], tags: ['theirs'], revision: 2 }];
+  server.rows = [{ ...server.rows[0], text: 'theirs', revision: 2 }];
   const hold = holdReloads(server);
-  const tag = sync.addTag(todo.id, 'mine');
+  const tag = retitle(sync, todo.id, 'mine');
   await settle();
   const focus = sync.load();
   assert.equal(sync.todos[0].revision, 1);
@@ -405,7 +410,7 @@ test('a focus reload cancels a queued delete after the conflict reload failed', 
   assert.equal((await focus).ok, true);
   assert.deepEqual(await remove, { ok: false, cancelled: true });
   assert.deepEqual(sync.todos, server.rows);
-  assert.deepEqual(server.rows[0].tags, ['theirs']);
+  assert.equal(server.rows[0].text, 'theirs');
 });
 
 test('a reminder claim conflict reload cancels a queued delete of that task', async () => {
@@ -434,11 +439,361 @@ test('item 2: an edit made before the refreshed row is on screen is cancelled; a
   await sync.create(todo);
   shown.set(todo.id, 1);
   server.rows = [{ ...server.rows[0], completed: true, revision: 2 }];
-  assert.equal((await sync.addTag(todo.id, 'mine')).error.status, 409);
+  assert.equal((await retitle(sync, todo.id, 'mine')).error.status, 409);
   assert.equal(sync.todos[0].revision, 2); // reloaded, but not rendered yet
-  assert.deepEqual(await sync.addTag(todo.id, 'early'), { ok: false, cancelled: true });
+  assert.deepEqual(await retitle(sync, todo.id, 'early'), { ok: false, cancelled: true });
   shown.set(todo.id, 2); // rendered
-  assert.equal((await sync.addTag(todo.id, 'late')).ok, true);
-  assert.deepEqual(server.rows[0].tags, ['late']);
+  assert.equal((await retitle(sync, todo.id, 'late')).ok, true);
+  assert.equal(server.rows[0].text, 'late');
   assert.equal(server.rows[0].completed, true);
+});
+
+// --- Categories ------------------------------------------------------------------------------
+
+const HOME = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
+const WORK = '0f8fad5b-d9cb-469f-a165-70867728950e';
+
+for (const [status, code] of [[401, 'UNAUTHENTICATED'], [403, 'INVALID_CSRF']]) {
+  test(`an assignment rejected with 404 reports ${code} from the recovery snapshot`, async () => {
+    const { server, sync } = setup();
+    const todo = { ...newTodo('Assign me'), revision: 1 };
+    server.rows = [todo];
+    server.categories = [{ id: HOME, name: 'Home', revision: 1 }];
+    await sync.load();
+    server.categories = [];
+    server.failNext = (method) => (method === 'GET'
+      ? new Response(JSON.stringify({ error: { code } }), { status })
+      : undefined);
+    const result = await sync.edit(todo.id, { text: todo.text, due: null, repeat: 'none', categoryId: HOME });
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, code);
+    assert.equal(result.error.status, status);
+  });
+}
+
+test('a load carries the catalog alphabetically with the todo links; no catalog reads as null', async () => {
+  const { server, sync } = setup();
+  assert.equal(sync.categories, null, 'nothing before a load');
+  server.categories = [{ id: WORK, name: 'work', revision: 1 }, { id: HOME, name: 'Home', revision: 3 }];
+  server.rows = [{ ...newTodo('Linked'), categoryId: WORK, revision: 1 }];
+  await sync.load();
+  assert.deepEqual(sync.categories.map(({ name }) => name), ['Home', 'work']);
+  assert.equal(sync.todos[0].categoryId, WORK);
+  server.categories = null; // an older server
+  await sync.load();
+  assert.equal(sync.categories, null);
+});
+
+test('category writes wait for the server: create, rename and the limit', async () => {
+  const { server, sync } = setup();
+  await sync.load();
+  const pending = sync.createCategory('Home');
+  assert.deepEqual(sync.categories, [], 'not optimistic');
+  const created = await pending;
+  assert.equal(created.ok, true);
+  assert.equal(created.category.name, 'Home');
+  assert.deepEqual(sync.categories, server.categories);
+  const renamed = await sync.renameCategory(created.category.id, 'House');
+  assert.equal(renamed.ok, true);
+  assert.deepEqual(sync.categories, [{ id: created.category.id, name: 'House', revision: 2 }]);
+
+  server.categories = Array.from({ length: 50 }, (_, i) => ({
+    id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`, name: `c${i}`, revision: 1,
+  }));
+  const limited = await sync.createCategory('One more');
+  assert.equal(limited.ok, false);
+  assert.equal(limited.error.code, 'CATEGORY_LIMIT');
+  assert.equal(limited.reloaded, true, 'a 409 reloads, so the list shows the real catalog');
+  assert.equal(sync.categories.length, 50);
+});
+
+test('deleting a category applies the unlinked todos with their new revisions in the same step', async () => {
+  const { server, sync } = setup();
+  server.categories = [{ id: HOME, name: 'Home', revision: 1 }];
+  const linked = { ...newTodo('Linked'), position: '00000000000000000000a', categoryId: HOME, revision: 4 };
+  const other = { ...newTodo('Other'), position: '00000000000000000000b', revision: 1 };
+  server.rows = [linked, other];
+  await sync.load();
+  let seen = [];
+  const watched = createSync(api, {
+    onChange: () => seen.push([watched.categories?.length, watched.todos[0]?.categoryId, watched.todos[0]?.revision]),
+  });
+  await watched.load();
+  seen = [];
+  const outcome = await watched.deleteCategory(HOME);
+  assert.equal(outcome.ok, true);
+  assert.deepEqual(seen, [[0, null, 5]], 'the catalog and the todos change together, in one update');
+  assert.deepEqual(watched.categories, []);
+  assert.deepEqual(watched.todos, server.rows);
+  // The next write uses the revision the delete returned.
+  assert.equal((await retitle(watched, linked.id, 'Still here')).ok, true);
+  assert.equal(JSON.parse(server.requests.at(-1).body).revision, 5);
+  assert.equal(server.rows[0].revision, 6);
+});
+
+test('a stale rename is refused, reloads, and is never replayed', async () => {
+  const { server, sync } = setup();
+  server.categories = [{ id: HOME, name: 'Home', revision: 1 }];
+  await sync.load();
+  server.categories = [{ id: HOME, name: 'House', revision: 2 }]; // another tab renamed it
+  const outcome = await sync.renameCategory(HOME, 'Flat');
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.error.code, 'REVISION_CONFLICT');
+  assert.equal(outcome.reloaded, true);
+  assert.deepEqual(sync.categories, [{ id: HOME, name: 'House', revision: 2 }]);
+  assert.equal(server.requests.filter((r) => r.method === 'PATCH').length, 1);
+  // A delete clicked against the old revision is refused too, never applied to the newer row.
+  server.categories = [{ id: HOME, name: 'House', revision: 3 }];
+  assert.equal((await sync.deleteCategory(HOME)).error.code, 'REVISION_CONFLICT');
+  assert.equal(server.categories.length, 1);
+});
+
+test('category deletion cancels a queued edit when the returned todo has a newer revision', async () => {
+  const { server, sync } = setup();
+  server.categories = [{ id: HOME, name: 'Home', revision: 1 }];
+  const todo = { ...newTodo('Before'), categoryId: HOME, revision: 1 };
+  server.rows = [todo];
+  await sync.load();
+  server.rows = [{ ...todo, text: 'Remote edit', revision: 2 }];
+  const deleting = sync.deleteCategory(HOME);
+  const editing = retitle(sync, todo.id, 'Stale edit');
+  assert.equal((await deleting).ok, true);
+  assert.deepEqual(await editing, { ok: false, cancelled: true });
+  assert.equal(sync.todos[0].text, 'Remote edit');
+  assert.equal(sync.todos[0].revision, 3);
+  assert.equal(server.requests.some((request) => request.method === 'PATCH'), false);
+});
+
+test('category deletion reloads an omitted, remotely reassigned todo before queued writes', async () => {
+  const { server, sync } = setup();
+  server.categories = [{ id: HOME, name: 'Home', revision: 1 }, { id: WORK, name: 'Work', revision: 1 }];
+  const todo = { ...newTodo('Reassigned'), categoryId: HOME, revision: 1 };
+  server.rows = [todo];
+  await sync.load();
+  server.rows = [{ ...todo, categoryId: WORK, revision: 2 }];
+  const deleting = sync.deleteCategory(HOME);
+  const editing = retitle(sync, todo.id, 'Stale edit');
+  assert.equal((await deleting).ok, true);
+  assert.deepEqual(sync.confirmed, server.rows);
+  assert.deepEqual(await editing, { ok: false, cancelled: true });
+  assert.deepEqual(server.requests.map(({ method }) => method), ['GET', 'DELETE', 'GET']);
+});
+
+test('category deletion inserts a returned todo that was assigned in another tab', async () => {
+  const { server, sync } = setup();
+  server.categories = [{ id: HOME, name: 'Home', revision: 1 }];
+  const other = { ...newTodo('Other'), position: '00000000000000000000b', revision: 1 };
+  server.rows = [other];
+  await sync.load();
+  const linked = { ...newTodo('Remote task'), position: '00000000000000000000a', categoryId: HOME, revision: 4 };
+  server.rows = [linked, other];
+
+  assert.equal((await sync.deleteCategory(HOME)).ok, true);
+  assert.deepEqual(sync.todos, server.rows);
+  assert.deepEqual(server.requests.map(({ method }) => method), ['GET', 'DELETE']);
+  assert.equal((await retitle(sync, linked.id, 'Editable')).ok, true);
+  assert.equal(JSON.parse(server.requests.at(-1).body).revision, 5);
+});
+
+test('an uncertain create is reconciled by its UUID after the reload', async () => {
+  const { server, sync } = setup();
+  await sync.load();
+  server.failNext = (method) => (method === 'POST' ? { afterWrite: true } : undefined);
+  const outcome = await sync.createCategory('Home');
+  assert.equal(outcome.ok, true, 'the reload found the category the lost answer created');
+  assert.equal(outcome.category.name, 'Home');
+  assert.equal(server.categories.length, 1);
+
+  server.failNext = (method) => (method === 'POST' ? new TypeError('Failed to fetch') : undefined);
+  const lost = await sync.createCategory('Work');
+  assert.equal(lost.ok, false);
+  assert.equal(lost.error.code, 'NETWORK');
+  assert.equal(lost.reloaded, true);
+  assert.deepEqual(sync.categories.map(({ name }) => name), ['Home']);
+});
+
+test('a truncated category create response reloads and reconciles the committed UUID', async () => {
+  const { server, sync } = setup();
+  globalThis.fetch = async (path, init) => {
+    const response = await server.fetch(path, init);
+    return init.method === 'POST' ? new Response('{"category":', { status: 201 }) : response;
+  };
+  const outcome = await sync.createCategory('Home', HOME);
+  assert.deepEqual(outcome, { ok: true, category: server.categories[0] });
+  assert.deepEqual(server.requests.map(({ method }) => method), ['POST', 'GET']);
+});
+
+test('an invalid todo create response requires a fresh snapshot before retrying the UUID', async () => {
+  const { server, sync } = setup();
+  const todo = newTodo('Maybe saved');
+  let failReads = true;
+  globalThis.fetch = async (path, init) => {
+    if (failReads && init.method === 'GET') {
+      server.failNext = () => new Response('{}', { status: 503 });
+    }
+    const response = await server.fetch(path, init);
+    return init.method === 'POST' && response.ok
+      ? new Response(JSON.stringify({ todo: { id: todo.id, revision: 1 } }), { status: 201 })
+      : response;
+  };
+  const lost = await sync.create(todo);
+  assert.equal(lost.error?.code, 'INVALID_WRITE_RESPONSE');
+  assert.equal(lost.reloaded, false);
+  assert.equal((await sync.create(todo)).ok, false);
+  failReads = false;
+  assert.deepEqual(await sync.create(todo), { ok: true, todo: server.rows[0], reconciled: true });
+  assert.deepEqual(server.requests.map(({ method }) => method), ['POST', 'GET', 'GET', 'GET']);
+});
+
+test('a category retry drops its draft when the session switches after the recovery read', async () => {
+  const { server, sync } = setup(undefined, () => {
+    // Switch after reloadNow accepts the snapshot, before the retry resumes.
+    queueMicrotask(() => {
+      server.session = { user: { email: 'cli-next@example.test' }, csrfToken: 'token-b' };
+      sync.reset();
+      api.setToken('token-b');
+    });
+  });
+
+  const outcome = await sync.createCategory('Old account category', HOME, true);
+
+  assert.equal(server.requests.some(({ headers }) => headers['X-CSRF-Token'] === 'token-b'), false);
+  assert.deepEqual(server.requests.map(({ method }) => method), ['GET']);
+  assert.deepEqual(outcome, { ok: false, stale: true });
+});
+
+test('a queued todo edit drops its draft when the token switches after the recovery read', async () => {
+  let recovered = false;
+  const { server, sync } = setup(undefined, () => {
+    if (!recovered) return;
+    recovered = false;
+    // Let recoverSnapshot accept the reload before changing the token its caller would use.
+    queueMicrotask(() => queueMicrotask(() => {
+      server.session = { user: { email: 'cli-next@example.test' }, csrfToken: 'token-b' };
+      api.setToken('token-b');
+    }));
+  });
+  const todo = { ...newTodo('Original'), revision: 1 };
+  server.rows = [todo];
+  await sync.load();
+  server.failNext = () => new Response('{"todo":');
+  globalThis.fetch = (path, init) => {
+    if (init.method === 'PATCH') {
+      const response = server.fetch(path, init);
+      server.failNext = () => new Response('{}', { status: 503 });
+      return response;
+    }
+    return server.fetch(path, init);
+  };
+  const first = retitle(sync, todo.id, 'Uncertain edit');
+  const retry = retitle(sync, todo.id, 'Old account task title');
+  assert.equal((await first).reloaded, false);
+  recovered = true;
+
+  const outcome = await retry;
+
+  assert.equal(server.requests.some(({ headers }) => headers['X-CSRF-Token'] === 'token-b'), false);
+  assert.deepEqual(server.requests.map(({ method }) => method), ['GET', 'PATCH', 'GET', 'GET']);
+  assert.deepEqual(outcome, { ok: false, stale: true });
+  assert.equal(sync.busy, false);
+});
+
+test('an invalid category delete response reloads the category and its unlinked todos', async () => {
+  const { server, sync } = setup();
+  server.categories = [{ id: HOME, name: 'Home', revision: 1 }];
+  server.rows = [{ ...newTodo('Linked'), categoryId: HOME, revision: 1 }];
+  await sync.load();
+  globalThis.fetch = async (path, init) => {
+    const response = await server.fetch(path, init);
+    return init.method === 'DELETE' ? new Response('{"todos":[{}]}') : response;
+  };
+  const outcome = await sync.deleteCategory(HOME);
+  assert.equal(outcome.error?.code, 'INVALID_WRITE_RESPONSE');
+  assert.equal(outcome.reloaded, true);
+  assert.deepEqual(sync.categories, []);
+  assert.deepEqual(sync.todos, server.rows);
+});
+
+test('a truncated todo edit response reloads the committed revision before a queued edit', async () => {
+  const { server, sync } = setup();
+  const todo = newTodo('Original');
+  await sync.create(todo);
+  globalThis.fetch = async (path, init) => {
+    const response = await server.fetch(path, init);
+    return init.method === 'PATCH' && response.ok ? new Response('{"todo":') : response;
+  };
+  const first = retitle(sync, todo.id, 'Committed');
+  const queued = retitle(sync, todo.id, 'Queued against the old revision');
+  assert.equal((await first).reloaded, true);
+  assert.deepEqual(await queued, { ok: false, cancelled: true });
+  assert.deepEqual(sync.todos, server.rows);
+  assert.equal(sync.todos[0].text, 'Committed');
+  assert.deepEqual(server.requests.map(({ method }) => method), ['POST', 'PATCH', 'GET']);
+});
+
+test('reset drops the catalog and ignores a category answer from the previous session', async () => {
+  const { server, sync } = setup();
+  server.categories = [{ id: HOME, name: 'Home', revision: 1 }];
+  await sync.load();
+  let release;
+  const real = server.fetch;
+  globalThis.fetch = (...args) => new Promise((resolve) => {
+    release = () => resolve(real(...args));
+  });
+  const write = sync.deleteCategory(HOME);
+  await settle(1);
+  sync.reset();
+  api.setToken('token-b');
+  assert.equal(sync.categories, null);
+  release();
+  assert.equal((await write).stale, true);
+  assert.equal(sync.categories, null);
+  globalThis.fetch = real;
+});
+
+test('a retry whose base revision is stale is cancelled whole: newer title kept, no stale PATCH', async () => {
+  const { server, sync } = setup();
+  const todo = { ...newTodo('Original'), revision: 1, categoryId: null };
+  server.rows = [todo];
+  server.categories = [{ id: HOME, name: 'Home', revision: 1 }];
+  await sync.load();
+  const base = { revision: 1 };
+  const refresh = sync.load(); // the retry's pending refresh
+  const newer = sync.edit(todo.id, { text: 'Newer title', due: null, repeat: 'none' });
+  const retry = sync.edit(todo.id, { text: 'Original', due: null, repeat: 'none', categoryId: HOME }, undefined, base);
+  const [, , outcome] = await Promise.all([refresh, newer, retry]);
+  assert.equal(outcome.cancelled, true);
+  assert.equal(server.rows[0].text, 'Newer title');
+  assert.equal(server.rows[0].categoryId, null);
+  const patches = server.requests.filter(({ method }) => method === 'PATCH');
+  assert.equal(patches.length, 1, 'only the newer save was sent');
+});
+
+test('a re-arm retry is cancelled when the reminder was cleared meanwhile; nothing is claimed', async () => {
+  const { server, sync } = setup();
+  const due = Date.parse('2001-01-01T09:00:00');
+  const todo = { ...newTodo('Late'), revision: 1, due, repeat: 'none', notified: due };
+  server.rows = [todo];
+  await sync.load();
+  const base = { revision: 1, due, repeat: 'none', notified: due };
+  const refresh = sync.load();
+  const clear = sync.clearReminder(todo.id);
+  const retry = sync.setReminder(todo.id, due, 'none', base);
+  const [, , outcome] = await Promise.all([refresh, clear, retry]);
+  assert.equal(outcome.cancelled, true);
+  assert.equal(server.rows[0].due, null);
+  const sent = server.requests.filter(({ method }) => method === 'PATCH').map(({ body }) => String(body));
+  assert.equal(sent.some((body) => /setReminder/.test(body)), false, 'no setReminder after the clear');
+});
+
+test('a retry with an unchanged base still goes through', async () => {
+  const { server, sync } = setup();
+  const todo = { ...newTodo('Same'), revision: 1, categoryId: null };
+  server.rows = [todo];
+  server.categories = [{ id: HOME, name: 'Home', revision: 1 }];
+  await sync.load();
+  await sync.load();
+  const outcome = await sync.edit(todo.id, { text: 'Same', due: null, repeat: 'none', categoryId: HOME }, undefined, { revision: 1 });
+  assert.equal(outcome.ok, true);
+  assert.equal(server.rows[0].categoryId, HOME);
 });

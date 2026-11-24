@@ -409,8 +409,10 @@ test('categories API against PostgreSQL', {
     };
     await step({ categoryId: work.toUpperCase() }, work);
     await step({ categoryId: home }, home);
-    // An old client's edit (no categoryId) keeps the link.
-    await step({ text: 'Plan the week', tags: ['ops'] }, home);
+    // An old client's edit (no categoryId) keeps the link; its tags join the title.
+    const legacy = await patchTodo(a, id, editOf(todo, { text: 'Plan the week', tags: ['ops'] }));
+    assert.deepEqual(legacy.data.todo, { ...todo, text: 'Plan the week #ops', revision: todo.revision + 1 });
+    todo = legacy.data.todo;
     await step({ categoryId: null }, null);
     await step({ categoryId: work }, work);
 
@@ -444,13 +446,14 @@ test('categories API against PostgreSQL', {
     let todo = (await addTodo(a, id, 'Linked')).data.todo;
     todo = (await patchTodo(a, id, editOf(todo, { categoryId: work }))).data.todo;
     const due = Date.now() - 10_000;
-    for (const body of [
+    // No todo stores tags, so a legacy removeTag is a no-op (bump 0).
+    for (const { bump = 1, ...body } of [
       { action: 'setReminder', due, repeat: 'none' },
       { action: 'markNotified', due },
       { action: 'complete', completed: true, due },
       { action: 'move', anchorId: anchor, side: 'before' },
       { action: 'addTag', tag: 'x' },
-      { action: 'removeTag', tag: 'x' },
+      { action: 'removeTag', tag: 'x', bump: 0 },
       { action: 'clearReminder' },
     ]) {
       for (const categoryId of [null, work]) {
@@ -458,7 +461,7 @@ test('categories API against PostgreSQL', {
       }
       const response = await patchTodo(a, id, { ...body, revision: todo.revision });
       assert.equal(response.status, 200, `${body.action}: ${JSON.stringify(response.data)}`);
-      assert.equal(response.data.todo.revision, todo.revision + 1, body.action);
+      assert.equal(response.data.todo.revision, todo.revision + bump, body.action);
       assert.equal(response.data.todo.categoryId, work, body.action);
       todo = response.data.todo;
     }
@@ -601,6 +604,37 @@ test('categories API against PostgreSQL', {
     await admin.query('DELETE FROM todos WHERE user_id = $1', [a.userId]);
   });
 
+  await t.test('an edit another tab applies between the revision check and the patch is a 409, not a stale 200', async () => {
+    const id = randomUUID();
+    const todo = (await addTodo(a, id, 'Before')).data.todo;
+    const body = editOf(todo, { text: 'After' });
+    const { pool } = services;
+    const query = pool.query.bind(pool);
+    let hooked = false;
+    let other;
+    pool.query = async (...args) => {
+      const result = await query(...args);
+      if (!hooked && /FROM todos WHERE user_id = \$1 AND id = \$2/.test(String(args[0]))) {
+        hooked = true;
+        pool.query = query;
+        other = await patchTodo(a, id, body); // the same edit, from another tab
+      }
+      return result;
+    };
+    let mine;
+    try {
+      mine = await patchTodo(a, id, body);
+    } finally {
+      pool.query = query;
+    }
+    assert.ok(hooked);
+    assert.equal(other.status, 200);
+    assert.equal(mine.status, 409, JSON.stringify(mine.data));
+    assert.equal(mine.data.error.code, 'REVISION_CONFLICT');
+    assert.deepEqual(await readTodo(a, id), other.data.todo);
+    await admin.query('DELETE FROM todos WHERE user_id = $1', [a.userId]);
+  });
+
   await t.test('legacy edit (no categoryId) racing a category delete, edit first, survives the unlink', async () => {
     const work = randomUUID();
     assert.equal((await create(a, work, 'Work')).status, 201);
@@ -637,6 +671,68 @@ test('categories API against PostgreSQL', {
     assert.deepEqual(deleted.data.todos, [unlinked]);
     expectError(edited, 409, 'REVISION_CONFLICT');
     assert.deepEqual(await readTodo(a, id), unlinked);
+    await admin.query('DELETE FROM todos WHERE user_id = $1', [a.userId]);
+  });
+
+  await t.test('an account converted to 55 categories by 0006 cannot create another', async () => {
+    const c = await signUpAccount('carol');
+    const tags = Array.from({ length: 55 }, (_, i) => `tag-${i + 1}`);
+    await admin.query(`
+      INSERT INTO todos (user_id, id, text, tags, created_at)
+      SELECT $1, gen_random_uuid(), 'Task ' || tag, ARRAY[tag], 1 FROM unnest($2::text[]) AS t(tag)
+    `, [c.userId, tags]);
+    // Rerun the conversion on this data through the runner.
+    await admin.query("DELETE FROM schema_migrations WHERE filename = '0006_tags_to_categories.sql'");
+    assert.deepEqual(await runMigrations({ connectionString: database.href, log: () => {} }), ['0006_tags_to_categories.sql']);
+    const { data } = await request('/api/todos', { account: c });
+    assert.deepEqual(data.categories.map(({ name }) => name).sort(), [...tags].sort());
+    const byId = new Map(data.categories.map(({ id, name }) => [id, name]));
+    for (const todo of data.todos) {
+      assert.deepEqual([todo.text, todo.tags, todo.revision], [`Task ${byId.get(todo.categoryId)}`, [], 2]);
+    }
+    assert.equal(data.todos.length, 55);
+    expectError(await create(c, randomUUID(), 'One more'), 409, 'CATEGORY_LIMIT');
+    assert.equal((await stored(c.userId)).length, 55);
+  });
+
+  await t.test('legacy tags fold into the title on create and edit, and rows written with tags read folded', async () => {
+    const tagsOf = async (id) => (await admin.query(
+      'SELECT text, tags, category_id FROM todos WHERE user_id = $1 AND id = $2', [a.userId, id],
+    )).rows[0];
+    const [plain, empty, tagged, rollout, linked] = Array.from({ length: 5 }, () => randomUUID());
+    const post = (body) => request('/api/todos', { method: 'POST', account: a, body });
+    assert.equal((await post({ id: plain, text: 'No tags field' })).data.todo.tags.length, 0);
+    assert.equal((await post({ id: empty, text: 'Empty tags', tags: [] })).status, 201);
+    const created = await post({ id: tagged, text: ' Pay rent ', tags: ['#Home', 'bills', 'home'] });
+    assert.deepEqual([created.status, created.data.todo.text, created.data.todo.tags], [201, 'Pay rent #home #bills', []]);
+    assert.deepEqual(await tagsOf(tagged), { text: 'Pay rent #home #bills', tags: [], category_id: null });
+
+    // The previous artifact can still write tags during rollout. They show in the title only.
+    const work = randomUUID();
+    assert.equal((await create(a, work, 'Work')).status, 201);
+    await admin.query(`
+      INSERT INTO todos (user_id, id, text, tags, created_at, category_id) VALUES
+        ($1, $2, 'Rollout', '{late,work}', 1, NULL), ($1, $3, 'Linked', '{x}', 2, $4)
+    `, [a.userId, rollout, linked, work]);
+    const read = await readTodo(a, rollout);
+    assert.deepEqual([read.text, read.tags, read.categoryId, read.revision], ['Rollout #late #work', [], null, 1]);
+    const list = await request('/api/todos', { account: a });
+    assert.deepEqual(list.data.todos.find((todo) => todo.id === rollout), read);
+    assert.deepEqual(list.data.categories.map(({ name }) => name), ['Work']);
+
+    // An old tab's edit that only restates its view is a no-op; any write stores the folded title.
+    const restated = await patchTodo(a, rollout, editOf(read, { text: 'Rollout', tags: ['late', 'work'] }));
+    assert.equal(restated.data.todo.revision, 1);
+    assert.deepEqual((await tagsOf(rollout)).tags, ['late', 'work']);
+    const toggled = await patchTodo(a, rollout, { action: 'complete', revision: 1, completed: true, due: null });
+    assert.deepEqual(toggled.data.todo, { ...read, completed: true, revision: 2 });
+    assert.deepEqual(await tagsOf(rollout), { text: 'Rollout #late #work', tags: [], category_id: null });
+
+    const unlinked = await remove(a, work, 1);
+    assert.deepEqual(unlinked.data.todos.map(({ text, tags, categoryId }) => ({ text, tags, categoryId })), [
+      { text: 'Linked #x', tags: [], categoryId: null },
+    ]);
+    assert.deepEqual(await stored(a.userId), []);
     await admin.query('DELETE FROM todos WHERE user_id = $1', [a.userId]);
   });
 });

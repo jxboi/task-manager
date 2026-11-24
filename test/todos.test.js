@@ -6,8 +6,6 @@ import {
   removeTodo,
   addTag,
   removeTag,
-  allTags,
-  filterByTags,
   setReminder,
   clearReminder,
   markNotified,
@@ -58,20 +56,11 @@ function makeTagged() {
 
 const ids = (todos) => todos.map((todo) => todo.id);
 
-test('addTodo without tags gives tags: []', () => {
-  const [added] = addTodo([], 'Plain');
+test('a new task starts uncategorized with no tags, and a "#word" stays in its title', () => {
+  const [added] = addTodo([], 'Plan trip #family');
+  assert.equal(added.text, 'Plan trip #family');
   assert.deepEqual(added.tags, []);
-});
-
-test('addTodo keeps tags in the given order (active filter tags first), deduped', () => {
-  const [added] = addTodo([], 'call Sam', ['urgent', 'work', 'phone', 'work']);
-  assert.deepEqual(added.tags, ['urgent', 'work', 'phone']);
-});
-
-test('addTodo normalizes tags and caps them at 10', () => {
-  const tags = ['#Work', 'WORK', '  ', ...Array.from({ length: 12 }, (_, i) => `t${i}`)];
-  const [added] = addTodo([], 'Many', tags);
-  assert.deepEqual(added.tags, ['work', 't0', 't1', 't2', 't3', 't4', 't5', 't6', 't7', 't8']);
+  assert.equal(added.categoryId, null);
 });
 
 test('addTodo trims surrounding whitespace', () => {
@@ -134,16 +123,13 @@ test('functions return new arrays and never mutate their input', () => {
   const tagged = makeTagged();
   const taggedSnapshot = structuredClone(tagged);
 
-  const withTags = addTodo(tagged, 'New', ['x']);
+  const appended = addTodo(tagged, 'New');
   const addedTag = addTag(tagged, 'c', 'health');
   const removedTag = removeTag(tagged, 'a', 'work');
-  allTags(tagged);
-  const filtered = filterByTags(tagged, ['work']);
 
-  assert.notEqual(withTags, tagged);
+  assert.notEqual(appended, tagged);
   assert.notEqual(addedTag, tagged);
   assert.notEqual(removedTag, tagged);
-  assert.notEqual(filtered, tagged);
   assert.notEqual(addedTag[2], tagged[2]);
   assert.notEqual(removedTag[0].tags, tagged[0].tags);
   assert.deepEqual(tagged, taggedSnapshot);
@@ -215,35 +201,6 @@ test('removeTag with an unknown tag or id is a no-op', () => {
   const todos = makeTagged();
   assert.equal(removeTag(todos, 'a', 'home'), todos);
   assert.equal(removeTag(todos, 'missing', 'work'), todos);
-});
-
-test('allTags lists tags in use A to Z with counts', () => {
-  assert.deepEqual(allTags(makeTagged()), [
-    { tag: 'blocked', count: 1 },
-    { tag: 'dev', count: 1 },
-    { tag: 'home', count: 1 },
-    { tag: 'work', count: 2 },
-  ]);
-});
-
-test('allTags omits tags no todo uses any more', () => {
-  const todos = removeTag(removeTag(makeTagged(), 'a', 'work'), 'b', 'work');
-  assert.deepEqual(allTags(todos).map(({ tag }) => tag), ['blocked', 'dev', 'home']);
-  assert.deepEqual(allTags([]), []);
-});
-
-test('filterByTags with no active tags returns every todo', () => {
-  const todos = makeTagged();
-  assert.deepEqual(filterByTags(todos, []), todos);
-});
-
-test('filterByTags with one tag returns the todos carrying it', () => {
-  assert.deepEqual(ids(filterByTags(makeTagged(), ['work'])), ['a', 'b']);
-});
-
-test('filterByTags with two tags returns todos with either (OR), each once, in order', () => {
-  assert.deepEqual(ids(filterByTags(makeTagged(), ['home', 'work'])), ['a', 'b', 'c']);
-  assert.deepEqual(ids(filterByTags(makeTagged(), ['blocked', 'work'])), ['a', 'b']);
 });
 
 // Reminders. Instants are plain numbers here; local wall-clock math is covered in reminders.test.js.
@@ -379,12 +336,6 @@ test('sortByUrgency with nothing overdue keeps the order; empty stays empty', ()
   assert.deepEqual(ids(sortByUrgency(todos, NOW - 10 * DAY)), ids(todos));
   assert.deepEqual(sortByUrgency([], NOW), []);
   assert.deepEqual(ids(sortByUrgency(makeTodos(), NOW)), ['a', 'b', 'c']);
-});
-
-test('sortByUrgency after filterByTags keeps only the filtered todos, overdue first', () => {
-  const todos = makeReminders();
-  assert.deepEqual(ids(sortByUrgency(filterByTags(todos, ['work']), NOW)), ['old', 'later', 'done']);
-  assert.deepEqual(ids(sortByUrgency(filterByTags(todos, ['home']), NOW)), ['daily', 'newer', 'none']);
 });
 
 test('toggleTodo keeps a daily todo checked while scheduling tomorrow', () => {
