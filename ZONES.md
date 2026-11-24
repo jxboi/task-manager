@@ -73,6 +73,10 @@ Unlisted files are Red until a row is added.
 
 ### Rules that apply to every PR
 
+- A **one-way door** is hard or impossible to reverse, such as a destructive or data-rewriting migration, deleting or rewriting user data, or an API or contract change clients rely on. Changes that meet the user-data check under "Always goes to Jia" count as one-way doors.
+- A **two-way door** is undone by a plain revert or redeploy.
+- One-way doors never auto-merge; they go to Jia, whatever the file tiers.
+- Every PR description carries a door bullet in its Risk + Blast radius block.
 - A PR takes its strictest file's tier.
 - Unlisted files are Red until a row is added.
 - A test file changed with its source takes the strictest tier. A PR that deletes or weakens an assertion for a Gated or Red file goes to Jia.
