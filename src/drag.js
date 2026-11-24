@@ -1,7 +1,7 @@
 // Drag-to-reorder without the DOM. The page measures the rows that can be reordered (the visible,
 // non-overdue rows: overdue tasks stay on top by due time), feeds in pointer positions and asks
 // where the row will land. Every move is expressed as sync.move()'s (anchorId, side) on a visible
-// row, so rows hidden by a tag filter keep their order.
+// row, so rows hidden by a category filter keep their order.
 
 // `rows`: [{ id, top, height }] in display order, page coordinates, contiguous. `id`: the row
 // being dragged. `y`: the pointer's page Y when the drag started.

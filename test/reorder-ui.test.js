@@ -1,5 +1,5 @@
 // The drag handle in src/app.js, run against the fake API: its name, keyboard reorder with the
-// announcement, a pointer drag (lifted row, sliding rows, the gap, drop and cancel), the tag filter
+// announcement, a pointer drag (lifted row, sliding rows, the gap, drop and cancel), the category filter
 // and new tasks. The drag math itself is in drag.test.js.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -37,11 +37,11 @@ test('drag handle reorder', async (t) => {
   const server = createFakeApi();
   server.rows = [
     // Overdue (and already alerted): on top by due time, with no handle.
-    { ...base, id: ids.late, text: 'Late', tags: [], createdAt: 5, due, notified: due },
-    { ...base, id: ids.alpha, text: 'Alpha', tags: [], createdAt: 1 },
-    { ...base, id: ids.bravo, text: 'Bravo', tags: ['work'], createdAt: 2 },
-    { ...base, id: ids.charlie, text: 'Charlie', tags: [], createdAt: 3 },
-    { ...base, id: ids.delta, text: 'Delta', tags: ['work'], createdAt: 4 },
+    { ...base, id: ids.late, text: 'Late', category: null, createdAt: 5, due, notified: due },
+    { ...base, id: ids.alpha, text: 'Alpha', category: null, createdAt: 1 },
+    { ...base, id: ids.bravo, text: 'Bravo', category: 'work', createdAt: 2 },
+    { ...base, id: ids.charlie, text: 'Charlie', category: null, createdAt: 3 },
+    { ...base, id: ids.delta, text: 'Delta', category: 'work', createdAt: 4 },
   ];
   await import('../src/app.js');
   window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: server.session } }));
@@ -209,11 +209,11 @@ test('drag handle reorder', async (t) => {
     assert.equal(moves().length, sent);
   });
 
-  await t.test('with a tag filter on, moves are among the visible tasks; hidden ones keep their order', async () => {
-    const chip = byId('filter-bar').children.find((item) => item.dataset.tag === 'work');
+  await t.test('with a category selected, moves are among the visible tasks; hidden ones keep their order', async () => {
+    const chip = byId('filter-bar').children.find((item) => item.dataset.category === 'work');
     chip.click();
     assert.deepEqual(shown(), ['bravo', 'delta']);
-    assert.equal(byId('app-title').textContent, 'work', 'one tag on: the title names the shelf');
+    assert.equal(byId('app-title').textContent, 'work', 'a category on: the title names the shelf');
     assert.ok(byId('app-header').dataset.color !== undefined, 'and the header takes its color');
     const hiddenBefore = serverOrder().filter((name) => !['bravo', 'delta'].includes(name));
     press(handle('bravo'), 'ArrowDown');

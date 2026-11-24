@@ -1,6 +1,6 @@
 import { isCompleted, isOverdue, normalizeReminder, REPEATS } from '../src/reminders.js';
-import { MAX_TAGS, normalizeTag, normalizeTags } from '../src/tags.js';
-import { addTag, clearReminder, editTodo, markNotified, removeTag, setReminder, validText } from '../src/todos.js';
+import { normalizeCategory } from '../src/categories.js';
+import { clearReminder, editTodo, markNotified, setReminder, validText } from '../src/todos.js';
 import { invalid, RequestError } from './http.js';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -29,28 +29,42 @@ export function readMove(body, id) {
   return { anchorId, side: body.side };
 }
 
-function readTag(raw) {
-  const tag = normalizeTag(raw);
-  if (tag === null || tag.includes('\0')) throw invalid('Provide a valid tag.');
-  return tag;
+// A category, or null for none.
+function readCategory(value) {
+  if (value === null) return null;
+  const category = normalizeCategory(value);
+  if (category === null) throw invalid('Provide a valid category.');
+  return category;
+}
+
+// Before categories a task had a list of tags. A tab still running that version sends `tags`;
+// the first one becomes the category, and the rest are dropped.
+function readLegacyTags(value) {
+  if (!Array.isArray(value) || value.length > 10) throw invalid('Provide a list of tags.');
+  const [first = null] = value.map(readCategory);
+  return first;
+}
+
+// The category a create or edit body gives: `category`, or the legacy `tags`, never both.
+// A create may leave both out (no category); an edit, which sends the whole state, may not.
+function readBodyCategory(body, required = false) {
+  if ('category' in body && 'tags' in body) throw invalid('Send a category or tags, not both.');
+  if ('category' in body) return readCategory(body.category);
+  if ('tags' in body) return readLegacyTags(body.tags);
+  if (required) throw invalid('Provide a category.');
+  return null;
 }
 
 export function createInput(body) {
-  checkFields(body, ['id', 'text', 'tags']);
+  checkFields(body, ['id', 'text', 'category', 'tags']);
   const id = readId(body.id);
-  return { id, text: readText(body.text), tags: readTags(body.tags) };
+  return { id, text: readText(body.text), category: readBodyCategory(body) };
 }
 
-// Create and edit share these, so a title or tag list one accepts the other does too.
+// Create and edit share this, so a title one accepts the other does too.
 function readText(value) {
   if (!validText(value)) throw invalid('Enter a title of 1 to 2,000 characters.');
   return value.trim();
-}
-
-function readTags(value) {
-  if (!Array.isArray(value)) throw invalid('Provide a list of tags.');
-  if (new Set(value.map(readTag)).size > MAX_TAGS) throw invalid('Use at most 10 tags.');
-  return normalizeTags(value);
 }
 
 function readDue(value) {
@@ -78,17 +92,17 @@ export function patchTodo(todo, body) {
   const base = ['action', 'revision'];
 
   switch (body.action) {
+    // Legacy tag actions from a tab still running the tags version: adding a tag sets the
+    // category; removing the category's tag clears it.
     case 'addTag': {
       checkFields(body, [...base, 'tag']);
-      const tag = readTag(body.tag);
-      if (!todo.tags.includes(tag) && todo.tags.length >= MAX_TAGS) {
-        throw invalid('Use at most 10 tags.');
-      }
-      return addTag(items, id, tag)[0];
+      const category = readCategory(body.tag);
+      return category === todo.category ? todo : { ...todo, category };
     }
-    case 'removeTag':
+    case 'removeTag': {
       checkFields(body, [...base, 'tag']);
-      return removeTag(items, id, readTag(body.tag))[0];
+      return readCategory(body.tag) === todo.category ? { ...todo, category: null } : todo;
+    }
     case 'setReminder': {
       checkFields(body, [...base, 'due', 'repeat']);
       const due = readDue(body.due);
@@ -97,15 +111,15 @@ export function patchTodo(todo, body) {
       return setReminder(items, id, due, body.repeat)[0];
     }
     case 'edit': {
-      // The whole editable state at once: title, tags and reminder (`due` null for none).
-      checkFields(body, [...base, 'text', 'tags', 'due', 'repeat']);
+      // The whole editable state at once: title, category and reminder (`due` null for none).
+      checkFields(body, [...base, 'text', 'category', 'tags', 'due', 'repeat']);
       const text = readText(body.text);
-      const tags = readTags(body.tags);
+      const category = readBodyCategory(body, true);
       const due = body.due === null ? null : readDue(body.due);
       if (!REPEATS.includes(body.repeat) || (due === null && body.repeat !== 'none')) {
         throw invalid('Provide a valid repeat setting.');
       }
-      return editTodo(items, id, { text, tags, due, repeat: body.repeat })[0];
+      return editTodo(items, id, { text, category, due, repeat: body.repeat })[0];
     }
     case 'clearReminder':
       checkFields(body, base);

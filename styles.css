@@ -1,5 +1,5 @@
-/* Tasks: "Shelves". Light only. Ink is black; each tag is a shelf with its own pastel, and a task's
-   card takes its first tag's color. Bricolage Grotesque throughout. 4px grid. Designed at 390×844,
+/* Tasks: "Shelves". Light only. Ink is black; each category is a shelf with its own pastel, and a
+   task's card takes its category's color. Bricolage Grotesque throughout. 4px grid. Designed at 390×844,
    works down to 375. The Shelves overrides are collected at the end of this file. */
 
 :root {
@@ -30,7 +30,7 @@
 }
 
 /* Tag colors. --dot: the small decorative dot (the "#name" carries the meaning). --shelf: the
-   pastel a tag's filter tab, its tasks' cards and the task sheet are filled with. Text on every
+   pastel a category's tab, its tasks' cards and the task sheet are filled with. Text on every
    --shelf is --text (#111), well above 4.5:1. */
 [data-color="0"] { --dot: #b4472c; --shelf: #ffd9cc; }
 [data-color="1"] { --dot: #a86a12; --shelf: #ffe2b3; }
@@ -784,7 +784,7 @@ p {
   gap: 4px;
 }
 
-/* A ticked row's stamp flows into the meta line, so "Daily" and the tags can share a line. */
+/* A ticked row's stamp flows into the meta line, so "Daily" and the category can share a line. */
 .todo.is-ticked .stamp {
   display: contents;
 }
@@ -799,12 +799,12 @@ p {
 
 .todo.is-done .stamp,
 .todo.is-done .stamp .icon,
-.todo.is-done .tag {
+.todo.is-done .category {
   color: var(--text-3);
 }
 
 /* Tags: #name with a 6px dot on a raised chip. */
-.tag {
+.category {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -819,7 +819,7 @@ p {
   white-space: nowrap;
 }
 
-.tag::before {
+.category::before {
   content: "";
   flex: none;
   width: 6px;
@@ -828,7 +828,7 @@ p {
   background: var(--dot, var(--text-3));
 }
 
-.tag-label {
+.category-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1245,42 +1245,7 @@ p {
   border-color: var(--over);
 }
 
-.edit-tags-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
-.edit-tags {
-  display: contents;
-}
-
-.edit-tags .tag {
-  height: 32px;
-  padding: 0 0 0 10px;
-}
-
-.tag-remove {
-  /* A 44x44 hit area that lays out as the old 28x32 slot: negative margins absorb the extra. */
-  position: relative;
-  display: grid;
-  place-items: center;
-  width: 44px;
-  height: 44px;
-  margin: -6px -8px;
-  padding: 0;
-  border: 0;
-  border-radius: 6px;
-  background: none;
-  color: var(--text-2);
-}
-
-.tag-remove:focus-visible {
-  outline-offset: -8px;
-}
-
-.tag-add {
+.category-add {
   height: 32px;
   min-height: 32px;
   color: var(--text-2);
@@ -1288,13 +1253,13 @@ p {
   position: relative;
 }
 
-.tag-add::after {
+.category-add::after {
   content: "";
   position: absolute;
   inset: -6px 0;
 }
 
-.tag-field {
+.category-field {
   width: 140px;
   height: 32px;
   padding: 0 10px;
@@ -1304,7 +1269,7 @@ p {
   font-size: 16px;
 }
 
-.tag-field[aria-invalid="true"] {
+.category-field[aria-invalid="true"] {
   border-color: var(--over);
 }
 
@@ -1959,8 +1924,8 @@ p {
 }
 
 /* --- Shelves ---------------------------------------------------------------------------------
-   The Shelves visual direction, over the layout above: a big heavy title, tag tabs filled with
-   each tag's pastel, tasks as rounded cards in their first tag's color, a black "New task" pill
+   The Shelves visual direction, over the layout above: a big heavy title, category tabs filled
+   with each category's pastel, tasks as rounded cards in their category's color, a black "New task" pill
    at the bottom right, and a task sheet tinted like the task's card. */
 
 body {
@@ -2056,7 +2021,7 @@ body {
   font-weight: 600;
 }
 
-/* Tag tabs: 40px pills in the tag's pastel; the selected ones go black. All is outlined. */
+/* Category tabs: 40px pills in the category's pastel; the selected one goes black. All is outlined. */
 .filter-chip {
   height: 40px;
   padding: 0 14px;
@@ -2157,7 +2122,7 @@ body {
 }
 
 .stamp,
-.tag {
+.category {
   color: var(--text);
 }
 
@@ -2171,8 +2136,8 @@ body {
   color: var(--text);
 }
 
-/* On a colored card the tag chip is a white pill. */
-.tag {
+/* On a colored card the category chip is a white pill. */
+.category {
   height: 26px;
   padding: 0 10px;
   border-radius: 13px;
@@ -2319,7 +2284,7 @@ body {
   line-height: 22px;
 }
 
-/* Task sheet: rounder, tinted with the task's first tag's shelf color. */
+/* Task sheet: rounder, tinted with the task's category color. */
 .reminder-editor {
   border-radius: 30px 30px 0 0;
   background: var(--shelf, var(--surface));
@@ -2367,11 +2332,7 @@ body {
   background: var(--surface);
 }
 
-.edit-tags .tag {
-  background: var(--surface);
-}
-
-.tag-add {
+.category-add {
   min-height: 40px;
   padding: 0 14px;
   border: 1.5px dashed var(--ink);
@@ -2517,7 +2478,7 @@ body {
 
 /* --- Shelves: full-screen edit -----------------------------------------------------------------
    On a phone the sheet fills the visual viewport (above the keyboard, via src/viewport.js), the
-   title reads as a heading, other tags are one tap away and Repeat is three tiles. */
+   title reads as a heading, the category is one tap and Repeat is three tiles. */
 @media (max-width: 639px) {
   .reminder-editor {
     height: calc(var(--vvh, 100dvh) - var(--sheet-gutter) / 2);
@@ -2532,36 +2493,6 @@ body {
   line-height: 32px;
   font-weight: 800;
   letter-spacing: -0.02em;
-}
-
-.tag-suggestions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.tag-suggestion {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 40px;
-  padding: 0 14px;
-  border: 0;
-  border-radius: 20px;
-  background: rgb(255 255 255 / 0.55);
-  color: var(--text);
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.tag-suggestion::before {
-  content: "+";
-  font-weight: 400;
-}
-
-.tag-suggestion:active {
-  transform: scale(0.97);
 }
 
 .repeat-row {
@@ -2597,4 +2528,63 @@ body {
 
 .repeat-tile:active {
   transform: scale(0.97);
+}
+
+/* The sheet's category picker: None and every category as pills, one pressed (black). */
+.category-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.category-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1.5px solid transparent;
+  border-radius: 20px;
+  background: rgb(255 255 255 / 0.6);
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.category-choice[data-color]::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dot);
+}
+
+.category-choice[aria-pressed="true"] {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fff;
+}
+
+.category-choice[aria-pressed="true"]::before {
+  background: #fff;
+}
+
+.category-choice:active {
+  transform: scale(0.97);
+}
+
+.category-new {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.category-field {
+  width: 200px;
+  height: 40px;
+  padding: 0 14px;
+  border: 1.5px solid var(--ink);
+  border-radius: 20px;
+  font-weight: 600;
 }
