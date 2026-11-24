@@ -3,11 +3,22 @@ import { MAX_TAGS, normalizeTag, normalizeTags } from '../src/tags.js';
 import { addTag, clearReminder, editTodo, markNotified, removeTag, setReminder, validText } from '../src/todos.js';
 import { invalid, RequestError } from './http.js';
 
-const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function readId(value) {
   if (typeof value !== 'string' || !uuid.test(value)) throw invalid('Provide a valid todo ID.');
   return value.toLowerCase();
+}
+
+export function readCategoryId(value) {
+  if (typeof value !== 'string' || !uuid.test(value)) throw invalid('Provide a valid category ID.');
+  return value.toLowerCase();
+}
+
+// An edit's optional category: undefined when omitted (keep the link), null to clear, else the ID.
+function readEditCategory(body) {
+  if (body.action !== 'edit' || !Object.hasOwn(body, 'categoryId')) return undefined;
+  return body.categoryId === null ? null : readCategoryId(body.categoryId);
 }
 
 export function readRevision(value) {
@@ -72,6 +83,20 @@ function complete(todo, { completed, due, completedUntil = null }) {
   throw invalid('Invalid completion or reminder change.');
 }
 
+// The whole editable state at once: title, tags, reminder (`due` null for none) and,
+// optionally, the category. Omitting `categoryId` keeps the current link. Validates everything
+// without touching the database, so callers can reject a bad edit before taking any lock.
+export function readEdit(body) {
+  checkFields(body, ['action', 'revision', 'text', 'tags', 'due', 'repeat', 'categoryId']);
+  const text = readText(body.text);
+  const tags = readTags(body.tags);
+  const due = body.due === null ? null : readDue(body.due);
+  if (!REPEATS.includes(body.repeat) || (due === null && body.repeat !== 'none')) {
+    throw invalid('Provide a valid repeat setting.');
+  }
+  return { text, tags, due, repeat: body.repeat, categoryId: readEditCategory(body) };
+}
+
 export function patchTodo(todo, body) {
   const items = [todo];
   const id = todo.id;
@@ -97,15 +122,9 @@ export function patchTodo(todo, body) {
       return setReminder(items, id, due, body.repeat)[0];
     }
     case 'edit': {
-      // The whole editable state at once: title, tags and reminder (`due` null for none).
-      checkFields(body, [...base, 'text', 'tags', 'due', 'repeat']);
-      const text = readText(body.text);
-      const tags = readTags(body.tags);
-      const due = body.due === null ? null : readDue(body.due);
-      if (!REPEATS.includes(body.repeat) || (due === null && body.repeat !== 'none')) {
-        throw invalid('Provide a valid repeat setting.');
-      }
-      return editTodo(items, id, { text, tags, due, repeat: body.repeat })[0];
+      const { categoryId, ...fields } = readEdit(body);
+      const edited = editTodo(items, id, fields)[0];
+      return categoryId === undefined || categoryId === todo.categoryId ? edited : { ...edited, categoryId };
     }
     case 'clearReminder':
       checkFields(body, base);

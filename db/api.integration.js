@@ -215,8 +215,11 @@ test('auth and todo API against PostgreSQL', {
     assert.deepEqual(list.data.todos.map(({ id }) => id), [anchor, assigned, created]);
     assert.deepEqual(list.data.todos[1], completed);
     assert.deepEqual(Object.keys(completed).sort(), [
-      'completed', 'completedUntil', 'createdAt', 'due', 'id', 'notified', 'position', 'repeat', 'revision', 'tags', 'text',
+      'categoryId', 'completed', 'completedUntil', 'createdAt', 'due', 'id', 'notified', 'position', 'repeat', 'revision', 'tags',
+      'text',
     ]);
+    assert.equal(completed.categoryId, category);
+    assert.deepEqual(list.data.categories, [{ id: category, name: 'work', revision: 1 }]);
     assert.equal((await remove(account, assigned, completed.revision)).status, 204);
     assert.deepEqual(await links(assigned), []);
     assert.equal((await admin.query('SELECT 1 FROM categories WHERE user_id = $1 AND id = $2', [userId, category])).rowCount, 1);

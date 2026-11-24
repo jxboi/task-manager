@@ -5,6 +5,7 @@ import { pipeline } from 'node:stream/promises';
 import signIn from '../api/auth/sign-in/email.js';
 import signOut from '../api/auth/sign-out.js';
 import signUp from '../api/auth/sign-up/email.js';
+import categories from '../api/categories.js';
 import session from '../api/session.js';
 import todos from '../api/todos.js';
 
@@ -19,6 +20,7 @@ const handlers = new Map([
   ['/api/auth/sign-in/email', signIn],
   ['/api/auth/sign-out', signOut],
   ['/api/auth/sign-up/email', signUp],
+  ['/api/categories', categories],
   ['/api/session', session],
   ['/api/todos', todos],
 ]);

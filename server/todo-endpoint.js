@@ -1,12 +1,13 @@
 import { checkMutation, endpoint, invalid, json, readObject, RequestError, requireSession } from './http.js';
-import { createInput, patchTodo, readId, readMove, readRevision } from './todo-input.js';
+import { createInput, patchTodo, readEdit, readId, readMove, readRevision } from './todo-input.js';
+import { transaction } from './transaction.js';
 import { moveTodo } from '../src/todos.js';
 
 const position = 'COALESCE(position, todo_initial_position(created_at, id)) COLLATE "C"';
-const columns = `id, text, completed, completed_until AS "completedUntil", created_at AS "createdAt",
-  tags, due, repeat, notified, revision, ${position} AS position`;
+export const columns = `id, text, completed, completed_until AS "completedUntil", created_at AS "createdAt",
+  tags, due, repeat, notified, revision, ${position} AS position, category_id AS "categoryId"`;
 
-function toTodo(row) {
+export function toTodo(row) {
   return {
     ...row,
     completedUntil: row.completedUntil === null ? null : Number(row.completedUntil),
@@ -18,6 +19,11 @@ function toTodo(row) {
 
 function notFound() {
   return new RequestError(404, 'NOT_FOUND', 'Todo not found.');
+}
+
+// Missing and foreign categories look the same.
+function categoryNotFound() {
+  return new RequestError(404, 'CATEGORY_NOT_FOUND', 'Category not found.');
 }
 
 function stale() {
@@ -37,6 +43,17 @@ async function listTodos(pool, userId) {
     `SELECT ${columns} FROM todos WHERE user_id = $1 ORDER BY position, created_at, id`, [userId],
   );
   return rows.map(toTodo);
+}
+
+// Todos and categories from one snapshot, so every link points into the returned catalog.
+function readSnapshot(pool, userId) {
+  return transaction(pool, async (client) => {
+    const todos = await listTodos(client, userId);
+    const { rows: categories } = await client.query(
+      'SELECT id, name, revision FROM categories WHERE user_id = $1 ORDER BY lower(name), id', [userId],
+    );
+    return { todos, categories };
+  }, 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
 }
 
 async function createTodo(pool, userId, { id, text, tags }) {
@@ -60,6 +77,23 @@ async function createTodo(pool, userId, { id, text, tags }) {
 
 async function updateTodo(pool, userId, id, body) {
   const revision = readRevision(body.revision);
+  // Reject a malformed edit before touching the category, so it never reads as a 404.
+  const categoryId = body.action === 'edit' ? readEdit(body).categoryId : undefined;
+  if (!categoryId) return writeTodo(pool, userId, id, revision, body);
+  // Key-share the category before the todo's write lock: a concurrent category delete either
+  // waits for this edit (and then unlinks it) or finishes first and this edit sees no category.
+  return transaction(pool, async (client) => {
+    const { rowCount } = await client.query(
+      'SELECT 1 FROM categories WHERE user_id = $1 AND id = $2 FOR KEY SHARE', [userId, categoryId],
+    );
+    if (!rowCount) throw categoryNotFound();
+    return writeTodo(client, userId, id, revision, body);
+  }).catch((error) => {
+    throw error.code === '23503' && error.constraint === 'todos_category_fk' ? categoryNotFound() : error;
+  });
+}
+
+async function writeTodo(pool, userId, id, revision, body) {
   const move = body.action === 'move' ? readMove(body, id) : null;
   const todos = move ? await listTodos(pool, userId) : null;
   const todo = todos ? todos.find((item) => item.id === id) : await findTodo(pool, userId, id);
@@ -74,14 +108,18 @@ async function updateTodo(pool, userId, id, body) {
   }
   if (changed === todo) return json({ todo });
 
+  // The link is written only when it changed, so edits that omit it never touch it.
+  const values = [userId, id, revision, changed.completed, changed.tags, changed.due, changed.repeat,
+    changed.notified, changed.text, changed.completedUntil, changed.position];
+  const relink = changed.categoryId !== todo.categoryId;
+  if (relink) values.push(changed.categoryId);
   const { rows: [row] } = await pool.query(
     `UPDATE todos SET completed = $4, tags = $5, due = $6, repeat = $7, notified = $8,
-       text = $9, completed_until = $10, position = $11,
+       text = $9, completed_until = $10, position = $11, ${relink ? 'category_id = $12,' : ''}
        revision = revision + 1
      WHERE user_id = $1 AND id = $2 AND revision = $3
      RETURNING ${columns}`,
-    [userId, id, revision, changed.completed, changed.tags, changed.due, changed.repeat,
-      changed.notified, changed.text, changed.completedUntil, changed.position],
+    values,
   );
   if (!row) {
     await findTodo(pool, userId, id);
@@ -116,7 +154,7 @@ export const todosEndpoint = endpoint(['GET', 'POST', 'PATCH', 'DELETE'], async 
   const query = new URL(request.url).searchParams;
   if (method === 'POST') return createTodo(pool, userId, createInput(await readObject(request)));
   if (method === 'GET' && !query.has('id')) {
-    return json({ todos: await listTodos(pool, userId) });
+    return json(await readSnapshot(pool, userId));
   }
 
   const id = readId(query.get('id'));
