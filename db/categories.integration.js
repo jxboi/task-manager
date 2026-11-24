@@ -44,6 +44,15 @@ const create = (account, id, name, options) => request('/api/categories', {
 const rename = (account, id, body, options) => request(`/api/categories?id=${id}`, {
   method: 'PATCH', account, body, ...options,
 });
+const addTodo = (account, id, text = 'Task') => request('/api/todos', {
+  method: 'POST', account, body: { id, text, tags: [] },
+});
+const patchTodo = (account, id, body) => request(`/api/todos?id=${id}`, { method: 'PATCH', account, body });
+const readTodo = async (account, id) => (await request(`/api/todos?id=${id}`, { account })).data.todo;
+const editOf = (todo, changes) => ({
+  action: 'edit', revision: todo.revision, text: todo.text, tags: todo.tags, due: todo.due, repeat: todo.repeat,
+  ...changes,
+});
 const remove = (account, id, revision, options) => request(`/api/categories?id=${id}&revision=${revision}`, {
   method: 'DELETE', account, ...options,
 });
@@ -304,9 +313,11 @@ test('categories API against PostgreSQL', {
     const after = byId(await snapshot(a));
     for (const id of [linked1, linked2]) {
       const old = before.find((todo) => todo.id === id);
-      assert.deepEqual(returned[id], { ...old, revision: old.revision + 1 });
+      assert.equal(old.categoryId, work);
+      assert.deepEqual(returned[id], { ...old, categoryId: null, revision: old.revision + 1 });
       assert.deepEqual(returned[id], after[id], 'returned todos match the todo API shape');
     }
+    assert.equal(after[onHome].categoryId, home);
     assert.deepEqual(after[onHome], before.find((todo) => todo.id === onHome));
     assert.deepEqual(after[loose], before.find((todo) => todo.id === loose));
     assert.deepEqual(await snapshot(b), bBefore);
@@ -315,5 +326,191 @@ test('categories API against PostgreSQL', {
     )));
     assert.deepEqual((await stored(a.userId)).map((row) => row.id), [home]);
     assert.deepEqual((await stored(b.userId)).map((row) => row.id), [bWork]);
+    await admin.query('DELETE FROM todos WHERE user_id = ANY($1)', [[a.userId, b.userId]]);
+    await admin.query('DELETE FROM categories WHERE user_id = ANY($1)', [[a.userId, b.userId]]);
+  });
+
+  const link = async (userId, id) => (await admin.query(
+    'SELECT category_id, revision FROM todos WHERE user_id = $1 AND id = $2', [userId, id],
+  )).rows[0];
+
+  await t.test('the snapshot lists only the caller\'s categories, sorted, with each todo\'s categoryId', async () => {
+    const [beta, alpha, gamma, bobs] = Array.from({ length: 4 }, () => randomUUID());
+    for (const [account, id, name] of [[a, beta, 'beta'], [a, alpha, 'Alpha'], [a, gamma, 'gamma'], [b, bobs, 'Bob only']]) {
+      assert.equal((await create(account, id, name)).status, 201);
+    }
+    const [first, second] = [randomUUID(), randomUUID()];
+    const created = await addTodo(a, first, 'First');
+    assert.equal(created.status, 201);
+    assert.equal(created.data.todo.categoryId, null, 'new todos start uncategorized');
+    assert.equal((await addTodo(a, second, 'Second')).status, 201);
+    const assigned = await patchTodo(a, second, editOf(await readTodo(a, second), { categoryId: gamma }));
+    assert.equal(assigned.status, 200, JSON.stringify(assigned.data));
+
+    const list = await request('/api/todos', { account: a });
+    assert.equal(list.status, 200);
+    assert.deepEqual(Object.keys(list.data).sort(), ['categories', 'todos']);
+    assert.deepEqual(list.data.categories, [
+      { id: alpha, name: 'Alpha', revision: 1 }, { id: beta, name: 'beta', revision: 1 },
+      { id: gamma, name: 'gamma', revision: 1 },
+    ]);
+    assert.deepEqual(list.data.todos.map(({ id, categoryId }) => [id, categoryId]), [[first, null], [second, gamma]]);
+    assert.deepEqual(list.data.todos[1], assigned.data.todo);
+    const bobList = await request('/api/todos', { account: b });
+    assert.deepEqual(bobList.data, { todos: [], categories: [{ id: bobs, name: 'Bob only', revision: 1 }] });
+    await admin.query('DELETE FROM todos WHERE user_id = $1', [a.userId]);
+    await admin.query('DELETE FROM categories WHERE user_id = ANY($1)', [[a.userId, b.userId]]);
+  });
+
+  await t.test('edit assigns, reassigns and clears a category, checking revision and ownership', async () => {
+    const [work, home, bobs] = [randomUUID(), randomUUID(), randomUUID()];
+    assert.equal((await create(a, work, 'Work')).status, 201);
+    assert.equal((await create(a, home, 'Home')).status, 201);
+    assert.equal((await create(b, bobs, 'Bob')).status, 201);
+    const id = randomUUID();
+    let todo = (await addTodo(a, id, 'Plan')).data.todo;
+    const step = async (changes, categoryId) => {
+      const response = await patchTodo(a, id, editOf(todo, changes));
+      assert.equal(response.status, 200, JSON.stringify(response.data));
+      assert.deepEqual(response.data.todo, { ...todo, ...changes, categoryId, revision: todo.revision + 1 });
+      assert.deepEqual(await readTodo(a, id), response.data.todo);
+      assert.deepEqual(await link(a.userId, id), { category_id: categoryId, revision: todo.revision + 1 });
+      todo = response.data.todo;
+    };
+    await step({ categoryId: work.toUpperCase() }, work);
+    await step({ categoryId: home }, home);
+    // An old client's edit (no categoryId) keeps the link.
+    await step({ text: 'Plan the week', tags: ['ops'] }, home);
+    await step({ categoryId: null }, null);
+    await step({ categoryId: work }, work);
+
+    // Same category, same fields: a no-op that still checks the revision.
+    assert.deepEqual((await patchTodo(a, id, editOf(todo, { categoryId: work }))).data.todo, todo);
+    expectError(await patchTodo(a, id, editOf(todo, { categoryId: home, revision: todo.revision - 1 })), 409, 'REVISION_CONFLICT');
+    expectError(await patchTodo(a, id, editOf(todo, { categoryId: work, revision: todo.revision - 1 })), 409, 'REVISION_CONFLICT');
+    expectError(await patchTodo(a, id, editOf(todo, { categoryId: null, revision: todo.revision + 1 })), 409, 'REVISION_CONFLICT');
+
+    const foreign = await patchTodo(a, id, editOf(todo, { categoryId: bobs }));
+    expectError(foreign, 404, 'CATEGORY_NOT_FOUND');
+    const missing = await patchTodo(a, id, editOf(todo, { categoryId: randomUUID() }));
+    assert.deepEqual(missing.data, foreign.data, 'foreign and missing categories look the same');
+    expectError(await patchTodo(b, id, editOf(todo, { categoryId: bobs })), 404, 'NOT_FOUND');
+    assert.equal((await remove(a, home, 1)).status, 200);
+    expectError(await patchTodo(a, id, editOf(todo, { categoryId: home })), 404, 'CATEGORY_NOT_FOUND');
+    for (const categoryId of ['', 'work', 7, true, {}, [work], `${work}0`]) {
+      expectError(await patchTodo(a, id, editOf(todo, { categoryId })), 400, 'INVALID_INPUT');
+    }
+    assert.deepEqual(await readTodo(a, id), todo);
+    assert.deepEqual(await link(a.userId, id), { category_id: work, revision: todo.revision });
+    await admin.query('DELETE FROM todos WHERE user_id = $1', [a.userId]);
+    await admin.query('DELETE FROM categories WHERE user_id = ANY($1)', [[a.userId, b.userId]]);
+  });
+
+  await t.test('other actions keep the link and reject categoryId', async () => {
+    const work = randomUUID();
+    assert.equal((await create(a, work, 'Work')).status, 201);
+    const [id, anchor] = [randomUUID(), randomUUID()];
+    assert.equal((await addTodo(a, anchor, 'Anchor')).status, 201);
+    let todo = (await addTodo(a, id, 'Linked')).data.todo;
+    todo = (await patchTodo(a, id, editOf(todo, { categoryId: work }))).data.todo;
+    const due = Date.now() - 10_000;
+    for (const body of [
+      { action: 'setReminder', due, repeat: 'none' },
+      { action: 'markNotified', due },
+      { action: 'complete', completed: true, due },
+      { action: 'move', anchorId: anchor, side: 'before' },
+      { action: 'addTag', tag: 'x' },
+      { action: 'removeTag', tag: 'x' },
+      { action: 'clearReminder' },
+    ]) {
+      for (const categoryId of [null, work]) {
+        expectError(await patchTodo(a, id, { ...body, revision: todo.revision, categoryId }), 400, 'INVALID_INPUT');
+      }
+      const response = await patchTodo(a, id, { ...body, revision: todo.revision });
+      assert.equal(response.status, 200, `${body.action}: ${JSON.stringify(response.data)}`);
+      assert.equal(response.data.todo.revision, todo.revision + 1, body.action);
+      assert.equal(response.data.todo.categoryId, work, body.action);
+      todo = response.data.todo;
+    }
+    assert.equal(todo.completed, true);
+    assert.deepEqual(await link(a.userId, id), { category_id: work, revision: todo.revision });
+    await admin.query('DELETE FROM todos WHERE user_id = $1', [a.userId]);
+    await admin.query('DELETE FROM categories WHERE user_id = $1', [a.userId]);
+  });
+
+  // Holds a todo row lock in its own transaction so the two API calls interleave in a known order.
+  async function interleave(lockedTodo, firstCall, secondCall) {
+    const blocker = new pg.Client({ connectionString: database.href });
+    await blocker.connect();
+    try {
+      await blocker.query('BEGIN');
+      await blocker.query('SELECT 1 FROM todos WHERE user_id = $1 AND id = $2 FOR UPDATE', [a.userId, lockedTodo]);
+      const { rows: [{ pid }] } = await blocker.query('SELECT pg_backend_pid() AS pid');
+      // Depth of the wait chain rooted at the blocker: 1 when the first call waits on it, 2 when
+      // the second call waits on the first.
+      const depth = async () => (await admin.query(
+        `WITH RECURSIVE chain(pid, depth) AS (
+           SELECT $1::int, 0
+           UNION SELECT activity.pid, chain.depth + 1 FROM pg_stat_activity activity
+             JOIN chain ON chain.pid = ANY(pg_blocking_pids(activity.pid)))
+         SELECT max(depth) AS depth FROM chain`, [pid],
+      )).rows[0].depth;
+      const waitFor = async (target) => {
+        for (let tries = 0; await depth() < target; tries++) {
+          assert.ok(tries < 500, `wait chain never reached depth ${target}`);
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+      };
+      const first = firstCall();
+      await waitFor(1);
+      const second = secondCall();
+      await waitFor(2);
+      await blocker.query('COMMIT');
+      return await Promise.all([first, second]);
+    } finally {
+      await blocker.end();
+    }
+  }
+
+  await t.test('assign racing a category delete, assign first, ends unlinked', async () => {
+    const work = randomUUID();
+    assert.equal((await create(a, work, 'Work')).status, 201);
+    const id = randomUUID();
+    const todo = (await addTodo(a, id, 'Racer')).data.todo;
+    const [assigned, deleted] = await interleave(
+      id,
+      () => patchTodo(a, id, editOf(todo, { categoryId: work })),
+      () => remove(a, work, 1),
+    );
+    assert.equal(assigned.status, 200, JSON.stringify(assigned.data));
+    assert.equal(assigned.data.todo.categoryId, work);
+    assert.equal(deleted.status, 200, JSON.stringify(deleted.data));
+    const unlinked = { ...assigned.data.todo, categoryId: null, revision: todo.revision + 2 };
+    assert.deepEqual(deleted.data.todos, [unlinked]);
+    assert.deepEqual((await request('/api/todos', { account: a })).data, { todos: [unlinked], categories: [] });
+    assert.deepEqual(await link(a.userId, id), { category_id: null, revision: todo.revision + 2 });
+    await admin.query('DELETE FROM todos WHERE user_id = $1', [a.userId]);
+  });
+
+  await t.test('assign racing a category delete, delete first, gets 404 and changes nothing', async () => {
+    const work = randomUUID();
+    assert.equal((await create(a, work, 'Work')).status, 201);
+    const [id, other] = [randomUUID(), randomUUID()];
+    const todo = (await addTodo(a, id, 'Racer')).data.todo;
+    let linked = (await addTodo(a, other, 'Already linked')).data.todo;
+    linked = (await patchTodo(a, other, editOf(linked, { categoryId: work }))).data.todo;
+    // The delete waits on `other`'s row lock while holding the category; the assign then waits on it.
+    const [deleted, assigned] = await interleave(
+      other,
+      () => remove(a, work, 1),
+      () => patchTodo(a, id, editOf(todo, { text: 'Renamed', categoryId: work })),
+    );
+    assert.equal(deleted.status, 200, JSON.stringify(deleted.data));
+    const unlinked = { ...linked, categoryId: null, revision: linked.revision + 1 };
+    assert.deepEqual(deleted.data.todos, [unlinked]);
+    expectError(assigned, 404, 'CATEGORY_NOT_FOUND');
+    assert.deepEqual((await request('/api/todos', { account: a })).data, { todos: [todo, unlinked], categories: [] });
+    assert.deepEqual(await link(a.userId, id), { category_id: null, revision: todo.revision });
+    await admin.query('DELETE FROM todos WHERE user_id = $1', [a.userId]);
   });
 });

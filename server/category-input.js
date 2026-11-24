@@ -1,16 +1,13 @@
 import { invalid } from './http.js';
-import { readRevision, uuid } from './todo-input.js';
+import { readCategoryId, readRevision } from './todo-input.js';
+
+export { readCategoryId };
 
 export const MAX_CATEGORIES = 50;
 export const MAX_NAME_LENGTH = 48;
 
 function checkFields(body, fields) {
   if (Object.keys(body).some((key) => !fields.includes(key))) throw invalid('Unexpected field.');
-}
-
-export function readCategoryId(value) {
-  if (typeof value !== 'string' || !uuid.test(value)) throw invalid('Provide a valid category ID.');
-  return value.toLowerCase();
 }
 
 // Trimmed, no control characters, 1 to 48 code points. Display case is kept.

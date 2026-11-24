@@ -3,6 +3,7 @@ import {
   createCategoryInput, MAX_CATEGORIES, readCategoryId, readQueryRevision, renameCategoryInput,
 } from './category-input.js';
 import { columns as todoColumns, toTodo } from './todo-endpoint.js';
+import { transaction } from './transaction.js';
 
 const columns = 'id, name, revision';
 
@@ -26,22 +27,6 @@ function constraintError(error) {
   if (error.code === '23505' && error.constraint === 'categories_pkey') return duplicateId();
   if (error.code === '23514') return invalid('Enter a valid category name.');
   return error;
-}
-
-async function transaction(pool, work) {
-  const client = await pool.connect();
-  let broken;
-  try {
-    await client.query('BEGIN');
-    const result = await work(client);
-    await client.query('COMMIT');
-    return result;
-  } catch (error) {
-    await client.query('ROLLBACK').catch((rollbackError) => { broken = rollbackError; });
-    throw error;
-  } finally {
-    client.release(broken);
-  }
 }
 
 async function findCategory(db, userId, id, lock = '') {

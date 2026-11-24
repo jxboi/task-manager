@@ -10,6 +10,17 @@ export function readId(value) {
   return value.toLowerCase();
 }
 
+export function readCategoryId(value) {
+  if (typeof value !== 'string' || !uuid.test(value)) throw invalid('Provide a valid category ID.');
+  return value.toLowerCase();
+}
+
+// An edit's optional category: undefined when omitted (keep the link), null to clear, else the ID.
+export function readEditCategory(body) {
+  if (body.action !== 'edit' || !Object.hasOwn(body, 'categoryId')) return undefined;
+  return body.categoryId === null ? null : readCategoryId(body.categoryId);
+}
+
 export function readRevision(value) {
   if (!Number.isInteger(value) || value < 1 || value > 2147483647) {
     throw invalid('Provide a valid revision.');
@@ -97,15 +108,18 @@ export function patchTodo(todo, body) {
       return setReminder(items, id, due, body.repeat)[0];
     }
     case 'edit': {
-      // The whole editable state at once: title, tags and reminder (`due` null for none).
-      checkFields(body, [...base, 'text', 'tags', 'due', 'repeat']);
+      // The whole editable state at once: title, tags, reminder (`due` null for none) and,
+      // optionally, the category. Omitting `categoryId` keeps the current link.
+      checkFields(body, [...base, 'text', 'tags', 'due', 'repeat', 'categoryId']);
       const text = readText(body.text);
       const tags = readTags(body.tags);
       const due = body.due === null ? null : readDue(body.due);
       if (!REPEATS.includes(body.repeat) || (due === null && body.repeat !== 'none')) {
         throw invalid('Provide a valid repeat setting.');
       }
-      return editTodo(items, id, { text, tags, due, repeat: body.repeat })[0];
+      const categoryId = readEditCategory(body);
+      const edited = editTodo(items, id, { text, tags, due, repeat: body.repeat })[0];
+      return categoryId === undefined || categoryId === todo.categoryId ? edited : { ...edited, categoryId };
     }
     case 'clearReminder':
       checkFields(body, base);
