@@ -161,6 +161,12 @@
         <ul class="todo-list" id="todo-list" hidden></ul>
         <span class="visually-hidden" id="reorder-hint">Drag to move, or use the up and down arrow keys.</span>
         <p class="drag-status" id="drag-status" aria-hidden="true" hidden></p>
+        <div class="toast-region" role="status" aria-live="polite">
+          <div class="toast" id="toast" hidden>
+            <span class="toast-text" id="toast-text"></span>
+            <button class="toast-undo" id="toast-undo" type="button">Undo</button>
+          </div>
+        </div>
 
         <div class="empty-state" id="empty-state" hidden>
           <div class="empty-page" aria-hidden="true"><i></i><i></i><i></i></div>

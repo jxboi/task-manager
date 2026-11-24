@@ -826,6 +826,39 @@ p {
   }
 }
 
+/* Swipe left to delete (src/app.js): pan-y keeps vertical scrolling native; the row follows the
+   finger once the gesture locks sideways, then slides out or springs back. */
+.todo {
+  touch-action: pan-y;
+}
+
+.todo.is-swiping {
+  z-index: 2;
+}
+
+.todo.is-settling {
+  transition: transform 200ms var(--ease);
+}
+
+.todo.is-leaving {
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 180ms var(--ease), opacity 180ms var(--ease);
+}
+
+.is-swiping,
+.is-swiping * {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .todo.is-settling,
+  .todo.is-leaving {
+    transition: none;
+  }
+}
+
 /* Loading: three static skeleton rows. */
 .skeleton {
   display: flex;
@@ -2191,6 +2224,72 @@ body {
 
 .is-reordering .add-toggle {
   display: none;
+}
+
+/* After a swipe: "Task deleted" with Undo, an ink pill like the drag status, sitting above the
+   New task button (and the home indicator) so it never covers it. */
+.toast {
+  position: fixed;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: calc(92px + env(safe-area-inset-bottom));
+  left: max(16px, env(safe-area-inset-left));
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 528px;
+  margin: 0 auto;
+  padding: 6px 6px 6px 20px;
+  border-radius: 28px;
+  background: var(--ink);
+  color: #fff;
+  font-size: 15px;
+  line-height: 24px;
+  font-weight: 600;
+  box-shadow: 0 10px 24px rgb(17 17 17 / 0.20);
+  animation: toast-in 180ms var(--ease);
+}
+
+.toast-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.toast-undo {
+  min-width: 44px;
+  height: 44px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 22px;
+  background: rgb(255 255 255 / 0.14);
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .toast-undo:hover {
+    background: rgb(255 255 255 / 0.24);
+  }
+}
+
+.toast-undo:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.is-reordering .toast {
+  display: none;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation: none;
+  }
 }
 
 .app-header[data-color] .title::first-letter {
