@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { copyFile, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -216,10 +216,8 @@ const migrations = new URL('./migrations/', import.meta.url);
 const localDatabase = { skip: testUrl ? false : 'Set TEST_DATABASE_URL to a disposable PostgreSQL database' };
 const alice = 'cli-alice@example.test';
 const bob = 'cli-bob@example.test';
-const bulk = 'cli-bulk@example.test';
 
 async function withCategorySchema(check) {
-  const { runMigrations } = await import('./runner.js');
   const schema = `task_manager_test_${randomBytes(8).toString('hex')}`;
   const database = new URL(testUrl);
   database.searchParams.set('options', `-c search_path=${schema}`);
@@ -227,7 +225,7 @@ async function withCategorySchema(check) {
   await client.connect();
   try {
     await client.query(`CREATE SCHEMA ${schema}`);
-    await check(client, (directory) => runMigrations({ connectionString: database.href, directory, log: () => {} }));
+    await check(client, { connectionString: database.href, log: () => {} });
   } finally {
     try {
       await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
@@ -244,78 +242,53 @@ async function insertUsers(client, users) {
   `, [users]);
 }
 
-test('0005 links valid first tags once and preserves legacy task data', localDatabase, async () => {
-  await withCategorySchema(async (client, migrate) => {
-    const directory = await mkdtemp(join(tmpdir(), 'migrations-'));
-    const fixtureDirectory = pathToFileURL(`${directory}/`);
+test('0005 times out on a locked todos table, rolls back, and can be retried', localDatabase, async () => {
+  const { listMigrationFiles, runMigrations, MigrationError } = await import('./runner.js');
+  await withCategorySchema(async (client, options) => {
+    const directory = await mkdtemp(fileURLToPath(new URL('../.migrations-', import.meta.url)));
+    const fixtureDirectory = pathToFileURL(directory + '/');
     try {
-      for (const file of (await readdir(migrations)).filter((f) => f.endsWith('.sql') && f < categoryMigration)) {
+      const previous = (await listMigrationFiles(migrations)).filter((file) => file < categoryMigration);
+      for (const file of previous) {
         await copyFile(new URL(file, migrations), new URL(file, fixtureDirectory));
       }
-      await migrate(fixtureDirectory);
-      await insertUsers(client, [alice, bob, bulk]);
-      await client.query(`
-        INSERT INTO todos (user_id, id, text, tags, created_at, revision, completed,
-                           completed_until, due, repeat, notified, position) VALUES
-          ($1, gen_random_uuid(), 'Meeting', '{work,home}', 1, 9, true, 7, 8, 'daily', 8, '000000000000000000008'),
-          ($1, gen_random_uuid(), 'Report', '{Work}', 2, 3, false, NULL, NULL, 'none', NULL, NULL),
-          ($1, gen_random_uuid(), 'No tags', '{}', 3, 1, true, NULL, NULL, 'none', NULL, NULL),
-          ($1, gen_random_uuid(), 'Control', ARRAY['bad' || chr(1) || 'tag','home'], 4, 2, false, NULL, NULL, 'none', NULL, NULL),
-          ($1, gen_random_uuid(), 'Null first', ARRAY[NULL,'home'], 5, 2, false, NULL, NULL, 'none', NULL, NULL),
-          ($2, gen_random_uuid(), 'Other account', '{work}', 6, 1, false, NULL, NULL, 'none', NULL, NULL)
-      `, [alice, bob]);
-      const bulkNames = Array.from({ length: 55 }, (_, i) => `tag-${i + 1}`).sort();
-      await client.query(`
-        INSERT INTO todos (user_id, id, text, tags, created_at)
-        SELECT $1, gen_random_uuid(), tag, ARRAY[tag], 10 FROM unnest($2::text[]) AS t(tag)
-      `, [bulk, bulkNames]);
-
-      const todos = async () => (await client.query('SELECT * FROM todos ORDER BY user_id, id')).rows;
-      const categories = async () => (await client.query('SELECT * FROM categories ORDER BY user_id, id')).rows;
-      const before = await todos();
+      const fixtureOptions = { ...options, directory: fixtureDirectory };
+      assert.deepEqual(await runMigrations(fixtureOptions), previous);
       await copyFile(new URL(categoryMigration, migrations), new URL(categoryMigration, fixtureDirectory));
-      assert.deepEqual(await migrate(fixtureDirectory), [categoryMigration]);
 
-      const linked = await todos();
-      assert.deepEqual(linked.map(({ category_id, ...row }) => row), before);
-      const catalog = await categories();
-      for (const [user, names] of [[alice, ['Work']], [bob, ['work']], [bulk, bulkNames]]) {
-        assert.deepEqual(catalog.filter((c) => c.user_id === user).map((c) => c.name).sort(), names);
-      }
-      assert.equal(catalog.length, 57);
-      for (const { id, revision } of catalog) {
-        assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-        assert.equal(revision, 1);
-      }
-      for (const todo of linked) {
-        const first = todo.tags[0]?.toLowerCase();
-        const expected = catalog.find((c) => c.user_id === todo.user_id && c.name.toLowerCase() === first);
-        assert.equal(todo.category_id, expected?.id ?? null, todo.text);
+      const bounded = new URL(options.connectionString);
+      // Bound the test even if a regression removes the migration's lock timeout.
+      bounded.searchParams.set('options', bounded.searchParams.get('options') + ' -c statement_timeout=12000');
+      const blocker = new pg.Client({ connectionString: options.connectionString });
+      try {
+        await blocker.connect();
+        await blocker.query('BEGIN');
+        try {
+          await blocker.query('LOCK TABLE todos IN ACCESS SHARE MODE');
+          const started = performance.now();
+          await assert.rejects(
+            runMigrations({ ...fixtureOptions, connectionString: bounded.href }),
+            (error) => error instanceof MigrationError && error.filename === categoryMigration &&
+              error.sqlstate === '55P03',
+          );
+          assert.ok(performance.now() - started < 12_000, 'migration must hit its lock timeout within 12 seconds');
+        } finally {
+          await blocker.query('ROLLBACK');
+        }
+      } finally {
+        await blocker.end();
       }
 
-      const sql = await readFile(new URL(categoryMigration, migrations), 'utf8');
-      const parts = sql.split('-- BACKFILL\n');
-      assert.equal(parts.length, 2);
-      const backfill = parts[1];
-      await client.query(backfill);
-      assert.deepEqual(await categories(), catalog);
-      assert.deepEqual(await todos(), linked);
-
-      await client.query(`
-        INSERT INTO todos (user_id, id, text, tags, created_at) VALUES
-          ($1, gen_random_uuid(), 'New work', '{work}', 11),
-          ($1, gen_random_uuid(), 'New hobby', '{hobby}', 12)
-      `, [alice]);
-      await client.query(backfill);
-      const updated = await categories();
-      assert.deepEqual(updated.filter((c) => c.name !== 'hobby'), catalog);
-      assert.equal(updated.length, catalog.length + 1);
-      const tasks = await todos();
-      assert.deepEqual(tasks.filter((t) => !t.text.startsWith('New ')), linked);
-      for (const [title, name] of [['New work', 'Work'], ['New hobby', 'hobby']]) {
-        assert.equal(tasks.find((t) => t.text === title).category_id,
-          updated.find((c) => c.user_id === alice && c.name === name).id);
-      }
+      const ledger = await client.query('SELECT filename FROM schema_migrations ORDER BY filename');
+      assert.deepEqual(ledger.rows.map(({ filename }) => filename), previous);
+      const categories = await client.query("SELECT to_regclass('categories') AS relation");
+      assert.equal(categories.rows[0].relation, null);
+      const column = await client.query(`
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = 'todos' AND column_name = 'category_id'
+      `);
+      assert.equal(column.rowCount, 0);
+      assert.deepEqual(await runMigrations(fixtureOptions), [categoryMigration]);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -323,8 +296,9 @@ test('0005 links valid first tags once and preserves legacy task data', localDat
 });
 
 test('category constraints enforce names, ownership and deletion semantics', localDatabase, async () => {
-  await withCategorySchema(async (client, migrate) => {
-    await migrate();
+  const { runMigrations } = await import('./runner.js');
+  await withCategorySchema(async (client, options) => {
+    await runMigrations(options);
     await insertUsers(client, [alice, bob]);
     const createCategory = async (user, name) => (await client.query(`
       INSERT INTO categories (user_id, id, name) VALUES ($1, gen_random_uuid(), $2) RETURNING *
