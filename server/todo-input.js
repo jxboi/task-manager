@@ -3,7 +3,7 @@ import { MAX_TAGS, normalizeTag, normalizeTags } from '../src/tags.js';
 import { addTag, clearReminder, editTodo, markNotified, removeTag, setReminder, validText } from '../src/todos.js';
 import { invalid, RequestError } from './http.js';
 
-const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function readId(value) {
   if (typeof value !== 'string' || !uuid.test(value)) throw invalid('Provide a valid todo ID.');

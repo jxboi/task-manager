@@ -3,10 +3,10 @@ import { createInput, patchTodo, readId, readMove, readRevision } from './todo-i
 import { moveTodo } from '../src/todos.js';
 
 const position = 'COALESCE(position, todo_initial_position(created_at, id)) COLLATE "C"';
-const columns = `id, text, completed, completed_until AS "completedUntil", created_at AS "createdAt",
+export const columns = `id, text, completed, completed_until AS "completedUntil", created_at AS "createdAt",
   tags, due, repeat, notified, revision, ${position} AS position`;
 
-function toTodo(row) {
+export function toTodo(row) {
   return {
     ...row,
     completedUntil: row.completedUntil === null ? null : Number(row.completedUntil),
