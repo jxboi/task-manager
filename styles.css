@@ -1841,6 +1841,7 @@ body {
 .add-field {
   height: 56px;
   padding-left: 20px;
+  padding-right: 6px;
   border-radius: 28px;
   outline: 1.5px solid var(--ink);
   outline-offset: -1.5px;

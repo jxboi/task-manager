@@ -45,6 +45,17 @@ test('drag handle reorder', async (t) => {
     { ...base, id: ids.charlie, text: 'Charlie', tags: [], createdAt: 3 },
     { ...base, id: ids.delta, text: 'Delta', tags: [], categoryId: WORK, createdAt: 4 },
   ];
+  const touchMoves = new Map();
+  const addListener = document.addEventListener.bind(document);
+  const removeListener = document.removeEventListener.bind(document);
+  document.addEventListener = (type, listener, options) => {
+    if (type === 'touchmove') touchMoves.set(listener, options);
+    addListener(type, listener, options);
+  };
+  document.removeEventListener = (type, listener, options) => {
+    if (type === 'touchmove') touchMoves.delete(listener);
+    removeListener(type, listener, options);
+  };
   await import('../src/app.js');
   window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: server.session } }));
   await settle();
@@ -270,6 +281,91 @@ test('drag handle reorder', async (t) => {
     assert.match(byId('sync-text').textContent, /changed in another tab/);
   });
 
+  await t.test('document touchmove is blocked only during a reorder drag', async () => {
+    const touchMove = () => {
+      const event = new Event('touchmove', { cancelable: true });
+      document.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    assert.equal(touchMoves.size, 0, 'idle');
+    assert.equal(touchMove(), false);
+
+    const endDrag = {
+      drop: (grip, y) => {
+        pointer(grip, 'pointermove', y + ROW);
+        pointer(grip, 'pointerup', y + ROW);
+      },
+      Escape: () => document.dispatchEvent(Object.assign(new Event('keydown'), { key: 'Escape' })),
+      pointercancel: (grip, y) => pointer(grip, 'pointercancel', y),
+      blur: () => window.dispatchEvent(new Event('blur')),
+      'row removed': (grip, y) => {
+        row('alpha').remove();
+        pointer(grip, 'pointermove', y);
+      },
+    };
+    for (const [reason, finish] of Object.entries(endDrag)) {
+      layout();
+      const grip = handle('alpha');
+      const y = row('alpha').getBoundingClientRect().top + ROW / 2;
+      pointer(grip, 'pointerdown', y);
+      assert.deepEqual([...touchMoves.values()], [{ passive: false }], `before ${reason}`);
+      assert.equal(touchMove(), true, `before ${reason}`);
+      finish(grip, y);
+      assert.equal(touchMoves.size, 0, `after ${reason}`);
+      assert.equal(touchMove(), false, `after ${reason}`);
+      await settle();
+    }
+  });
+
+  await t.test('a category save rebuilding the list mid-drag ends the drag, even if release is lost', async () => {
+    const touchMove = () => {
+      const event = new Event('touchmove', { cancelable: true });
+      document.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    const first = () => rows()[1]; // the first draggable row, whatever it is called now
+    const lose = {
+      // The old handle is detached, so its own events go nowhere: only document hears the release.
+      pointerup: () => document.dispatchEvent(Object.assign(new Event('pointerup'), { pointerId: 7, button: 0 })),
+      'lost capture': () => document.dispatchEvent(Object.assign(new Event('lostpointercapture'), { pointerId: 7 })),
+    };
+    for (const [reason, release] of Object.entries(lose)) {
+      layout();
+      const dragged = first();
+      const grip = first().querySelector('.todo-handle');
+      const y = first().getBoundingClientRect().top + ROW / 2;
+      pointer(grip, 'pointerdown', y);
+      assert.equal(touchMove(), true, `dragging before ${reason}`);
+
+      byId('category-name').value = `cli-${reason.replace(' ', '-')}`;
+      byId('category-form').dispatchEvent(new Event('submit'));
+      await settle(); // the save resolves and the list is rebuilt again
+      assert.equal(dragged.isConnected, false, `${reason}: the dragged row was replaced`);
+      release();
+      assert.equal(touchMoves.size, 0, `touchmove listener removed after ${reason}`);
+      assert.equal(touchMove(), false, `swipes are not blocked after ${reason}`);
+      assert.equal(list.classList.contains('is-reordering'), false);
+      assert.equal(document.documentElement.classList.contains('is-reordering'), false);
+
+      // A later drag and the keyboard still reorder.
+      layout();
+      const before = shown();
+      const next = first().querySelector('.todo-handle');
+      const top = first().getBoundingClientRect().top + ROW / 2;
+      pointer(next, 'pointerdown', top);
+      assert.equal(touchMoves.size, 1, `a new drag starts after ${reason}`);
+      pointer(next, 'pointermove', top + ROW + 10); // past the next row's centre
+      pointer(next, 'pointerup', top + ROW + 10);
+      assert.equal(touchMoves.size, 0);
+      assert.notDeepEqual(shown(), before, `drag reorders after ${reason}`);
+      await settle();
+      const kbd = shown();
+      press(first().querySelector('.todo-handle'), 'ArrowDown');
+      assert.notDeepEqual(shown(), kbd, `keyboard reorders after ${reason}`);
+      await settle();
+    }
+  });
+
   await t.test('retry cannot resend a failed move while a category filter is active', async () => {
     server.failNext = (method) => (method === 'PATCH' ? new Response('{}', { status: 500 }) : undefined);
     press(handle('bravo'), 'ArrowDown');
@@ -284,5 +380,7 @@ test('drag handle reorder', async (t) => {
     await settle();
     assert.equal(moves().length, sent);
     assert.deepEqual(serverOrder(), order);
+    filter.value = 'all';
+    filter.dispatchEvent(new Event('change'));
   });
 });
