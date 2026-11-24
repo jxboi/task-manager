@@ -253,6 +253,34 @@ test('categories API against PostgreSQL', {
     await admin.query('DELETE FROM categories WHERE user_id = $1', [b.userId]);
   });
 
+  await t.test('the cap counts per account: Alice at 50 does not block Bob', async () => {
+    await admin.query(
+      `INSERT INTO categories (user_id, id, name)
+       SELECT $1, gen_random_uuid(), 'Seeded ' || n FROM generate_series(1, 50) AS n`, [a.userId],
+    );
+    expectError(await create(a, randomUUID(), 'Alice over'), 409, 'CATEGORY_LIMIT');
+    assert.equal((await create(b, randomUUID(), 'Bob fine')).status, 201);
+    assert.equal((await stored(a.userId)).length, 50);
+    assert.equal((await stored(b.userId)).length, 1);
+    await admin.query('DELETE FROM categories WHERE user_id = ANY($1)', [[a.userId, b.userId]]);
+  });
+
+  await t.test('rename and delete only touch the caller\'s row when two accounts share a UUID and revision', async () => {
+    const id = randomUUID();
+    assert.equal((await create(a, id, 'Alice name')).status, 201);
+    assert.equal((await create(b, id, 'Bob name')).status, 201);
+    assert.equal((await rename(b, id, { name: 'Bob renamed', revision: 1 })).status, 200);
+    assert.deepEqual(await stored(a.userId), [{ id, name: 'Alice name', revision: 1 }]);
+    assert.deepEqual(await stored(b.userId), [{ id, name: 'Bob renamed', revision: 2 }]);
+
+    assert.equal((await rename(a, id, { name: 'Alice renamed', revision: 1 })).status, 200);
+    assert.equal((await rename(b, id, { name: 'Bob again', revision: 2 })).status, 200);
+    assert.equal((await remove(b, id, 3)).status, 200);
+    assert.deepEqual(await stored(a.userId), [{ id, name: 'Alice renamed', revision: 2 }]);
+    assert.deepEqual(await stored(b.userId), []);
+    await admin.query('DELETE FROM categories WHERE user_id = ANY($1)', [[a.userId, b.userId]]);
+  });
+
   await t.test('concurrent creates near the cap never exceed it', async () => {
     await admin.query(
       `INSERT INTO categories (user_id, id, name)
