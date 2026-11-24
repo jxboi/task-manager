@@ -473,6 +473,32 @@ test('edit form', async (t) => {
     assert.equal(syncNote.hidden, true);
   });
 
+  await t.test('retry omits an assignment when the refreshed catalog is missing', async () => {
+    const catalog = server.categories;
+    const original = serverRow('rent').categoryId;
+    const target = catalog.find(({ id }) => id !== original).id;
+    server.failNext = (method) => (method === 'PATCH' ? new Response('{}', { status: 500 }) : undefined);
+    open('rent');
+    type(text, 'Rent paid');
+    choose(target);
+    save.click();
+    await settle();
+    assert.equal(JSON.parse(patches().at(-1).body).categoryId, target);
+    server.categories = null;
+    const sent = patches().length;
+    try {
+      byId('sync-retry').click();
+      await settle();
+      assert.equal(patches().length, sent + 1);
+      assert.equal(Object.hasOwn(JSON.parse(patches().at(-1).body), 'categoryId'), false);
+      assert.equal(serverRow('rent').text, 'Rent paid');
+      assert.equal(serverRow('rent').categoryId, original);
+    } finally {
+      server.categories = catalog;
+      await refresh();
+    }
+  });
+
   await t.test('focus stays in the sheet when Previous month disables itself', async () => {
     open('plants');
     byId('reminder-date-button').click();

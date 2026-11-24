@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { copyFile, mkdtemp, rm } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import pg from 'pg';
 import demo from '../api/auth/demo.js';
 import signUp from '../api/auth/sign-up/email.js';
@@ -38,13 +39,14 @@ async function request(path, {
   method = 'GET', account, site = appOrigin, origin = site, csrf = account?.csrfToken,
   ip = '192.0.2.1',
   body, contentType = 'application/json', pathname = new URL(path, appOrigin).pathname,
+  handler = handlers[pathname],
 } = {}) {
   const headers = new Headers({ 'x-vercel-forwarded-for': ip });
   if (origin) headers.set('Origin', origin);
   if (account) headers.set('Cookie', account.cookie);
   if (csrf) headers.set('X-CSRF-Token', csrf);
   if (method !== 'GET' && contentType) headers.set('Content-Type', contentType);
-  const response = await handlers[pathname].fetch(new Request(new URL(path, site), {
+  const response = await handler.fetch(new Request(new URL(path, site), {
     method, headers, body: body === undefined ? undefined : JSON.stringify(body),
   }));
   assert.equal(response.headers.get('cache-control'), 'no-store');
@@ -70,6 +72,45 @@ async function authenticated(response, name, email, site = appOrigin) {
   assert.deepEqual(active.data.user, { name, email });
   assert.match(active.data.csrfToken, /^[\w-]{43}$/);
   return { cookie, csrfToken: active.data.csrfToken, token: response.data.token, userId: response.data.user?.id };
+}
+
+const pr2Commit = 'ae37a58';
+const repo = fileURLToPath(new URL('../', import.meta.url));
+const pr2Files = [
+  'api/todos.js',
+  'server/auth-origins.js', 'server/auth.js', 'server/demo-login.js', 'server/http.js',
+  'server/schema-guard.js', 'server/todo-endpoint.js', 'server/todo-input.js', 'server/transaction.js',
+  'src/reminders.js', 'src/tags.js', 'src/todos.js',
+  'db/runner.js', 'db/migrations/0001_auth.sql', 'db/migrations/0002_todos.sql',
+  'db/migrations/0003_recurring_completion.sql', 'db/migrations/0004_todo_position.sql',
+  'db/migrations/0005_categories.sql',
+];
+
+async function loadPr2Todos(t) {
+  const check = spawnSync('git', ['cat-file', '-e', `${pr2Commit}^{commit}`], { cwd: repo });
+  if (check.error?.code === 'ENOENT') {
+    t.skip('Git is unavailable for the PR 2 handler test');
+    return;
+  }
+  if (check.error) throw check.error;
+  if (check.status !== 0) {
+    t.skip(`PR 2 commit ${pr2Commit} is unavailable (for example, in a shallow clone)`);
+    return;
+  }
+  const directory = await mkdtemp(join(tmpdir(), 'task-manager-pr2-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await writeFile(join(directory, 'package.json'), '{"type":"module"}');
+  await symlink(join(repo, 'node_modules'), join(directory, 'node_modules'), 'dir');
+  for (const file of pr2Files) {
+    const target = join(directory, file);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, execFileSync('git', ['show', `${pr2Commit}:${file}`], { cwd: repo }));
+  }
+  const load = (file) => import(pathToFileURL(join(directory, file)));
+  const { getServices: getPr2Services } = await load('server/auth.js');
+  const { pool } = getPr2Services();
+  t.after(() => pool.end());
+  return (await load('api/todos.js')).default;
 }
 
 test('auth and todo API against PostgreSQL', {
@@ -174,7 +215,7 @@ test('auth and todo API against PostgreSQL', {
   const bId = randomUUID();
   const create = (account, id, text, tags = []) => post('/api/todos', { id, text, tags }, { account });
 
-  await t.test('previous todo handlers preserve assigned categories on the upgraded schema', async () => {
+  await t.test('the current handler folds legacy tags and preserves assigned categories', async () => {
     const user = { name: 'Compatibility', email: 'cli-compat@example.test', password };
     const account = await authenticated(await post(signupPath, user, { ip: '192.0.2.70' }), user.name, user.email);
     const { userId } = account;
@@ -229,6 +270,53 @@ test('auth and todo API against PostgreSQL', {
     assert.equal((await remove(account, assigned, completed.revision)).status, 204);
     assert.deepEqual(await links(assigned), []);
     assert.equal((await admin.query('SELECT 1 FROM categories WHERE user_id = $1 AND id = $2', [userId, category])).rowCount, 1);
+  });
+
+  await t.test('the PR 2 todo handler works on 0006 and preserves category links', async (t) => {
+    const handler = await loadPr2Todos(t);
+    if (!handler) return;
+    assert.equal((await admin.query(
+      "SELECT 1 FROM schema_migrations WHERE filename = '0006_tags_to_categories.sql'",
+    )).rowCount, 1);
+    const user = { name: 'Rollback', email: 'cli-rollback@example.test', password };
+    const account = await authenticated(await post(signupPath, user, { ip: '192.0.2.71' }), user.name, user.email);
+    const [id, anchor, category] = Array.from({ length: 3 }, () => randomUUID());
+    const oldRequest = (path, options) => request(path, { account, handler, ...options });
+    for (const [todoId, title] of [[id, 'Old create'], [anchor, 'Anchor']]) {
+      const created = await oldRequest('/api/todos', { method: 'POST', body: { id: todoId, text: title, tags: ['work'] } });
+      assert.equal(created.status, 201, JSON.stringify(created.data));
+      assert.deepEqual(created.data.todo.tags, ['work']);
+      assert.equal(created.data.todo.categoryId, null);
+    }
+    await admin.query("INSERT INTO categories (user_id, id, name) VALUES ($1, $2, 'work')", [account.userId, category]);
+    await admin.query('UPDATE todos SET category_id = $2 WHERE user_id = $1', [account.userId, category]);
+    const links = async () => (await admin.query(
+      'SELECT id, category_id FROM todos WHERE user_id = $1', [account.userId],
+    )).rows;
+    const due = Date.now() - 10_000;
+    const path = `/api/todos?id=${id}`;
+    const update = async (revision, changes) => {
+      const response = await oldRequest(path, { method: 'PATCH', body: { revision, ...changes } });
+      assert.equal(response.status, 200, JSON.stringify(response.data));
+      assert.equal(response.data.todo.revision, revision + 1);
+      assert.equal(response.data.todo.categoryId, category);
+      assert.deepEqual(new Map((await links()).map((row) => [row.id, row.category_id])),
+        new Map([[id, category], [anchor, category]]));
+      return response.data.todo;
+    };
+    const edited = await update(1, { action: 'edit', text: 'Old edit', tags: ['home'], due, repeat: 'none' });
+    assert.deepEqual([edited.text, edited.tags, edited.due], ['Old edit', ['home'], due]);
+    const moved = await update(2, { action: 'move', anchorId: anchor, side: 'after' });
+    assert.notEqual(moved.position, edited.position);
+    assert.equal((await update(3, { action: 'markNotified', due })).notified, due);
+    const toggled = await update(4, { action: 'complete', completed: true, due });
+    assert.equal(toggled.completed, true);
+
+    const list = await oldRequest('/api/todos');
+    assert.equal(list.status, 200);
+    assert.deepEqual(list.data.todos.map((todo) => todo.id), [anchor, id]);
+    assert.equal((await oldRequest(`${path}&revision=${toggled.revision}`, { method: 'DELETE' })).status, 204);
+    assert.deepEqual(await links(), [{ id: anchor, category_id: category }]);
   });
 
   await t.test('demo cannot claim an existing account with the reserved email', async () => {

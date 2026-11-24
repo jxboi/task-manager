@@ -157,21 +157,37 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
     const gen = generation;
     return enqueue(async () => {
       if (gen !== generation) return { ok: false, stale: true };
+      let result;
       try {
-        const result = await send(gen);
-        if (gen !== generation) return { ok: false, stale: true };
-        const reconcile = commit(result);
-        changed();
-        if (reconcile) await reloadNow(gen).catch(() => false);
-        if (gen !== generation) return { ok: false, stale: true };
-        return { ok: true };
+        result = await send(gen);
       } catch (error) {
         if (gen !== generation || isStale(error)) return { ok: false, stale: true };
-        const reload = needsReload(error) || isUncertain(error);
-        const reloaded = reload ? await reloadNow(gen).catch(() => false) : false;
+        let reloaded = false;
+        if (needsReload(error) || isUncertain(error)) {
+          try {
+            reloaded = await reloadNow(gen);
+          } catch (readError) {
+            if (gen !== generation || isStale(readError)) return { ok: false, stale: true };
+            if (readError.status === 401 || readError.code === 'INVALID_CSRF') {
+              return { ok: false, error: readError };
+            }
+          }
+        }
         if (gen !== generation) return { ok: false, stale: true };
         return { ok: false, error, reloaded };
       }
+      if (gen !== generation) return { ok: false, stale: true };
+      const reconcile = commit(result);
+      changed();
+      if (reconcile) {
+        try {
+          if (!await reloadNow(gen)) return { ok: false, stale: true };
+        } catch (error) {
+          if (gen !== generation || isStale(error)) return { ok: false, stale: true };
+          return { ok: false, error, repairFailed: true };
+        }
+      }
+      return { ok: true };
     });
   }
 
@@ -319,24 +335,22 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
 
     // Removes the category and, in the same step, applies the todos the server unlinked (no
     // category, new revisions). A link omitted from the response needs a fresh snapshot.
-    deleteCategory(id) {
-      const revision = revisionOf(id);
+    deleteCategory(id, revision = revisionOf(id)) {
       return categoryWrite(() => api.deleteCategory(id, revision), (todos) => {
-        const unlinked = new Map(todos.map((todo) => [todo.id, todo]));
+        const rows = new Map(confirmed.map((todo) => [todo.id, todo]));
         categories = categories?.filter((category) => category.id !== id) ?? null;
+        for (const row of todos) {
+          trackRefresh(rows.get(row.id), row);
+          rows.set(row.id, row);
+        }
         let reconcile = false;
-        confirmed = confirmed.map((todo) => {
-          const row = unlinked.get(todo.id);
-          if (row) {
-            trackRefresh(todo, row);
-            return row;
-          }
-          if (todo.categoryId !== id) return todo;
+        for (const todo of rows.values()) {
+          if (todo.categoryId !== id) continue;
           reconcile = true;
-          // Keep edits to this row blocked if the reconciliation read fails.
+          // Keep the last known link and block edits until the row can be refreshed.
           refreshedAt.set(todo.id, todo.revision + 1);
-          return { ...todo, categoryId: null };
-        });
+        }
+        confirmed = sortByPosition([...rows.values()]);
         return reconcile;
       });
     },

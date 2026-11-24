@@ -269,3 +269,103 @@ test('Manage: create, rename and delete wait for the server', async (t) => {
 
   window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: null } }));
 });
+
+test('Manage requires a fresh delete confirmation after a remote rename', async (t) => {
+  const server = createFakeApi();
+  const id = '00000000-0000-4000-8000-0000000000e1';
+  server.categories = [{ id, name: 'Home', revision: 1 }];
+  const { byId } = installDom(t, { fetch: (...args) => server.fetch(...args) });
+  await import('../src/app.js?delete-confirmation');
+  const refresh = async () => {
+    window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: server.session } }));
+    await settle();
+  };
+  await refresh();
+  byId('category-manage').click();
+  const button = (action) => byId('category-list').children[0].querySelectorAll('button')
+    .find((element) => element.dataset.action === action);
+  const deletes = () => server.requests.filter(({ method }) => method === 'DELETE');
+
+  button('delete').click();
+  server.categories = [{ id, name: 'House', revision: 2 }];
+  button('confirm').click();
+  await settle();
+  assert.equal(new URL(deletes()[0].path, 'https://test.invalid').searchParams.get('revision'), '1');
+  assert.equal(button('confirm'), undefined, 'the 409 closes the confirmation');
+
+  for (const category of [{ id, name: 'House', revision: 3 }, { id, name: 'Flat', revision: 3 }]) {
+    button('delete').click();
+    server.categories = [category];
+    await refresh();
+    assert.equal(button('confirm'), undefined, 'a refreshed revision or name closes the confirmation');
+    assert.equal(deletes().length, 1);
+  }
+  button('delete').click();
+  button('confirm').click();
+  await settle();
+  assert.equal(deletes().length, 2);
+  assert.deepEqual(server.categories, []);
+});
+
+test('Manage recovers failed category reads and writes', async (t) => {
+  const server = createFakeApi();
+  const home = { id: '00000000-0000-4000-8000-0000000000e1', name: 'Home', revision: 1 };
+  const work = { id: '00000000-0000-4000-8000-0000000000e2', name: 'Work', revision: 1 };
+  const linked = { id: TASK, text: 'Task', completed: false, createdAt: 1, tags: [], categoryId: home.id,
+    due: null, repeat: 'none', notified: null, revision: 1 };
+  const { byId, list } = installDom(t, { fetch: (...args) => server.fetch(...args) });
+  await import('../src/app.js?category-recovery');
+  const events = [];
+  for (const type of ['tasks:expired', 'tasks:revalidate']) window.addEventListener(type, () => events.push(type));
+
+  const remove = async (fail, response) => {
+    events.length = 0;
+    window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: null } }));
+    server.categories = [home, work];
+    server.rows = [linked];
+    window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: server.session } }));
+    await settle();
+    byId('category-manage').click();
+    const click = (action) => byId('category-list').children[0].querySelectorAll('button')
+      .find((button) => button.dataset.action === action).click();
+    click('delete');
+    server.rows = [{ ...linked, categoryId: work.id, revision: 2 }];
+    server.failNext = (method) => (method === fail ? response : undefined);
+    click('confirm');
+    await settle();
+  };
+
+  await t.test('a failed repair read offers refresh and the task becomes editable again', async () => {
+    await remove('GET', new Response('{}', { status: 500 }));
+    assert.match(byId('sync-text').textContent, /couldn't be refreshed/i);
+    assert.equal(byId('sync-retry').hidden, false);
+    byId('sync-retry').click();
+    await settle();
+    assert.equal(list.children[0].querySelector('.todo-category').textContent, 'Work');
+    list.children[0].querySelector('.todo-open').click();
+    byId('edit-text').value = 'Updated task';
+    byId('reminder-save').click();
+    await settle();
+    assert.equal(server.rows[0].text, 'Updated task');
+  });
+
+  await t.test('401 from a category write expires the session', async () => {
+    await remove('DELETE', new Response('{}', { status: 401 }));
+    assert.equal(events.at(-1), 'tasks:expired');
+  });
+
+  await t.test('CSRF failure from a repair read revalidates the session', async () => {
+    await remove('GET', new Response(JSON.stringify({ error: { code: 'INVALID_CSRF' } }), { status: 403 }));
+    assert.equal(events.at(-1), 'tasks:revalidate');
+  });
+
+  await t.test('401 from a conflict reload expires the session', async () => {
+    const fetch = server.fetch;
+    server.fetch = (path, init) => {
+      if (init.method === 'DELETE') server.categories = [{ ...home, revision: 2 }, work];
+      return fetch(path, init);
+    };
+    await remove('GET', new Response('{}', { status: 401 }));
+    assert.equal(events.at(-1), 'tasks:expired');
+  });
+});

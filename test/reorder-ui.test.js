@@ -269,4 +269,20 @@ test('drag handle reorder', async (t) => {
     assert.equal(byId('sync-note').hidden, false);
     assert.match(byId('sync-text').textContent, /changed in another tab/);
   });
+
+  await t.test('retry cannot resend a failed move while a category filter is active', async () => {
+    server.failNext = (method) => (method === 'PATCH' ? new Response('{}', { status: 500 }) : undefined);
+    press(handle('bravo'), 'ArrowDown');
+    await settle();
+    assert.equal(byId('sync-retry').hidden, false);
+    const sent = moves().length;
+    const order = serverOrder();
+    const filter = byId('category-filter');
+    filter.value = WORK;
+    filter.dispatchEvent(new Event('change'));
+    byId('sync-retry').click();
+    await settle();
+    assert.equal(moves().length, sent);
+    assert.deepEqual(serverOrder(), order);
+  });
 });

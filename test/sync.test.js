@@ -492,8 +492,8 @@ test('category writes wait for the server: create, rename and the limit', async 
 test('deleting a category applies the unlinked todos with their new revisions in the same step', async () => {
   const { server, sync } = setup();
   server.categories = [{ id: HOME, name: 'Home', revision: 1 }];
-  const linked = { ...newTodo('Linked'), categoryId: HOME, revision: 4 };
-  const other = { ...newTodo('Other'), revision: 1 };
+  const linked = { ...newTodo('Linked'), position: 'a', categoryId: HOME, revision: 4 };
+  const other = { ...newTodo('Other'), position: 'b', revision: 1 };
   server.rows = [linked, other];
   await sync.load();
   let seen = [];
@@ -559,6 +559,22 @@ test('category deletion reloads an omitted, remotely reassigned todo before queu
   assert.deepEqual(sync.confirmed, server.rows);
   assert.deepEqual(await editing, { ok: false, cancelled: true });
   assert.deepEqual(server.requests.map(({ method }) => method), ['GET', 'DELETE', 'GET']);
+});
+
+test('category deletion inserts a returned todo that was assigned in another tab', async () => {
+  const { server, sync } = setup();
+  server.categories = [{ id: HOME, name: 'Home', revision: 1 }];
+  const other = { ...newTodo('Other'), position: 'b', revision: 1 };
+  server.rows = [other];
+  await sync.load();
+  const linked = { ...newTodo('Remote task'), position: 'a', categoryId: HOME, revision: 4 };
+  server.rows = [linked, other];
+
+  assert.equal((await sync.deleteCategory(HOME)).ok, true);
+  assert.deepEqual(sync.todos, server.rows);
+  assert.deepEqual(server.requests.map(({ method }) => method), ['GET', 'DELETE']);
+  assert.equal((await retitle(sync, linked.id, 'Editable')).ok, true);
+  assert.equal(JSON.parse(server.requests.at(-1).body).revision, 5);
 });
 
 test('an uncertain create is reconciled by its UUID after the reload', async () => {

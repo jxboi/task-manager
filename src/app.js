@@ -148,7 +148,7 @@ let reminderId = null; // todo whose task sheet is open
 let draft = null; // the sheet's starting values and the user's category choice
 let optionsSignature = null; // the catalog the two category selects were built from
 // The Manage panel: `panelRow` is the row in rename ({id, mode: 'rename', value, revision}) or delete
-// confirmation ({id, mode: 'confirm'}); `panelBusy` is the write waiting for the server.
+// confirmation ({id, mode: 'confirm', name, revision}); `panelBusy` is the write waiting for the server.
 let panelRow = null;
 let categoryCreateDraft = null; // { id, name }, retained if the create is unconfirmed
 let panelBusy = null; // null | { id, kind: 'create' | 'rename' | 'delete' }
@@ -173,7 +173,11 @@ function syncChanged() {
   state = sync.todos;
   // A deleted category (here or elsewhere) stops filtering: the view goes back to All.
   filter = keepFilter(filter, sync.categories);
-  if (panelRow && !findCategory(panelRow.id)) panelRow = null;
+  if (panelRow) {
+    const category = findCategory(panelRow.id);
+    if (!category || (panelRow.mode === 'confirm' &&
+        (category.revision !== panelRow.revision || category.name !== panelRow.name))) panelRow = null;
+  }
   if (reminderId !== null && !sync.categories) draft.chosenCategoryId = draft.categoryId;
   const draftFocus = invalidateDraft();
   const signature = JSON.stringify([state.map(({ revision, ...todo }) => todo), sync.categories]);
@@ -858,7 +862,8 @@ function saveEditor() {
   // The category is sent only when the user changed it, so an edit made without touching it
   // can't undo another tab's change to the link.
   const categoryId = draft.chosenCategoryId;
-  if (sync.categories && categoryId !== draft.categoryId) fields.categoryId = categoryId;
+  const originalCategoryId = draft.categoryId;
+  if (sync.categories && categoryId !== originalCategoryId) fields.categoryId = categoryId;
   const reminderChanged = fields.due !== todo.due || fields.repeat !== todo.repeat;
   // The edited row can leave the view (its category changed under a filter): focus then goes to a
   // neighbour, else the filter.
@@ -872,7 +877,7 @@ function saveEditor() {
   if (editTodo([todo], id, fields)[0] !== todo) {
     if (reminderChanged) fired.delete(id);
     hideSync();
-    saveEdit(id, fields);
+    saveEdit(id, fields, originalCategoryId);
   }
   // An unchanged reminder that already fired is saved again to re-arm it (it alerts once more).
   if (due !== null && !reminderChanged && todo.notified === todo.due) {
@@ -892,10 +897,15 @@ function rearmReminder(id, due, repeat) {
 }
 
 // `retry` (after an uncertain failure) re-sends only if the row doesn't already match the edit.
-function saveEdit(id, fields) {
+function saveEdit(id, fields, originalCategoryId) {
   saved(id, sync.edit(id, fields), () => {
-    const todo = findTodo(id);
-    if (todo && editTodo([todo], id, fields)[0] !== todo) saveEdit(id, fields);
+    const todo = sync.confirmed.find((row) => row.id === id);
+    if (!todo) return;
+    const { categoryId, ...otherFields } = fields;
+    const retryFields = categoryId !== undefined && (!sync.categories ||
+      (todo.categoryId ?? null) !== originalCategoryId ||
+      (categoryId !== null && !findCategory(categoryId))) ? otherFields : fields;
+    if (editTodo([todo], id, retryFields)[0] !== todo) saveEdit(id, retryFields, originalCategoryId);
   });
   check();
 }
@@ -1266,23 +1276,29 @@ async function renameCategory(id) {
 }
 
 async function deleteCategory(id) {
-  const category = findCategory(id);
-  if (panelBusy !== null || !category) return;
+  if (panelBusy !== null || panelRow?.mode !== 'confirm' || panelRow.id !== id) return;
+  const { name, revision } = panelRow;
   const epoch = viewEpoch;
   const fallback = rowNeighbourKeys(id);
   panelBusy = { id, kind: 'delete' };
   setPanelStatus('Deleting…');
   render();
-  const result = await sync.deleteCategory(id);
+  const result = await sync.deleteCategory(id, revision);
   if (result.stale || epoch !== viewEpoch) return;
   panelBusy = null;
   panelRow = null; // after a failure, deleting again needs a fresh confirmation
-  if (result.ok || (result.reloaded && !findCategory(id))) {
-    setPanelStatus(`Deleted “${category.name}”. Its tasks are uncategorized now.`);
+  if (handleSessionError(result.error)) return;
+  if (result.repairFailed) {
+    setPanelStatus('');
+    showSync("The task list couldn't be refreshed after deleting the category.", reloadList);
     render(fallback);
     return;
   }
-  if (handleSessionError(result.error)) return;
+  if (result.ok || (result.error?.status !== 409 && result.reloaded && !findCategory(id))) {
+    setPanelStatus(`Deleted “${name}”. Its tasks are uncategorized now.`);
+    render(fallback);
+    return;
+  }
   setPanelStatus(categoryErrorText(result.error, result.reloaded), true);
   render([key('category-delete', id), ...fallback]);
 }
@@ -1311,7 +1327,9 @@ categoryList.addEventListener('click', (event) => {
     setPanelStatus('');
     render([key('category-field', id)]);
   } else if (action === 'delete') {
-    panelRow = { id, mode: 'confirm' };
+    const category = findCategory(id);
+    if (!category) return;
+    panelRow = { id, mode: 'confirm', name: category.name, revision: category.revision };
     setPanelStatus('');
     render([key('category-cancel', id)]);
   } else if (action === 'cancel') {
@@ -1497,6 +1515,7 @@ function reorderableIds(now = Date.now()) {
 // Sends one move (applied at once, rolled back if the server refuses it) and says where the task
 // went, counted among the rows shown.
 function reorder(id, target) {
+  if (reorderLocked()) return;
   const todo = findTodo(id);
   if (!todo) return;
   saved(id, sync.move(id, target.anchorId, target.side), () => {
