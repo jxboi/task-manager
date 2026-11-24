@@ -110,7 +110,7 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
   // (or null for a create) and resolves to the server's row (or null after a delete).
   // `holds(row)`, if given, is the change's assumption about the confirmed row when its turn comes;
   // if it no longer holds (another tab changed the row), the change is refused as a conflict.
-  function write({ id, apply, send, needsRow = true, commit, holds }) {
+  function write({ id, apply, send, needsRow = true, commit, holds, skipIf }) {
     const isCurrent = captureSession();
     const seen = needsRow
       ? (seenRevision ? seenRevision(id) : view.find((todo) => todo.id === id)?.revision)
@@ -157,6 +157,11 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
         settle();
         changed();
         return { ok: false, cancelled: true };
+      }
+      if (skipIf?.(row)) {
+        settle();
+        changed();
+        return { ok: false, skipped: true };
       }
       if (holds && !holds(row)) {
         settle();
@@ -362,8 +367,32 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
     // The edit form: title, reminder and category in one write. `fields` is {text, due, repeat}
     // plus `categoryId` only when the user changed it (omitted keeps the server's link), so it
     // applies the same on the server as it did here.
-    edit(id, fields) {
-      return patch(id, (todos) => editTodo(todos, id, fields), 'edit', fields);
+    // `rearm` ({due, repeat}) re-sends an unchanged, already-fired reminder in the queue slot right
+    // after the edit, only if the edit was accepted and the row's reminder is still that one. The
+    // result's `rearmed` is that write's outcome.
+    edit(id, fields, rearm) {
+      let accepted = false;
+      const result = write({
+        id,
+        apply: (todos) => editTodo(todos, id, fields),
+        send: async (row) => {
+          const saved = await api.patchTodo(id, row.revision, 'edit', fields);
+          accepted = true;
+          return saved;
+        },
+        commit: (todos, row) => sortByPosition(replace(todos, row)),
+      });
+      if (rearm) {
+        const { due, repeat } = rearm;
+        result.rearmed = write({
+          id,
+          apply: (todos) => (accepted ? setReminder(todos, id, due, repeat) : todos),
+          skipIf: (row) => !accepted || row.due !== due || row.repeat !== repeat || row.notified !== due,
+          send: (row) => api.patchTodo(id, row.revision, 'setReminder', { due, repeat }),
+          commit: (todos, row) => sortByPosition(replace(todos, row)),
+        });
+      }
+      return result;
     },
 
     clearReminder(id) {

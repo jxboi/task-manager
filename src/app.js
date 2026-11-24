@@ -888,12 +888,7 @@ function saveEditor() {
     if (reminderChanged) fired.delete(id);
     hideSync();
     // Re-armed only once the edit has been accepted: a refused one rolls back and touches nothing.
-    saveEdit(id, fields, originalCategoryId).then((ok) => {
-      if (ok && rearmFired) {
-        fired.delete(id);
-        rearmReminder(id, due, fields.repeat);
-      }
-    });
+    saveEdit(id, fields, originalCategoryId, rearmFired ? { due, repeat: fields.repeat } : undefined);
   } else if (rearmFired) {
     fired.delete(id);
     hideSync();
@@ -911,15 +906,26 @@ function rearmReminder(id, due, repeat) {
 }
 
 // `retry` (after an uncertain failure) re-sends only if the row doesn't already match the edit.
-function saveEdit(id, fields, originalCategoryId) {
-  const done = saved(id, sync.edit(id, fields), () => {
+function saveEdit(id, fields, originalCategoryId, rearm) {
+  const edit = sync.edit(id, fields, rearm);
+  if (rearm) {
+    // Queued right behind the edit, so no later save can slip in between; it skips itself when the
+    // edit was refused or the reminder has changed.
+    saved(id, edit.rearmed, () => rearmReminder(id, rearm.due, rearm.repeat)).then((ok) => {
+      if (ok) {
+        fired.delete(id);
+        check();
+      }
+    });
+  }
+  const done = saved(id, edit, () => {
     const todo = sync.confirmed.find((row) => row.id === id);
     if (!todo) return;
     const { categoryId, ...otherFields } = fields;
     const retryFields = categoryId !== undefined && (!sync.categories ||
       (todo.categoryId ?? null) !== originalCategoryId ||
       (categoryId !== null && !findCategory(categoryId))) ? otherFields : fields;
-    if (editTodo([todo], id, retryFields)[0] !== todo) saveEdit(id, retryFields, originalCategoryId);
+    if (editTodo([todo], id, retryFields)[0] !== todo) saveEdit(id, retryFields, originalCategoryId, rearm);
   });
   check();
   return done;
