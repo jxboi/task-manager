@@ -328,3 +328,101 @@ test('category constraints enforce names, ownership and deletion semantics', loc
     assert.deepEqual((await client.query('SELECT * FROM todos')).rows, [{ ...survivor, category_id: null }]);
   });
 });
+
+const conversionMigration = '0006_tags_to_categories.sql';
+const carol = 'cli-carol@example.test';
+const uuidV4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+test('0006 turns first tags into categories and the other tags into title words, once', localDatabase, async () => {
+  const { listMigrationFiles, runMigrations } = await import('./runner.js');
+  await withCategorySchema(async (client, options) => {
+    const directory = await mkdtemp(join(tmpdir(), 'migrations-'));
+    const fixtureOptions = { ...options, directory: pathToFileURL(`${directory}/`) };
+    try {
+      const previous = (await listMigrationFiles(migrations)).filter((file) => file < conversionMigration);
+      for (const file of previous) await copyFile(new URL(file, migrations), join(directory, file));
+      assert.deepEqual(await runMigrations(fixtureOptions), previous);
+      await insertUsers(client, [alice, bob, carol]);
+
+      const id = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+      // Alice made this category through the API before the conversion ran.
+      const errands = id(900);
+      await client.query("INSERT INTO categories (user_id, id, name, revision) VALUES ($1, $2, 'Errands', 3)", [alice, errands]);
+      const long = 'x'.repeat(1990);
+      const fits = 'y'.repeat(1994);
+      const tooLongName = 'z'.repeat(49);
+      // [user, n, text, tags, category_id before] -> expected [category name, text]
+      const fixtures = [
+        [alice, 1, 'Meeting', ['work', 'home', 'urgent'], null, 'Work', 'Meeting #home #urgent'],
+        [alice, 2, 'Report', ['Work'], null, 'Work', 'Report'],
+        [alice, 3, 'Buy milk', ['errands', 'shop'], null, 'Errands', 'Buy milk #shop'],
+        [alice, 4, 'Control', ['bad\x01tag', 'home'], null, null, 'Control #bad\x01tag #home'],
+        [alice, 5, 'Null first', [null, 'home', null, 'x'], null, null, 'Null first #home #x'],
+        [alice, 6, 'Blank first', ['   ', 'home'], null, null, 'Blank first #    #home'],
+        [alice, 7, 'Too long first', [tooLongName, 'home'], null, null, `Too long first #${tooLongName} #home`],
+        [alice, 8, 'Padded', ['  Padded  '], null, 'Padded', 'Padded'],
+        // 1990 + " #ab" = 1994; " #toolong12" would make 2005, so it and every later tag are dropped.
+        [alice, 9, long, ['work', 'ab', 'toolong12', 'c'], null, 'Work', `${long} #ab`],
+        // 1994 + " #cdef" is exactly 2000, which fits.
+        [alice, 10, fits, ['work', 'cdef'], null, 'Work', `${fits} #cdef`],
+        // Every tagged todo is relinked, even one that already had a category.
+        [alice, 11, 'Relinked', ['work'], errands, 'Work', 'Relinked'],
+        [alice, 12, 'Invalid, was linked', ['bad\ttab'], errands, null, 'Invalid, was linked #bad\ttab'],
+        [alice, 13, 'No tags, linked', [], errands, 'Errands', 'No tags, linked'],
+        [alice, 14, 'No tags', [], null, null, 'No tags'],
+        [bob, 1, 'Other account', ['work', 'home'], null, 'work', 'Other account #home'],
+        [bob, 2, 'Bob errands', ['Errands'], null, 'Errands', 'Bob errands'],
+        ...Array.from({ length: 55 }, (_, i) => [carol, i + 1, `Bulk ${i + 1}`, [`tag-${i + 1}`], null, `tag-${i + 1}`, `Bulk ${i + 1}`]),
+      ];
+      for (const [user, n, text, tags, categoryId] of fixtures) {
+        await client.query(`
+          INSERT INTO todos (user_id, id, text, tags, category_id, created_at, revision, completed,
+                             completed_until, due, repeat, notified, position)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        `, [user, id(n), text, tags, categoryId, n * 10, n + 2, n % 2 === 0, n % 4 === 0 ? n : null,
+          n % 3 === 0 ? 1000 + n : null, n % 3 === 0 ? 'daily' : 'none', n % 6 === 0 ? 1000 + n : null,
+          n % 5 === 0 ? `0000000000000000000${n % 10}8` : null]);
+      }
+
+      const todos = async () => (await client.query('SELECT * FROM todos ORDER BY user_id, id')).rows;
+      const categories = async () => (await client.query('SELECT * FROM categories ORDER BY user_id, lower(name)')).rows;
+      const before = await todos();
+      await copyFile(new URL(conversionMigration, migrations), join(directory, conversionMigration));
+      assert.deepEqual(await runMigrations(fixtureOptions), [conversionMigration]);
+
+      const catalog = await categories();
+      const names = (user) => catalog.filter((c) => c.user_id === user).map((c) => c.name);
+      assert.deepEqual(names(alice), ['Errands', 'Padded', 'Work']);
+      assert.deepEqual(names(bob), ['Errands', 'work']);
+      // The conversion ignores the API's cap of 50 categories.
+      assert.deepEqual(names(carol).sort(), Array.from({ length: 55 }, (_, i) => `tag-${i + 1}`).sort());
+      assert.equal(catalog.length, 60);
+      assert.deepEqual(catalog.find((c) => c.id === errands && c.user_id === alice), {
+        user_id: alice, id: errands, name: 'Errands', revision: 3,
+      });
+      for (const category of catalog.filter((c) => c.id !== errands)) {
+        assert.match(category.id, uuidV4);
+        assert.equal(category.revision, 1);
+      }
+      assert.notEqual(catalog.find((c) => c.user_id === bob && c.name === 'Errands').id, errands);
+
+      const categoryId = (user, name) => name === null ? null
+        : catalog.find((c) => c.user_id === user && c.name === name).id;
+      const expected = before.map((row) => {
+        const [, , , tags, , name, text] = fixtures.find(([user, n]) => user === row.user_id && id(n) === row.id);
+        if (tags.length === 0) return row;
+        return { ...row, text, tags: [], category_id: categoryId(row.user_id, name), revision: row.revision + 1 };
+      });
+      const converted = await todos();
+      assert.deepEqual(converted, expected);
+      for (const row of converted) assert.ok([...row.text].length <= 2000);
+
+      // The ledger keeps a second run from converting anything again.
+      assert.deepEqual(await runMigrations(fixtureOptions), []);
+      assert.deepEqual(await categories(), catalog);
+      assert.deepEqual(await todos(), converted);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});

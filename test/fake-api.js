@@ -34,6 +34,8 @@ export function createFakeApi({ csrfToken = 'token-a', user = { name: 'Ana', ema
     try {
       if (method === 'GET' && !url.searchParams.has('id')) return reply({ todos: server.rows });
       if (method === 'POST') {
+        // Still stores tags, as the tag UI these tests cover expects. The real server folds them
+        // into the title (server/todo-endpoint.js); db/client.integration.js covers that.
         const input = createInput(JSON.parse(body));
         if (server.rows.some((row) => row.id === input.id)) return failure(409, 'DUPLICATE_ID');
         const row = {

@@ -144,7 +144,9 @@ test('browser storage modules against PostgreSQL', {
 
     const [rent, plants] = tabA.todos;
     assert.equal(tabA.todos.length, 2);
-    assert.deepEqual(rent.tags, ['home', 'urgent']);
+    // This client still sends tags; the server folds them into the title and stores none, so
+    // removing a tag the server never stored changes nothing there.
+    assert.deepEqual([rent.text, rent.tags], ['Pay rent #home #bills #urgent', []]);
     assert.equal(rent.due, due);
     assert.equal(rent.repeat, 'weekly');
     assert.equal(plants.completed, true);
@@ -160,7 +162,7 @@ test('browser storage modules against PostgreSQL', {
     const sync = createSync(api);
     await sync.load();
     assert.deepEqual(sync.todos.map(({ text, completed, tags }) => ({ text, completed, tags })), [
-      { text: 'Pay rent', completed: false, tags: ['home', 'urgent'] },
+      { text: 'Pay rent #home #bills #urgent', completed: false, tags: [] },
       { text: 'Water plants', completed: true, tags: [] },
     ]);
   });
@@ -221,7 +223,8 @@ test('browser storage modules against PostgreSQL', {
     assert.equal(stale.ok, false);
     assert.equal(stale.error.status, 409);
     assert.equal(stale.reloaded, true);
-    assert.deepEqual(tabA.todos.find((todo) => todo.id === anaTodo.id).tags, ['home', 'urgent', 'from-b']);
+    const reloaded = tabA.todos.find((todo) => todo.id === anaTodo.id);
+    assert.deepEqual([reloaded.text, reloaded.tags], ['Pay rent #home #bills #urgent #from-b', []]);
   });
 
   await t.test('a queued completion is not replayed over another tab\'s completion after a conflict', async () => {
@@ -263,8 +266,8 @@ test('browser storage modules against PostgreSQL', {
     release();
     assert.equal((await tag).error.status, 409);
     assert.deepEqual(await remove, { ok: false, cancelled: true });
-    const { rows } = await admin.query('SELECT tags, revision FROM todos WHERE id = $1', [todo.id]);
-    assert.deepEqual(rows, [{ tags: ['from-b'], revision: 2 }]);
+    const { rows } = await admin.query('SELECT text, tags, revision FROM todos WHERE id = $1', [todo.id]);
+    assert.deepEqual(rows, [{ text: 'Recovering #from-b', tags: [], revision: 2 }]);
     assert.equal((await tabA.remove(todo.id)).ok, true);
   });
 
@@ -277,7 +280,9 @@ test('browser storage modules against PostgreSQL', {
     const edit = { text: 'Final title', tags: ['work', 'q4'], due, repeat: 'daily' };
     assert.equal((await tabA.edit(todo.id, edit)).ok, true);
     const { rows } = await admin.query('SELECT text, tags, due, repeat, notified, completed, revision FROM todos WHERE id = $1', [todo.id]);
-    assert.deepEqual(rows, [{ ...edit, due: String(due), notified: null, completed: false, revision: 2 }]);
+    assert.deepEqual(rows, [{
+      ...edit, text: 'Final title #work #q4', tags: [], due: String(due), notified: null, completed: false, revision: 2,
+    }]);
     // tabB still has revision 1: its edit shows, then is refused and replaced by tabA's.
     const stale = tabB.edit(todo.id, { text: 'From B', tags: [], due: null, repeat: 'none' });
     assert.equal(tabB.todos.find((item) => item.id === todo.id).text, 'From B');
@@ -285,7 +290,7 @@ test('browser storage modules against PostgreSQL', {
     assert.equal(outcome.error.status, 409);
     assert.equal(outcome.reloaded, true);
     assert.deepEqual(tabB.todos.find((item) => item.id === todo.id), tabA.todos.find((item) => item.id === todo.id));
-    assert.equal((await admin.query('SELECT text FROM todos WHERE id = $1', [todo.id])).rows[0].text, 'Final title');
+    assert.equal((await admin.query('SELECT text FROM todos WHERE id = $1', [todo.id])).rows[0].text, 'Final title #work #q4');
     assert.equal((await tabA.remove(todo.id)).ok, true);
   });
 
