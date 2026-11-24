@@ -1,6 +1,9 @@
 **GREEN** — Well-tested, isolated code. Agents can change it in a tight test loop.  
 **YELLOW** — Mixed coverage or coupled behavior. Agents write characterization tests before changing it.  
-**RED** — Sensitive or poorly understood behavior. Changes need a written plan, the blast radius, and Jia’s approval. This also applies to session isolation in `src/app.js` and other Red behavior touched through a Yellow file.
+**RED** — Sensitive or poorly understood behavior. Changes need a written plan, the blast radius, and Jia’s approval. This also applies to session isolation in `src/app.js` and other Red behavior touched through a Yellow file.  
+**GATED** — Red-risk app logic that auto-merges only through the Gated gates in Merge rules; treated as Red until those gates are on.
+
+Unlisted files are Red until a row is added.
 
 | Path | Zone | Why | Current tests or gaps |
 | --- | --- | --- | --- |
@@ -36,17 +39,21 @@
 | `vercel.json` | RED | Selects the deploy build, region, output directory, and migration SQL bundled with API functions. | `build-migrate.test.js` covers the called migration logic; no test verifies deployed artifacts or function bundling. |
 | `package.json`, `package-lock.json`, `.gitignore` | RED | Build scripts, pinned auth/DB dependencies, and env-file exclusions affect deployment and secrets. | `build-migrate.test.js` exercises the build hook logic; no direct check of build packaging, lockfile reproducibility, or env ignore rules. |
 | `.github/workflows/`, `.github/scripts/` | RED | CI gates, prod rollback authority, secrets | These paths are not in the repo on origin/main yet. |
+| `ZONES.md`, `AGENTS.md` | RED | These files define the merge policy and agent rules. A Yellow PR must not be able to loosen its own rules, so changes to them are self-protected and go to Jia. | No tests; review by Jia is the only check. |
+| `api/categories.js`, `server/category-endpoint.js`, `server/category-input.js` | GATED | They mirror the todos route, endpoint, and input files: per-user category reads and mutations, ownership predicates, and revision checks. | Isolation and revision tests live in `db/categories.integration.js`. |
+| `server/transaction.js` | RED | Sets the transaction isolation that every todo and category read and write depends on. Goes to Jia. | Covered only indirectly by the DB integration suites; no dedicated test. |
+| `test/*.test.js` | YELLOW | Unit tests for the source files above. A test file changed with its source takes the strictest tier. A PR that deletes or weakens an assertion for a Gated or Red file goes to Jia. | Each file's coverage is listed in the rows for its source. |
 | `README.md` | YELLOW | Local setup, API, and release guidance can drift from code. | No docs checks; `build-migrate.test.js` and `api.integration.js` cover parts of the described behavior. |
 | `test/dom.js`, `test/fake-api.js`, `test/markup.js` | YELLOW | Shared stubs stand in for browser semantics and API responses. | `app-session.test.js`, `reorder-ui.test.js`, `profile-menu.test.js`, and `sync.test.js` exercise them indirectly; no harness parity checks. |
 
 ## Merge rules
 
 - **Green**: auto-merges with CI plus one CLI review passing.
-- **Yellow**: auto-merges at any size when CI, one CLI review, and Playwright on iPhone WebKit (375px) plus desktop Chrome all pass, with screenshots on the PR. Yellow covers `styles.css`, `index.html`, `src/viewport.js`, `README.md`, test helpers, and `src/app.js` except the session-reset path.
-- **Gated (new tier)**: `api/todos.js`, `server/todo-endpoint.js`, `server/todo-input.js`, `src/sync.js`, `src/storage.js`, `server/dev.js`. These auto-merge only when all of these pass:
+- **Yellow**: auto-merges at any size when CI, one CLI review, and Playwright's iPhone 14 device (WebKit, 390px) plus desktop Chrome all pass, with screenshots on the PR. Yellow covers `styles.css`, `index.html`, `src/viewport.js`, `README.md`, test helpers, and `src/app.js` except the session-reset path.
+- **Gated (new tier)**: `api/todos.js`, `server/todo-endpoint.js`, `server/todo-input.js`, `api/categories.js`, `server/category-endpoint.js`, `server/category-input.js`, `src/sync.js`, `src/storage.js`, `server/dev.js`. These auto-merge only when all of these pass:
   - integration suites on a throwaway Neon branch;
   - two CLI reviews on different models (codex and claude);
-  - a no-new-delete-path check;
+  - a no-new-delete-path check (the same check as the data-change rule under "Always goes to Jia": one check, not two);
   - a prod smoke check with automatic rollback.  
   This tier stays OFF, meaning those PRs go to Jia, until DevOps finishes that CI and rollback work. The gates are not currently running.
 - **Always goes to Jia**:
@@ -54,13 +61,21 @@
   - all auth files (`api/session.js`, `api/auth/`, `server/auth*.js`, `server/demo-login.js`), `server/http.js`, `src/auth.js`, and the `src/app.js` session-reset path;
   - `vercel.json`, `package.json`, the lockfile (`package-lock.json`), `.gitignore`;
   - `.github/workflows/`, `.github/scripts/`;
-  - any change that deletes or rewrites user data;
+  - `ZONES.md`, `AGENTS.md`, `server/transaction.js`;
+  - any change that deletes or rewrites user data. Concretely, a PR goes to Jia if a non-test file adds or changes any of these:
+    - SQL `DELETE`, `TRUNCATE`, or `DROP`;
+    - a new DELETE route or method branch;
+    - an `UPDATE` whose WHERE clause isn't keyed on `user_id` plus a single row `id`.
+
+    This is the same check as the Gated tier's no-new-delete-path gate (one check, not two);
   - any PR with a failed gate, disagreeing reviewers, or a fired rollback.  
   Red-zone files that were not moved to Gated also still go to Jia (do not loosen them).
 
 ### Rules that apply to every PR
 
 - A PR takes its strictest file's tier.
+- Unlisted files are Red until a row is added.
+- A test file changed with its source takes the strictest tier. A PR that deletes or weakens an assertion for a Gated or Red file goes to Jia.
 - Only the exact reviewed head merges; a new commit needs its gates again.
 - Merges are done by DevOps Engineer.
 
