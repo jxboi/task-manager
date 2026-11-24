@@ -1,4 +1,5 @@
 SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '30s';
 
 -- Block writers across both statements while allowing plain reads. This mode also avoids
 -- upgrading a SHARE lock when the conversion writes to these tables.
