@@ -42,9 +42,9 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
   let generation = 0;
   let queue = Promise.resolve();
   let loaded = false;
-  // A reload that discovers a changed row sets the oldest revision an edit may have seen.
+  // A server result that may include remote changes sets the oldest revision an edit may have seen.
   // Successful local writes may advance the row without invalidating other queued edits.
-  let refreshedAt = new Map();
+  const refreshedAt = new Map();
 
   function changed() {
     view = pending.reduce((todos, entry) => entry.apply(todos), confirmed);
@@ -57,15 +57,21 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
     return run;
   }
 
+  function trackRefresh(previous, row) {
+    if (previous?.revision !== row.revision || previous?.createdAt !== row.createdAt) {
+      refreshedAt.set(row.id, row.revision);
+    }
+  }
+
   async function reloadNow(gen) {
     const { todos, categories: catalog } = await api.readSnapshot();
     if (gen !== generation) return false;
     const previous = new Map(confirmed.map((todo) => [todo.id, todo]));
-    refreshedAt = new Map(todos.map((todo) => {
-      const row = previous.get(todo.id);
-      const unchanged = row?.revision === todo.revision && row?.createdAt === todo.createdAt;
-      return [todo.id, unchanged ? refreshedAt.get(todo.id) : todo.revision];
-    }));
+    const current = new Set(todos.map((todo) => todo.id));
+    for (const id of refreshedAt.keys()) {
+      if (!current.has(id)) refreshedAt.delete(id);
+    }
+    for (const todo of todos) trackRefresh(previous.get(todo.id), todo);
     confirmed = todos;
     categories = catalog && sortCategories(catalog);
     loaded = true;
@@ -143,7 +149,8 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
   }
 
   // One category write, after everything queued before it. `send` resolves to the server's
-  // answer and `commit` applies it. A stale or missing row (409, 404) or an uncertain failure
+  // answer and `commit` applies it, returning true when a snapshot is needed. A stale or missing
+  // row (409, 404) or an uncertain failure
   // reloads the snapshot before the caller offers anything else, so a retry starts from the
   // server's catalog and a stale rename is never replayed.
   function categoryWrite(send, commit) {
@@ -151,10 +158,12 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
     return enqueue(async () => {
       if (gen !== generation) return { ok: false, stale: true };
       try {
-        const result = await send();
+        const result = await send(gen);
         if (gen !== generation) return { ok: false, stale: true };
-        commit(result);
+        const reconcile = commit(result);
         changed();
+        if (reconcile) await reloadNow(gen).catch(() => false);
+        if (gen !== generation) return { ok: false, stale: true };
         return { ok: true };
       } catch (error) {
         if (gen !== generation || isStale(error)) return { ok: false, stale: true };
@@ -288,30 +297,47 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
       return patch(id, (todos) => clearReminder(todos, id), 'clearReminder', {});
     },
 
-    // A new category, under a fresh UUID. After an uncertain failure the reload tells whether it
-    // landed anyway: if that UUID is now in the catalog, the create succeeded.
-    async createCategory(name, id = crypto.randomUUID()) {
-      const result = await categoryWrite(() => api.createCategory({ id, name }), putCategory);
+    // A retry keeps the draft's UUID and checks the current catalog before sending another POST.
+    async createCategory(name, id = crypto.randomUUID(), retry = false) {
+      const result = await categoryWrite(async (gen) => {
+        if (retry) {
+          if (!await reloadNow(gen)) return null;
+          const existing = categories?.find((item) => item.id === id);
+          if (existing) return existing;
+        }
+        return api.createCategory({ id, name });
+      }, putCategory);
       const category = categories?.find((item) => item.id === id);
       if (result.ok || (result.reloaded && category)) return { ok: true, category };
       return result;
     },
 
-    // Sent against the revision on screen now, so a rename made before another tab's change is
-    // refused (409) rather than overwriting it.
-    renameCategory(id, name) {
-      const revision = revisionOf(id);
+    // A rename from an open draft uses the revision seen when it opened.
+    renameCategory(id, name, revision = revisionOf(id)) {
       return categoryWrite(() => api.renameCategory(id, revision, name), putCategory);
     },
 
     // Removes the category and, in the same step, applies the todos the server unlinked (no
-    // category, new revisions), so later writes use those revisions.
+    // category, new revisions). A link omitted from the response needs a fresh snapshot.
     deleteCategory(id) {
       const revision = revisionOf(id);
       return categoryWrite(() => api.deleteCategory(id, revision), (todos) => {
         const unlinked = new Map(todos.map((todo) => [todo.id, todo]));
-        categories = categories.filter((category) => category.id !== id);
-        confirmed = confirmed.map((todo) => unlinked.get(todo.id) ?? todo);
+        categories = categories?.filter((category) => category.id !== id) ?? null;
+        let reconcile = false;
+        confirmed = confirmed.map((todo) => {
+          const row = unlinked.get(todo.id);
+          if (row) {
+            trackRefresh(todo, row);
+            return row;
+          }
+          if (todo.categoryId !== id) return todo;
+          reconcile = true;
+          // Keep edits to this row blocked if the reconciliation read fails.
+          refreshedAt.set(todo.id, todo.revision + 1);
+          return { ...todo, categoryId: null };
+        });
+        return reconcile;
       });
     },
 

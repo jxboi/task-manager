@@ -530,6 +530,37 @@ test('a stale rename is refused, reloads, and is never replayed', async () => {
   assert.equal(server.categories.length, 1);
 });
 
+test('category deletion cancels a queued edit when the returned todo has a newer revision', async () => {
+  const { server, sync } = setup();
+  server.categories = [{ id: HOME, name: 'Home', revision: 1 }];
+  const todo = { ...newTodo('Before'), categoryId: HOME, revision: 1 };
+  server.rows = [todo];
+  await sync.load();
+  server.rows = [{ ...todo, text: 'Remote edit', revision: 2 }];
+  const deleting = sync.deleteCategory(HOME);
+  const editing = retitle(sync, todo.id, 'Stale edit');
+  assert.equal((await deleting).ok, true);
+  assert.deepEqual(await editing, { ok: false, cancelled: true });
+  assert.equal(sync.todos[0].text, 'Remote edit');
+  assert.equal(sync.todos[0].revision, 3);
+  assert.equal(server.requests.some((request) => request.method === 'PATCH'), false);
+});
+
+test('category deletion reloads an omitted, remotely reassigned todo before queued writes', async () => {
+  const { server, sync } = setup();
+  server.categories = [{ id: HOME, name: 'Home', revision: 1 }, { id: WORK, name: 'Work', revision: 1 }];
+  const todo = { ...newTodo('Reassigned'), categoryId: HOME, revision: 1 };
+  server.rows = [todo];
+  await sync.load();
+  server.rows = [{ ...todo, categoryId: WORK, revision: 2 }];
+  const deleting = sync.deleteCategory(HOME);
+  const editing = retitle(sync, todo.id, 'Stale edit');
+  assert.equal((await deleting).ok, true);
+  assert.deepEqual(sync.confirmed, server.rows);
+  assert.deepEqual(await editing, { ok: false, cancelled: true });
+  assert.deepEqual(server.requests.map(({ method }) => method), ['GET', 'DELETE', 'GET']);
+});
+
 test('an uncertain create is reconciled by its UUID after the reload', async () => {
   const { server, sync } = setup();
   await sync.load();

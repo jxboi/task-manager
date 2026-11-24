@@ -118,7 +118,7 @@ test('task view against the server API', async (t) => {
     assert.equal(servers.a.requests[0].headers['X-CSRF-Token'], 'token-a');
   });
 
-  await t.test('adding keeps a "#word" as title text, sends no tags and starts uncategorized', async () => {
+  await t.test('adding keeps a "#word" as title text, sends empty tags and starts uncategorized', async () => {
     await add('Pay rent #bills');
     assert.equal(input.value, '');
     assert.deepEqual(texts(), ['Existing', 'Pay rent #bills']);
@@ -127,7 +127,7 @@ test('task view against the server API', async (t) => {
     assert.deepEqual(saved.tags, []);
     assert.equal(saved.categoryId, null);
     const post = servers.a.requests.findLast((request) => request.method === 'POST');
-    assert.deepEqual(Object.keys(JSON.parse(post.body)), ['id', 'text']);
+    assert.deepEqual(JSON.parse(post.body), { id: saved.id, text: saved.text, tags: [] });
     // No tag chip, no category label, no shelf color.
     assert.equal(rowOf('Pay rent #bills').querySelector('.tag'), null);
     assert.equal(categoryOf('Pay rent #bills'), null);

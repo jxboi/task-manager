@@ -115,8 +115,8 @@ test('browser storage modules against PostgreSQL', {
 
   const shared = browser('192.0.2.10'); // one device, two accounts
   const clean = browser('192.0.2.11'); // a fresh browser context
-  const ana = { name: 'Ana', email: 'ana@example.test', password };
-  const ben = { name: 'Ben', email: 'ben@example.test', password };
+  const ana = { name: 'Ana', email: 'cli-ana@example.test', password };
+  const ben = { name: 'Ben', email: 'cli-ben@example.test', password };
   let tabA;
   let anaTodo;
 
@@ -129,7 +129,7 @@ test('browser storage modules against PostgreSQL', {
   await t.test('a new account starts empty and saves tasks, titles with #, reminders and completion', async () => {
     assert.equal((await api.authRequest('sign-up/email', ana)).ok, true);
     const active = await startSession();
-    assert.deepEqual(active.user, { name: 'Ana', email: 'ana@example.test' });
+    assert.deepEqual(active.user, { name: 'Ana', email: 'cli-ana@example.test' });
     tabA = createSync(api);
     assert.deepEqual(await tabA.load(), { ok: true });
     assert.deepEqual(tabA.todos, []);

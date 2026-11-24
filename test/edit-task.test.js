@@ -15,7 +15,7 @@ const WORK = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
 const base = (overrides = {}) => ({
   ...addTodo([], 'Pay rent')[0], revision: 1, ...overrides,
 });
-// What the edit form sends: no tags, and `categoryId` only when the user changed it.
+// What the edit form passes to sync: editable fields and an optional `categoryId`.
 const fields = (overrides = {}) => ({ text: 'Pay rent', due: null, repeat: 'none', ...overrides });
 
 function setup() {
@@ -139,7 +139,7 @@ test('an edit shows at once, sends one PATCH at the seen revision, and is replac
   assert.equal(server.rows[0].text, 'Pay rent early');
   const patches = server.requests.filter((r) => r.method === 'PATCH');
   assert.equal(patches.length, 1);
-  assert.deepEqual(JSON.parse(patches[0].body), { ...edit, revision: 1, action: 'edit' });
+  assert.deepEqual(JSON.parse(patches[0].body), { ...edit, revision: 1, action: 'edit', tags: [] });
 });
 
 test('an edit keeps the tick timed while repeating and makes it permanent when repetition stops', async () => {
@@ -228,7 +228,7 @@ test('an edit sends categoryId only when given: set, then clear, while other edi
   assert.equal(server.rows[0].categoryId, null);
   const bodies = server.requests.filter((r) => r.method === 'PATCH').map((r) => JSON.parse(r.body));
   assert.deepEqual(bodies.map((body) => Object.hasOwn(body, 'categoryId')), [true, false, true]);
-  assert.ok(bodies.every((body) => !Object.hasOwn(body, 'tags')), 'no tags are sent');
+  assert.deepEqual(bodies.map(({ tags }) => tags), [[], [], []]);
 });
 
 test('assigning a category deleted elsewhere gets 404, rolls back and reloads the catalog', async () => {

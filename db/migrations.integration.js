@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { copyFile, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -189,7 +189,7 @@ test('position migration preserves per-user creation order and accepts legacy in
   await runMigrations(options);
   await client.query(`
     INSERT INTO "user" (id, name, email, "createdAt", "updatedAt") VALUES
-      ('a', 'A', 'a@example.test', now(), now()), ('b', 'B', 'b@example.test', now(), now());
+      ('a', 'A', 'cli-a@example.test', now(), now()), ('b', 'B', 'cli-b@example.test', now(), now());
     INSERT INTO todos (user_id, id, text, created_at, due, revision) VALUES
       ('a', '00000000-0000-0000-0000-000000000003', 'Later', 10, 1, 7),
       ('a', '00000000-0000-0000-0000-000000000002', 'Tie B', 2, NULL, 1),
@@ -333,6 +333,32 @@ const conversionMigration = '0006_tags_to_categories.sql';
 const carol = 'cli-carol@example.test';
 const uuidV4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
+test('0006 holds writer-blocking locks on both tables and allows reads', localDatabase, async () => {
+  const sql = await readFile(new URL(conversionMigration, migrations), 'utf8');
+  const { runMigrations } = await import('./runner.js');
+  await withCategorySchema(async (client, options) => {
+    await runMigrations(options);
+    const concurrent = new pg.Client(options);
+    await concurrent.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(sql);
+      for (const table of ['todos', 'categories']) {
+        await concurrent.query(`SELECT * FROM ${table}`);
+        await concurrent.query('BEGIN');
+        try {
+          await assert.rejects(concurrent.query(`LOCK TABLE ${table} IN ROW EXCLUSIVE MODE NOWAIT`), { code: '55P03' });
+        } finally {
+          await concurrent.query('ROLLBACK');
+        }
+      }
+    } finally {
+      await client.query('ROLLBACK');
+      await concurrent.end();
+    }
+  });
+});
+
 test('0006 turns first tags into categories and the other tags into title words, once', localDatabase, async () => {
   const { listMigrationFiles, runMigrations } = await import('./runner.js');
   await withCategorySchema(async (client, options) => {
@@ -370,6 +396,7 @@ test('0006 turns first tags into categories and the other tags into title words,
         [alice, 12, 'Invalid, was linked', ['bad\ttab'], errands, null, 'Invalid, was linked #bad\ttab'],
         [alice, 13, 'No tags, linked', [], errands, 'Errands', 'No tags, linked'],
         [alice, 14, 'No tags', [], null, null, 'No tags'],
+        [alice, 15, 'Zero-based', '[0:1]={home,work}', null, 'home', 'Zero-based #work'],
         [bob, 1, 'Other account', ['work', 'home'], null, 'work', 'Other account #home'],
         [bob, 2, 'Bob errands', ['Errands'], null, 'Errands', 'Bob errands'],
         ...Array.from({ length: 55 }, (_, i) => [carol, i + 1, `Bulk ${i + 1}`, [`tag-${i + 1}`], null, `tag-${i + 1}`, `Bulk ${i + 1}`]),
@@ -392,11 +419,11 @@ test('0006 turns first tags into categories and the other tags into title words,
 
       const catalog = await categories();
       const names = (user) => catalog.filter((c) => c.user_id === user).map((c) => c.name);
-      assert.deepEqual(names(alice), ['Errands', 'Padded', 'Work']);
+      assert.deepEqual(names(alice), ['Errands', 'home', 'Padded', 'Work']);
       assert.deepEqual(names(bob), ['Errands', 'work']);
       // The conversion ignores the API's cap of 50 categories.
       assert.deepEqual(names(carol).sort(), Array.from({ length: 55 }, (_, i) => `tag-${i + 1}`).sort());
-      assert.equal(catalog.length, 60);
+      assert.equal(catalog.length, 61);
       assert.deepEqual(catalog.find((c) => c.id === errands && c.user_id === alice), {
         user_id: alice, id: errands, name: 'Errands', revision: 3,
       });

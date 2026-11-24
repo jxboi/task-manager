@@ -144,23 +144,23 @@ test('Manage: create, rename and delete wait for the server', async (t) => {
     assert.deepEqual(JSON.parse(requests('PATCH').at(-1).body), { name: 'House', revision: 1 });
   });
 
-  await t.test('a stale rename is refused and the list reloads; it is not replayed', async () => {
+  await t.test('a rename keeps its opening revision through a refresh and closes on conflict', async () => {
     const id = item('House').dataset.id;
-    server.categories = server.categories.map((category) => (category.id === id ? { ...category, name: 'Flat', revision: 9 } : category));
     button(item('House'), 'rename').click();
-    const field = items().find((li) => li.dataset.id === id).querySelector('.category-field');
-    typeInto(field, 'Den');
+    const field = () => items().find((li) => li.dataset.id === id).querySelector('.category-field');
+    typeInto(field(), 'Den');
+    server.categories = server.categories.map((category) => (category.id === id ? { ...category, name: 'Flat', revision: 9 } : category));
+    window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: server.session } }));
+    await settle();
+    assert.equal(field().value, 'Den');
     const sent = requests('PATCH').length;
-    keydown(field, 'Enter');
+    keydown(field(), 'Enter');
     await settle();
     assert.equal(requests('PATCH').length, sent + 1);
+    assert.equal(JSON.parse(requests('PATCH').at(-1).body).revision, 2);
     assert.equal(status.textContent, 'This category changed in another tab or device. The list is up to date now. Try again if needed.');
     assert.equal(server.categories.find((category) => category.id === id).name, 'Flat');
-    const again = items().find((li) => li.dataset.id === id).querySelector('.category-field');
-    assert.equal(again.value, 'Den', 'what was typed is kept');
-    await settle();
-    assert.equal(requests('PATCH').length, sent + 1, 'nothing re-sent on its own');
-    keydown(again, 'Escape');
+    assert.equal(field(), null, 'the stale draft closes');
     assert.ok(item('Flat'));
     assert.equal(focusKey(), JSON.stringify(['category-rename', id]));
   });
@@ -226,6 +226,45 @@ test('Manage: create, rename and delete wait for the server', async (t) => {
     byId('category-done').click();
     assert.equal(panel.hidden, true);
     assert.equal(document.activeElement, manage);
+  });
+
+  await t.test('retry finds a committed create by UUID after both its response and reload failed', async () => {
+    manage.click();
+    const fetch = server.fetch;
+    server.failNext = (method) => (method === 'POST' ? { afterWrite: true } : undefined);
+    server.fetch = (path, init) => {
+      if (path === '/api/todos' && init.method === 'GET') throw new TypeError('Failed to fetch');
+      return fetch(path, init);
+    };
+    try {
+      await create('Travel');
+      await settle();
+    } finally {
+      server.fetch = fetch;
+    }
+    const { id } = JSON.parse(requests('POST').at(-1).body);
+    assert.equal(name.value, 'Travel');
+    assert.match(status.textContent, /Couldn't save/);
+    // A remote rename frees the original name, so matching by name cannot prevent a duplicate.
+    server.categories = server.categories.map((category) =>
+      category.id === id ? { ...category, name: 'Trips', revision: 2 } : category);
+    const posts = requests('POST').length;
+    byId('category-form').dispatchEvent(new Event('submit'));
+    await settle();
+    assert.equal(requests('POST').length, posts, 'reconcile before another POST');
+    assert.ok(item('Trips'));
+    assert.equal(name.value, '');
+
+    server.failNext = (method) => (method === 'POST' ? new TypeError('Failed to fetch') : undefined);
+    await create('Books');
+    await settle();
+    const missing = JSON.parse(requests('POST').at(-1).body);
+    const count = server.requests.length;
+    byId('category-form').dispatchEvent(new Event('submit'));
+    await settle();
+    assert.deepEqual(server.requests.slice(count).map(({ method }) => method), ['GET', 'POST']);
+    assert.deepEqual(JSON.parse(requests('POST').at(-1).body), missing);
+    assert.ok(item('Books'));
   });
 
   window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: null } }));

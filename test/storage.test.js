@@ -99,10 +99,9 @@ test('a snapshot without a catalog (an older server) reads as categories: null',
 
 test('createTodo, patchTodo and deleteTodo send JSON with the CSRF token', async () => {
   responder = () => respond(201, { todo: { id: ID } });
-  // A new task sends its ID and title only: no tags.
   assert.deepEqual(await createTodo({ id: ID, text: 'Pay rent #home', tags: ['x'], createdAt: 5, extra: true }), { id: ID });
   assert.equal(calls[0].method, 'POST');
-  assert.equal(calls[0].body, JSON.stringify({ id: ID, text: 'Pay rent #home' }));
+  assert.deepEqual(JSON.parse(calls[0].body), { id: ID, text: 'Pay rent #home', tags: [] });
 
   responder = () => respond(200, { todo: { id: ID, revision: 3 } });
   await patchTodo(ID, 2, 'setReminder', { due: 10, repeat: 'daily' });
@@ -120,6 +119,14 @@ test('createTodo, patchTodo and deleteTodo send JSON with the CSRF token', async
     assert.equal(call.headers['X-CSRF-Token'], 'token-a');
     assert.equal(call.cache, 'no-store');
   }
+});
+
+test('an edit always sends empty tags for the rollback API', async () => {
+  const fields = { text: 'Updated', due: null, repeat: 'none' };
+  await patchTodo(ID, 2, 'edit', fields);
+  await patchTodo(ID, 2, 'edit', { ...fields, tags: ['ignored'], categoryId: CATEGORY });
+  const expected = { ...fields, revision: 2, action: 'edit', tags: [] };
+  assert.deepEqual(calls.map(({ body }) => JSON.parse(body)), [expected, { ...expected, categoryId: CATEGORY }]);
 });
 
 test('category writes send JSON with the CSRF token and return the server\'s answer', async () => {

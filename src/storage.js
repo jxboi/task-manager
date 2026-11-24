@@ -97,13 +97,14 @@ export async function readSnapshot() {
   return { todos: data.todos, categories: Array.isArray(data.categories) ? data.categories : null };
 }
 
-// New tasks carry no tags.
+// The rollback API requires a tag list on create and edit.
 export async function createTodo({ id, text }) {
-  return (await send('/api/todos', { method: 'POST', body: { id, text }, csrf: true })).todo;
+  return (await send('/api/todos', { method: 'POST', body: { id, text, tags: [] }, csrf: true })).todo;
 }
 
 export async function patchTodo(id, revision, action, fields = {}) {
   const body = { ...fields, revision, action };
+  if (action === 'edit') body.tags = [];
   return (await send(todoPath(id), { method: 'PATCH', body, csrf: true })).todo;
 }
 

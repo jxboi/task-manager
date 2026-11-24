@@ -1,5 +1,9 @@
 SET LOCAL lock_timeout = '5s';
 
+-- Block writers across both statements while allowing plain reads. This mode also avoids
+-- upgrading a SHARE lock when the conversion writes to these tables.
+LOCK TABLE todos, categories IN SHARE ROW EXCLUSIVE MODE;
+
 -- One-time conversion of tags, which stop being a user concept. A todo's first tag becomes its
 -- category; every other tag becomes a "#tag" word at the end of its title. The runner applies
 -- this file once, in one transaction. No later migration may create categories from tags:
@@ -12,7 +16,10 @@ SET LOCAL lock_timeout = '5s';
 -- becomes a category, and the API then rejects new categories until the account is below 50.
 INSERT INTO categories (user_id, id, name)
 SELECT user_id, gen_random_uuid(), min(name COLLATE "C")
-FROM (SELECT user_id, btrim(tags[1]) AS name FROM todos WHERE cardinality(tags) > 0) AS first_tags
+FROM (
+  SELECT user_id, btrim((SELECT tag FROM unnest(tags) AS u(tag) LIMIT 1)) AS name
+  FROM todos WHERE cardinality(tags) > 0
+) AS first_tags
 WHERE char_length(name) BETWEEN 1 AND 48 AND name !~ '[[:cntrl:]]'
 GROUP BY user_id, lower(name)
 ON CONFLICT (user_id, lower(name)) DO NOTHING;
@@ -25,10 +32,12 @@ ON CONFLICT (user_id, lower(name)) DO NOTHING;
 WITH links AS (
   SELECT t.user_id, t.id, c.id AS category_id
   FROM todos t
+  CROSS JOIN LATERAL (
+    SELECT btrim(tag) AS name FROM unnest(t.tags) AS u(tag) LIMIT 1
+  ) AS first_tag
   LEFT JOIN categories c ON c.user_id = t.user_id
-    AND char_length(btrim(t.tags[1])) BETWEEN 1 AND 48 AND btrim(t.tags[1]) !~ '[[:cntrl:]]'
-    AND lower(c.name) = lower(btrim(t.tags[1]))
-  WHERE cardinality(t.tags) > 0
+    AND char_length(first_tag.name) BETWEEN 1 AND 48 AND first_tag.name !~ '[[:cntrl:]]'
+    AND lower(c.name) = lower(first_tag.name)
 )
 UPDATE todos t
 SET category_id = links.category_id,

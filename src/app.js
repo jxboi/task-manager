@@ -145,11 +145,12 @@ const openNotifications = new Set(); // closed when the session ends
 // View state: never saved, never in the URL.
 let filter = ALL; // ALL, UNCATEGORIZED or a category ID
 let reminderId = null; // todo whose task sheet is open
-let draft = null; // the sheet's starting point: { text, categoryId, due, repeat } of that todo
+let draft = null; // the sheet's starting values and the user's category choice
 let optionsSignature = null; // the catalog the two category selects were built from
-// The Manage panel: `panelRow` is the row in rename ({id, mode: 'rename', value}) or delete
+// The Manage panel: `panelRow` is the row in rename ({id, mode: 'rename', value, revision}) or delete
 // confirmation ({id, mode: 'confirm'}); `panelBusy` is the write waiting for the server.
 let panelRow = null;
+let categoryCreateDraft = null; // { id, name }, retained if the create is unconfirmed
 let panelBusy = null; // null | { id, kind: 'create' | 'rename' | 'delete' }
 let panelSignature = null;
 let reminderTouched = false; // a field was changed, or Save tried: show its error
@@ -173,6 +174,7 @@ function syncChanged() {
   // A deleted category (here or elsewhere) stops filtering: the view goes back to All.
   filter = keepFilter(filter, sync.categories);
   if (panelRow && !findCategory(panelRow.id)) panelRow = null;
+  if (reminderId !== null && !sync.categories) draft.chosenCategoryId = draft.categoryId;
   const draftFocus = invalidateDraft();
   const signature = JSON.stringify([state.map(({ revision, ...todo }) => todo), sync.categories]);
   if (signature !== viewSignature || draftFocus) {
@@ -733,13 +735,12 @@ function openEditor(id) {
   if (!todo) return;
   reminderId = id;
   reminderTouched = false;
-  draft = { text: todo.text, categoryId: todo.categoryId ?? null, due: todo.due, repeat: todo.repeat };
+  const categoryId = todo.categoryId ?? null;
+  draft = { text: todo.text, categoryId, chosenCategoryId: categoryId, due: todo.due, repeat: todo.repeat };
   editor.setAttribute('aria-label', `Edit “${todo.text}”`);
   textInput.value = todo.text;
   optionsSignature = null; // rebuild the sheet's select for this task
   renderCategoryOptions();
-  editCategory.value = draft.categoryId ?? '';
-  tintEditor();
   const fields = splitDue(todo.due);
   reminderOn.checked = fields.on;
   dateInput.value = fields.date;
@@ -783,14 +784,9 @@ function editedElsewhere(todo, opened) {
     (todo.categoryId ?? null) !== opened.categoryId;
 }
 
-// The category the sheet will save: '' in the select is Uncategorized.
-function chosenCategory() {
-  return editCategory.value === '' ? null : editCategory.value;
-}
-
 // The sheet is tinted with the chosen category's shelf color, like the task's card.
 function tintEditor() {
-  const category = findCategory(chosenCategory());
+  const category = findCategory(draft?.chosenCategoryId);
   if (category) editor.dataset.color = categoryColor(category.name);
   else delete editor.dataset.color;
 }
@@ -803,7 +799,7 @@ function categoryOption(value, text) {
 }
 
 // The filter select and the sheet's select, rebuilt only when the catalog changes, so a render
-// while one is open doesn't close it. Each keeps its value when its category is still there.
+// while one is open doesn't close it. The sheet's selection comes from the draft.
 function renderCategoryOptions() {
   const catalog = sync.categories;
   const signature = JSON.stringify(catalog?.map(({ id, name }) => [id, name]) ?? null);
@@ -814,13 +810,14 @@ function renderCategoryOptions() {
     categoryOption(ALL, 'All categories'), categoryOption(UNCATEGORIZED, 'Uncategorized'), ...names,
   );
   categoryFilter.value = filter;
-  const chosen = editCategory.value;
+  const chosen = reminderId === null ? null : draft.chosenCategoryId;
   editCategory.replaceChildren(
     categoryOption('', 'Uncategorized'), ...names.map((option) => categoryOption(option.value, option.textContent)),
   );
   // Without a catalog the task's category can't be shown or changed; saves leave it as it is.
   editCategory.disabled = !catalog;
   editCategory.value = findCategory(chosen) ? chosen : '';
+  if (reminderId !== null) tintEditor();
 }
 
 // An open sheet whose task's category, or the one chosen in it, was deleted can't be saved as it
@@ -828,7 +825,7 @@ function renderCategoryOptions() {
 function invalidateDraft() {
   if (reminderId === null || !sync.categories) return undefined;
   const gone = (id) => id !== null && !findCategory(id);
-  if (!gone(draft.categoryId) && !gone(chosenCategory())) return undefined;
+  if (!gone(draft.categoryId) && !gone(draft.chosenCategoryId)) return undefined;
   const id = reminderId;
   closeEditor();
   showSync(CATEGORY_GONE);
@@ -860,7 +857,7 @@ function saveEditor() {
   const fields = { text, due, repeat: due === null ? 'none' : repeatSelect.value };
   // The category is sent only when the user changed it, so an edit made without touching it
   // can't undo another tab's change to the link.
-  const categoryId = chosenCategory();
+  const categoryId = draft.chosenCategoryId;
   if (sync.categories && categoryId !== draft.categoryId) fields.categoryId = categoryId;
   const reminderChanged = fields.due !== todo.due || fields.repeat !== todo.repeat;
   // The edited row can leave the view (its category changed under a filter): focus then goes to a
@@ -1205,23 +1202,26 @@ function nameProblem(name, error, exceptId) {
 async function createCategory() {
   if (panelBusy !== null || !sync.categories) return;
   const { name, error } = readCategoryName(categoryName.value);
-  const problem = nameProblem(name, error, null);
+  const retry = categoryCreateDraft?.name === name;
+  const problem = retry ? error : nameProblem(name, error, null);
   if (problem) {
     categoryName.setAttribute('aria-invalid', 'true');
     setPanelStatus(NAME_MESSAGES[problem], true);
     categoryName.focus();
     return;
   }
+  if (!retry) categoryCreateDraft = { id: crypto.randomUUID(), name };
   const epoch = viewEpoch;
   panelBusy = { id: null, kind: 'create' };
   setPanelStatus('Adding…');
   render();
-  const result = await sync.createCategory(name);
+  const result = await sync.createCategory(name, categoryCreateDraft.id, retry);
   if (result.stale || epoch !== viewEpoch) return;
   panelBusy = null;
   if (result.ok) {
+    categoryCreateDraft = null;
     if (readCategoryName(categoryName.value).name === name) categoryName.value = '';
-    setPanelStatus(`Added “${name}”.`);
+    setPanelStatus(`Added “${result.category.name}”.`);
   } else if (!handleSessionError(result.error)) {
     setPanelStatus(categoryErrorText(result.error, result.reloaded), true);
   }
@@ -1231,6 +1231,7 @@ async function createCategory() {
 async function renameCategory(id) {
   const category = findCategory(id);
   if (panelBusy !== null || !category || panelRow?.id !== id) return;
+  const { revision } = panelRow;
   const { name, error } = readCategoryName(panelRow.value);
   const problem = nameProblem(name, error, id);
   if (problem) {
@@ -1240,7 +1241,7 @@ async function renameCategory(id) {
     render([key('category-field', id)]);
     return;
   }
-  if (name === category.name) {
+  if (name === category.name && revision === category.revision) {
     panelRow = null;
     render([key('category-rename', id)]);
     return;
@@ -1249,7 +1250,7 @@ async function renameCategory(id) {
   panelBusy = { id, kind: 'rename' };
   setPanelStatus('Saving…');
   render();
-  const result = await sync.renameCategory(id, name);
+  const result = await sync.renameCategory(id, name, revision);
   if (result.stale || epoch !== viewEpoch) return;
   panelBusy = null;
   if (result.ok) {
@@ -1259,9 +1260,9 @@ async function renameCategory(id) {
     return;
   }
   if (handleSessionError(result.error)) return;
-  // The field keeps what was typed; saving again is a new rename against the list now shown.
+  if (result.error?.status === 409) panelRow = null;
   setPanelStatus(categoryErrorText(result.error, result.reloaded), true);
-  render([key('category-field', id), ...rowNeighbourKeys(id)]);
+  render([key(panelRow ? 'category-field' : 'category-rename', id), ...rowNeighbourKeys(id)]);
 }
 
 async function deleteCategory(id) {
@@ -1304,7 +1305,9 @@ categoryList.addEventListener('click', (event) => {
   if (!id || panelBusy !== null) return;
   const { action } = button.dataset;
   if (action === 'rename') {
-    panelRow = { id, mode: 'rename', value: findCategory(id)?.name ?? '' };
+    const category = findCategory(id);
+    if (!category) return;
+    panelRow = { id, mode: 'rename', value: category.name, revision: category.revision };
     setPanelStatus('');
     render([key('category-field', id)]);
   } else if (action === 'delete') {
@@ -1728,7 +1731,11 @@ calDays.addEventListener('keydown', (event) => {
   focusCalendarDay(date);
 });
 
-editCategory.addEventListener('change', tintEditor);
+editCategory.addEventListener('change', () => {
+  if (reminderId === null || !sync.categories) return;
+  draft.chosenCategoryId = editCategory.value || null;
+  tintEditor();
+});
 
 saveButton.addEventListener('click', saveEditor);
 cancelButton.addEventListener('click', cancelEditor);
@@ -1880,6 +1887,7 @@ function clearView() {
   // No category of the old account stays in the selects, the panel or the sheet's tint.
   closePanel(false);
   panelBusy = null;
+  categoryCreateDraft = null;
   categoryName.value = '';
   optionsSignature = null;
   renderCategoryOptions();

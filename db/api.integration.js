@@ -158,8 +158,8 @@ test('auth and todo API against PostgreSQL', {
     }
   });
 
-  const alice = { name: 'Alice', email: 'alice@example.test', password };
-  const bob = { name: 'Bob', email: 'bob@example.test', password };
+  const alice = { name: 'Alice', email: 'cli-alice@example.test', password };
+  const bob = { name: 'Bob', email: 'cli-bob@example.test', password };
   const short = await post(signupPath, { ...alice, password: '11 chars!!!' });
   assert.equal(short.status, 400, JSON.stringify(short.data));
   const a = await authenticated(await post(signupPath, alice), alice.name, alice.email);
@@ -328,7 +328,7 @@ test('auth and todo API against PostgreSQL', {
 
   await t.test('serves auth and todo mutations on the exact Preview branch origin', async () => {
     const site = { site: branchOrigin, ip: '192.0.2.2' };
-    const user = { name: 'Branch User', email: 'branch@example.test', password };
+    const user = { name: 'Branch User', email: 'cli-branch@example.test', password };
     const account = await authenticated(await post(signupPath, user, site), user.name, user.email, branchOrigin);
     const todo = { id: randomUUID(), text: 'Branch todo', tags: [] };
     assert.equal((await post('/api/todos', todo, { ...site, account })).status, 201);

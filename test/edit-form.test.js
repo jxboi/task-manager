@@ -227,7 +227,7 @@ test('edit form', async (t) => {
     await settle();
     const due = Date.parse('2099-01-01T12:00:00');
     assert.deepEqual(JSON.parse(patches().at(-1).body), {
-      text: 'Pay rent early', due, repeat: 'daily', categoryId: BILLS, revision: 1, action: 'edit',
+      text: 'Pay rent early', due, repeat: 'daily', categoryId: BILLS, revision: 1, action: 'edit', tags: [],
     });
     assert.equal(patches().length, 1);
     const saved = serverRow('rent');
@@ -317,6 +317,31 @@ test('edit form', async (t) => {
     server.rows = server.rows.map((item) => (item.id === ids.rent ? { ...original, revision: item.revision + 1 } : item));
     window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: server.session } }));
     await settle();
+  });
+
+  await t.test('a title-only edit keeps its category when the catalog disappears and returns', async () => {
+    const original = { ...serverRow('rent'), categoryId: HOME };
+    server.rows = server.rows.map((item) => (item.id === ids.rent ? original : item));
+    await refresh();
+    const catalog = server.categories;
+    open('rent');
+    server.categories = null;
+    await refresh();
+    assert.equal(category.disabled, true);
+    server.categories = catalog;
+    await refresh();
+    assert.equal(category.disabled, false);
+    assert.equal(category.value, HOME);
+    type(text, 'Pay rent tomorrow');
+    save.click();
+    await settle();
+    const body = JSON.parse(patches().at(-1).body);
+    const saved = serverRow('rent');
+    server.rows = server.rows.map((item) => (item.id === ids.rent ? { ...original, revision: item.revision + 1 } : item));
+    await refresh();
+    assert.equal(body.text, 'Pay rent tomorrow');
+    assert.equal(Object.hasOwn(body, 'categoryId'), false);
+    assert.equal(saved.categoryId, HOME);
   });
 
   await t.test('a sheet whose chosen or original category is deleted elsewhere closes and says so', async () => {
