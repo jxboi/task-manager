@@ -836,7 +836,7 @@ p {
 
 /* Overdue: tint, a 3px inset bar, and the stamp as one outlined chip with words. */
 .todo.is-overdue {
-  background: var(--over-bg);
+  background-color: var(--over-bg);
   box-shadow: inset 3px 0 0 var(--over);
 }
 
@@ -860,10 +860,10 @@ p {
 
 @keyframes reminder-pulse {
   0%, 100% {
-    background: var(--over-bg);
+    background-color: var(--over-bg);
   }
   50% {
-    background: var(--over-peak);
+    background-color: var(--over-peak);
   }
 }
 
@@ -2181,7 +2181,7 @@ body {
 }
 
 .todo.is-done {
-  background: var(--surface);
+  background-color: var(--surface);
 }
 
 .todo.is-done .todo-text {
