@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
+import { copyFile, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
+import { pathToFileURL } from 'node:url';
 import pg from 'pg';
 import demo from '../api/auth/demo.js';
 import signUp from '../api/auth/sign-up/email.js';
@@ -12,7 +13,8 @@ import signOut from '../api/auth/sign-out.js';
 import session from '../api/session.js';
 import todos from '../api/todos.js';
 import { getServices } from '../server/auth.js';
-import { resetSchemaGuard } from '../server/schema-guard.js';
+import { listMigrationFiles, runMigrations } from './runner.js';
+import { assertSchemaCurrent, resetSchemaGuard } from '../server/schema-guard.js';
 
 const testUrl = process.env.TEST_DATABASE_URL;
 const appOrigin = 'https://task-manager.test';
@@ -89,9 +91,6 @@ test('auth and todo API against PostgreSQL', {
     }
   });
   await admin.query(`CREATE SCHEMA ${schema}`);
-  await promisify(execFile)(process.execPath, [fileURLToPath(new URL('./migrate.js', import.meta.url))], {
-    env: { ...process.env, DATABASE_URL_UNPOOLED: database.href },
-  });
   delete process.env.BETTER_AUTH_URL;
   process.env.VERCEL_URL = new URL(appOrigin).host;
   process.env.VERCEL_BRANCH_URL = new URL(branchOrigin).host;
@@ -100,6 +99,36 @@ test('auth and todo API against PostgreSQL', {
   delete process.env.DATABASE_URL;
   process.env.POSTGRES_URL = database.href;
   services = getServices();
+
+  await t.test('new guard requires 0005 and the previous guard accepts the upgraded schema', async () => {
+    const migrations = new URL('./migrations/', import.meta.url);
+    const directory = await mkdtemp(join(tmpdir(), 'previous-migrations-'));
+    const previous = pathToFileURL(`${directory}/`);
+    const migrate = (directory) => runMigrations({ connectionString: database.href, directory, log: () => {} });
+    try {
+      for (const name of (await listMigrationFiles(migrations)).filter((name) => name < '0005_categories.sql')) {
+        await copyFile(new URL(name, migrations), new URL(name, previous));
+      }
+      await migrate(previous);
+      resetSchemaGuard();
+      const before = await request('/api/session');
+      assert.equal(before.status, 503);
+      assert.equal(before.data.error.code, 'SCHEMA_OUT_OF_DATE');
+      assert.match(before.data.error.message, /0005_categories\.sql/);
+
+      assert.ok((await migrate(migrations)).includes('0005_categories.sql'));
+      resetSchemaGuard();
+      const after = await request('/api/session');
+      assert.equal(after.status, 200);
+      assert.deepEqual(after.data, previewSignedOut);
+
+      resetSchemaGuard();
+      await assertSchemaCurrent(services.pool, previous);
+    } finally {
+      resetSchemaGuard();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 
   const signupPath = '/api/auth/sign-up/email';
   const signinPath = '/api/auth/sign-in/email';
@@ -144,6 +173,54 @@ test('auth and todo API against PostgreSQL', {
   const aId = randomUUID();
   const bId = randomUUID();
   const create = (account, id, text, tags = []) => post('/api/todos', { id, text, tags }, { account });
+
+  await t.test('previous todo handlers preserve assigned categories on the upgraded schema', async () => {
+    const user = { name: 'Compatibility', email: 'cli-compat@example.test', password };
+    const account = await authenticated(await post(signupPath, user, { ip: '192.0.2.70' }), user.name, user.email);
+    const { userId } = account;
+    const category = randomUUID();
+    const assigned = randomUUID();
+    const anchor = randomUUID();
+    const created = randomUUID();
+    await admin.query("INSERT INTO categories (user_id, id, name) VALUES ($1, $2, 'work')", [userId, category]);
+    await admin.query(
+      `INSERT INTO todos (user_id, id, text, tags, created_at, category_id) VALUES
+         ($1, $2, 'Assigned', '{work}', 1, $4), ($1, $3, 'Anchor', '{}', 2, NULL)`,
+      [userId, assigned, anchor, category],
+    );
+    const links = async (id) => (await admin.query(
+      'SELECT category_id FROM todos WHERE user_id = $1 AND id = $2', [userId, id],
+    )).rows;
+    assert.equal((await create(account, created, 'Old create', ['work'])).status, 201);
+    assert.deepEqual(await links(created), [{ category_id: null }]);
+
+    const due = Date.now() - 10_000;
+    const update = async (revision, changes) => {
+      const response = await patch(account, assigned, { revision, ...changes });
+      assert.equal(response.status, 200, JSON.stringify(response.data));
+      assert.equal(response.data.todo.revision, revision + 1);
+      assert.deepEqual(await links(assigned), [{ category_id: category }]);
+      return response.data.todo;
+    };
+    const edited = await update(1, { action: 'edit', text: 'Edited', tags: ['home'], due, repeat: 'daily' });
+    assert.deepEqual(edited.tags, ['home']);
+    const moved = await update(2, { action: 'move', anchorId: anchor, side: 'after' });
+    assert.notEqual(moved.position, edited.position);
+    assert.equal((await update(3, { action: 'markNotified', due })).notified, due);
+    const completed = await update(4, { action: 'complete', completed: true, due });
+    assert.equal(completed.completed, true);
+
+    const list = await request('/api/todos', { account });
+    assert.equal(list.status, 200);
+    assert.deepEqual(list.data.todos.map(({ id }) => id), [anchor, assigned, created]);
+    assert.deepEqual(list.data.todos[1], completed);
+    assert.deepEqual(Object.keys(completed).sort(), [
+      'completed', 'completedUntil', 'createdAt', 'due', 'id', 'notified', 'position', 'repeat', 'revision', 'tags', 'text',
+    ]);
+    assert.equal((await remove(account, assigned, completed.revision)).status, 204);
+    assert.deepEqual(await links(assigned), []);
+    assert.equal((await admin.query('SELECT 1 FROM categories WHERE user_id = $1 AND id = $2', [userId, category])).rowCount, 1);
+  });
 
   await t.test('demo cannot claim an existing account with the reserved email', async () => {
     const id = randomUUID();
