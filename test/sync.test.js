@@ -750,3 +750,21 @@ test('reset drops the catalog and ignores a category answer from the previous se
   assert.equal(sync.categories, null);
   globalThis.fetch = real;
 });
+
+test('a category retry reaching the queue after a newer assignment sends no categoryId', async () => {
+  const { server, sync } = setup();
+  const todo = { ...newTodo('Assign me'), revision: 1, categoryId: null };
+  server.rows = [todo];
+  server.categories = [{ id: HOME, name: 'Home', revision: 1 }, { id: WORK, name: 'work', revision: 1 }];
+  await sync.load();
+  const fields = (categoryId) => ({ text: todo.text, due: null, repeat: 'none', categoryId });
+  const guard = { revision: 1, categoryId: null };
+  const refresh = sync.load(); // the retry's pending refresh
+  const newer = sync.edit(todo.id, fields(HOME)); // assigned while it is pending
+  const retry = sync.edit(todo.id, fields(WORK), undefined, guard); // the older retry, after the refresh
+  await Promise.all([refresh, newer, retry]);
+  assert.equal(server.rows[0].categoryId, HOME, 'the newer assignment wins');
+  const sent = server.requests.filter(({ method }) => method === 'PATCH').map(({ body }) => JSON.parse(body));
+  assert.equal(sent[0].categoryId, HOME);
+  assert.equal('categoryId' in sent[1], false, 'the stale retry sends no categoryId');
+});

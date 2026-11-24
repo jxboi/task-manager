@@ -370,13 +370,21 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
     // `rearm` ({due, repeat}) re-sends an unchanged, already-fired reminder in the queue slot right
     // after the edit, only if the edit was accepted and the row's reminder is still that one. The
     // result's `rearmed` is that write's outcome.
-    edit(id, fields, rearm) {
+    // `guard` ({revision, categoryId}, set on a retry) drops the category from the write when the
+    // row has moved on by the time it is sent, so it can't undo a newer assignment.
+    edit(id, fields, rearm, guard) {
       let accepted = false;
       const result = write({
         id,
         apply: (todos) => editTodo(todos, id, fields),
         send: async (row) => {
-          const saved = await api.patchTodo(id, row.revision, 'edit', fields);
+          let body = fields;
+          if (guard && fields.categoryId !== undefined &&
+            (row.revision !== guard.revision || (row.categoryId ?? null) !== guard.categoryId)) {
+            const { categoryId, ...rest } = fields;
+            body = rest;
+          }
+          const saved = await api.patchTodo(id, row.revision, 'edit', body);
           accepted = true;
           return saved;
         },
