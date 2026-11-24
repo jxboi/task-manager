@@ -168,6 +168,12 @@ export function setReminder(todos, id, due, repeat) {
 // change alone keeps the claim on the same occurrence), so it doesn't alert again. Today's tick
 // keeps its expiration while the task repeats and becomes permanent if repetition stops.
 // Returns `todos` itself for an unknown id, invalid fields, or when nothing changes.
+// The fields of an edit as sent: the user's dirty fields (`text`, `due`+`repeat`, `categoryId`)
+// over the given row's own values, so anything the user didn't touch comes from that row.
+export function editFields(row, dirty) {
+  return { text: row.text, due: row.due, repeat: row.repeat, ...dirty };
+}
+
 export function editTodo(todos, id, { text, tags, due, repeat, categoryId } = {}) {
   const todo = todos.find((item) => item.id === id);
   if (!todo || !validText(text) || (tags !== undefined && !Array.isArray(tags))) return todos;

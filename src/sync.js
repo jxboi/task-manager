@@ -12,6 +12,7 @@ import {
   editTodo,
   moveTodo,
   removeTodo,
+  editFields,
   setReminder,
   sortByPosition,
   toggleTodo,
@@ -357,9 +358,10 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
         (row.completedUntil ?? null) === (before.completedUntil ?? null)), base);
     },
 
-    remove(id) {
+    remove(id, base) {
       return write({
         id,
+        base,
         apply: (todos) => removeTodo(todos, id),
         send: async (row) => {
           await api.deleteTodo(id, row.revision);
@@ -380,14 +382,20 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
     // after the edit, only if the edit was accepted and the row's reminder is still that one. The
     // result's `rearmed` is that write's outcome.
     // `base` ({revision}, set on a retry): the retry is cancelled whole if the row has moved on.
-    edit(id, fields, rearm, base) {
+    // `dirty` holds only what the user edited ({text}, {due, repeat}, {categoryId}); everything else
+    // is taken from the confirmed row at dispatch, never from optimistic state.
+    edit(id, dirty, rearm, base) {
       let accepted = false;
+      const fieldsFor = (row) => editFields(row, dirty);
       const result = write({
         id,
-        apply: (todos) => editTodo(todos, id, fields),
+        apply: (todos) => {
+          const row = confirmed.find((todo) => todo.id === id) ?? todos.find((todo) => todo.id === id);
+          return row ? editTodo(todos, id, fieldsFor(row)) : todos;
+        },
         base,
         send: async (row) => {
-          const saved = await api.patchTodo(id, row.revision, 'edit', fields);
+          const saved = await api.patchTodo(id, row.revision, 'edit', fieldsFor(row));
           accepted = true;
           return saved;
         },

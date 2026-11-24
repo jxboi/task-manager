@@ -1,6 +1,7 @@
 import {
   addTodo,
   editTodo,
+  editFields,
   toggleTodo,
   dueReminders,
   nextFireTime,
@@ -865,14 +866,19 @@ function saveEditor() {
     render(todo ? openerKeys(id) : undefined);
     return;
   }
-  // An untouched title is sent as stored (untrimmed, line breaks kept), not as the input shows it.
-  const fields = { text: textInput.value === draft.shownText ? todo.text : text, due, repeat: due === null ? 'none' : repeatSelect.value };
+  // Only what the user edited is sent (per-field dirtiness); the sync queue fills the rest from the
+  // confirmed row at dispatch. An untouched title is never re-sent, so it stays as stored.
+  const dirty = {};
+  if (textInput.value !== draft.shownText) dirty.text = text;
+  const repeat = due === null ? 'none' : repeatSelect.value;
+  const reminderChanged = due !== draft.due || repeat !== draft.repeat;
+  if (reminderChanged) Object.assign(dirty, { due, repeat });
   // The category is sent only when the user changed it, so an edit made without touching it
   // can't undo another tab's change to the link.
   const categoryId = draft.chosenCategoryId;
   const originalCategoryId = draft.categoryId;
-  if (sync.categories && categoryId !== originalCategoryId) fields.categoryId = categoryId;
-  const reminderChanged = fields.due !== todo.due || fields.repeat !== todo.repeat;
+  if (sync.categories && categoryId !== originalCategoryId) dirty.categoryId = categoryId;
+  const fields = dirty;
   // The edited row can leave the view (its category changed under a filter): focus then goes to a
   // neighbour, else the filter.
   const keys = [...openerKeys(id), ...rowFallbackKeys(id), key('category-filter')];
@@ -884,15 +890,15 @@ function saveEditor() {
   }
   // An unchanged reminder that already fired is saved again to re-arm it (it alerts once more).
   const rearmFired = due !== null && !reminderChanged && todo.notified === todo.due;
-  if (editTodo([todo], id, fields)[0] !== todo) {
+  if (editTodo([todo], id, editFields(todo, fields))[0] !== todo) {
     if (reminderChanged) fired.delete(id);
     hideSync();
     // Re-armed only once the edit has been accepted: a refused one rolls back and touches nothing.
-    saveEdit(id, fields, originalCategoryId, rearmFired ? { due, repeat: fields.repeat } : undefined);
+    saveEdit(id, fields, originalCategoryId, rearmFired ? { due, repeat } : undefined);
   } else if (rearmFired) {
     fired.delete(id);
     hideSync();
-    rearmReminder(id, due, fields.repeat);
+    rearmReminder(id, due, repeat);
   }
   render(keys);
 }
@@ -932,7 +938,7 @@ function saveEdit(id, fields, originalCategoryId, rearm, base) {
     const retryFields = categoryId !== undefined && (!sync.categories ||
       (todo.categoryId ?? null) !== originalCategoryId ||
       (categoryId !== null && !findCategory(categoryId))) ? otherFields : fields;
-    if (editTodo([todo], id, retryFields)[0] !== todo) saveEdit(id, retryFields, originalCategoryId, rearm, { revision: todo.revision });
+    if (editTodo([todo], id, editFields(todo, retryFields))[0] !== todo) saveEdit(id, retryFields, originalCategoryId, rearm, { revision: todo.revision });
   });
   check();
   return done;
@@ -1525,8 +1531,10 @@ function toggle(id, base) {
   check();
 }
 
-function removeRow(id) {
-  saved(id, sync.remove(id), () => findTodo(id) && removeRow(id));
+function removeRow(id, base) {
+  saved(id, sync.remove(id, base), () => {
+    if (findTodo(id)) removeRow(id, { revision: sync.confirmed.find((row) => row.id === id)?.revision });
+  });
   check();
 }
 
