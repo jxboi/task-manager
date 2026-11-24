@@ -6,15 +6,17 @@ import * as api from '../src/storage.js';
 import { isCompleted } from '../src/reminders.js';
 import { createSync } from '../src/sync.js';
 import { addTodo, editTodo, validText } from '../src/todos.js';
-import { readTaskEdit, readTaskInput } from '../src/task-input.js';
+import { readTaskInput } from '../src/task-input.js';
 import { patchTodo } from '../server/todo-input.js';
 import { createFakeApi } from './fake-api.js';
 
 const HOUR = 3_600_000;
+const WORK = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
 const base = (overrides = {}) => ({
-  ...addTodo([], 'Pay rent', ['home'])[0], revision: 1, ...overrides,
+  ...addTodo([], 'Pay rent')[0], revision: 1, ...overrides,
 });
-const fields = (overrides = {}) => ({ text: 'Pay rent', tags: ['home'], due: null, repeat: 'none', ...overrides });
+// What the edit form sends: no tags, and `categoryId` only when the user changed it.
+const fields = (overrides = {}) => ({ text: 'Pay rent', due: null, repeat: 'none', ...overrides });
 
 function setup() {
   const server = createFakeApi();
@@ -25,18 +27,29 @@ function setup() {
 
 // --- editTodo --------------------------------------------------------------------------------
 
-test('editTodo replaces text, tags and reminder and leaves completion alone', () => {
+test('editTodo replaces text and reminder and leaves completion alone', () => {
   const todo = base({ completed: true });
   const due = Date.now() + HOUR;
-  const [next] = editTodo([todo], todo.id, fields({ text: '  Pay rent early ', tags: ['#Home', 'bills'], due, repeat: 'daily' }));
-  assert.equal(next.text, 'Pay rent early');
-  assert.deepEqual(next.tags, ['home', 'bills']);
+  const [next] = editTodo([todo], todo.id, fields({ text: '  Pay rent early #bills ', due, repeat: 'daily' }));
+  assert.equal(next.text, 'Pay rent early #bills');
+  assert.deepEqual(next.tags, []);
   assert.equal(next.due, due);
   assert.equal(next.repeat, 'daily');
   assert.equal(next.notified, null);
   assert.equal(next.completed, true);
   assert.equal(next.id, todo.id);
   assert.equal(next.createdAt, todo.createdAt);
+});
+
+test('editTodo sets or clears the category when given and keeps it when omitted', () => {
+  const todo = base({ categoryId: WORK });
+  const todos = [todo];
+  assert.equal(editTodo(todos, todo.id, fields()), todos, 'an omitted category is no change');
+  assert.equal(editTodo(todos, todo.id, fields({ categoryId: WORK })), todos);
+  assert.equal(editTodo(todos, todo.id, fields({ categoryId: null }))[0].categoryId, null);
+  const other = '0f8fad5b-d9cb-469f-a165-70867728950e';
+  assert.equal(editTodo(todos, todo.id, fields({ categoryId: other }))[0].categoryId, other);
+  assert.equal(editTodo(todos, todo.id, fields({ text: 'Renamed' }))[0].categoryId, WORK);
 });
 
 test('editTodo keeps an alerted occurrence alerted unless the due time changes', () => {
@@ -69,24 +82,17 @@ test('editTodo returns the same array for no change, an unknown id or invalid fi
 
 // --- Shared add/edit input -------------------------------------------------------------------
 
-test('readTaskInput parses #tags like the add form and reports why a title is invalid', () => {
-  assert.deepEqual(readTaskInput('Pay rent #Home #bills'), { text: 'Pay rent', tags: ['home', 'bills'], error: null });
-  assert.deepEqual(readTaskInput('  #home  '), { text: '', tags: ['home'], error: 'empty' });
+test('readTaskInput keeps "#" as title text and reports why a title is invalid', () => {
+  assert.deepEqual(readTaskInput(' Pay rent #Home #bills '), { text: 'Pay rent #Home #bills', error: null });
+  assert.deepEqual(readTaskInput('  #home  '), { text: '#home', error: null });
+  assert.deepEqual(readTaskInput('Learn C#  and  #42'), { text: 'Learn C#  and  #42', error: null });
   assert.equal(readTaskInput('').error, 'empty');
+  assert.equal(readTaskInput('   ').error, 'empty');
   assert.equal(readTaskInput('😀'.repeat(2000)).error, null);
   assert.equal(readTaskInput('😀'.repeat(2001)).error, 'invalid');
   assert.equal(readTaskInput('a\0b').error, 'invalid');
-  // The filter's tags come first, as for a new task.
-  assert.deepEqual(readTaskInput('Call #mum', ['family']).tags, ['family', 'mum']);
   assert.equal(validText(' ok '), true);
   assert.equal(validText(5), false);
-});
-
-test('an untouched edit keeps the title and tags as they are, whatever they contain', () => {
-  const todo = { text: 'Review #42 and C#', tags: ['ref#42', 'c#', 'a#b#c', '##x'] };
-  assert.deepEqual(readTaskEdit(todo.text, todo.text, todo.tags), { ...todo, error: null });
-  assert.deepEqual(readTaskEdit('Review now #new', todo.text, ['ref#42']), { text: 'Review now', tags: ['ref#42', 'new'], error: null });
-  assert.equal(readTaskEdit('', 'Pay', []).error, 'empty');
 });
 
 test('the edit action applies the whole edit and rejects invalid fields', () => {
@@ -122,7 +128,7 @@ test('an edit shows at once, sends one PATCH at the seen revision, and is replac
   await sync.load();
   const id = server.rows[0].id;
   const due = Date.now() + HOUR;
-  const edit = fields({ text: 'Pay rent early', tags: ['home', 'bills'], due, repeat: 'daily' });
+  const edit = fields({ text: 'Pay rent early', due, repeat: 'daily' });
   const result = sync.edit(id, edit);
   assert.equal(sync.todos[0].text, 'Pay rent early'); // optimistic
   assert.equal(sync.busy, true);
@@ -144,7 +150,7 @@ test('an edit keeps the tick timed while repeating and makes it permanent when r
   server.rows = [todo];
   await sync.load();
 
-  const edit = fields({ text: 'Pay rent early', tags: ['bills'], due: todo.due + HOUR, repeat: 'weekly' });
+  const edit = fields({ text: 'Pay rent early', due: todo.due + HOUR, repeat: 'weekly' });
   const result = sync.edit(todo.id, edit);
   assert.equal(sync.todos[0].completedUntil, completedUntil);
   assert.equal(isCompleted(sync.todos[0], now), true);
@@ -168,13 +174,12 @@ test('a failed edit rolls back to the confirmed row (server error and network fa
   const id = server.rows[0].id;
   for (const failure of [() => new Response('{}', { status: 500 }), () => new TypeError('Failed to fetch')]) {
     server.failNext = (method) => (method === 'PATCH' ? failure() : undefined);
-    const result = sync.edit(id, fields({ text: 'Doomed', tags: [] }));
+    const result = sync.edit(id, fields({ text: 'Doomed' }));
     assert.equal(sync.todos[0].text, 'Doomed');
     const outcome = await result;
     assert.equal(outcome.ok, false);
     assert.equal(outcome.revision, 1, 'reports the revision it was sent against, for a retry');
     assert.equal(sync.todos[0].text, 'Pay rent');
-    assert.deepEqual(sync.todos[0].tags, ['home']);
   }
   assert.equal(server.rows[0].revision, 1);
 });
@@ -183,7 +188,7 @@ test('an edit the server refuses as invalid rolls back with a 400', async () => 
   const { server, sync } = setup();
   server.rows = [base()];
   await sync.load();
-  const outcome = await sync.edit(server.rows[0].id, fields({ tags: ['##bad'] }));
+  const outcome = await sync.edit(server.rows[0].id, fields({ text: 'a\0b' }));
   assert.equal(outcome.ok, false);
   assert.equal(outcome.error.status, 400);
   assert.deepEqual(sync.todos, server.rows);
@@ -205,4 +210,37 @@ test('an edit against a row another tab changed gets 409, rolls back and reloads
   assert.equal(outcome.reloaded, true);
   assert.equal(sync.todos[0].text, 'Changed elsewhere');
   assert.equal(server.rows[0].text, 'Changed elsewhere');
+});
+
+test('an edit sends categoryId only when given: set, then clear, while other edits keep the link', async () => {
+  const { server, sync } = setup();
+  server.categories = [{ id: WORK, name: 'Work', revision: 1 }];
+  server.rows = [base()];
+  await sync.load();
+  const id = server.rows[0].id;
+  const set = sync.edit(id, fields({ categoryId: WORK }));
+  assert.equal(sync.todos[0].categoryId, WORK, 'optimistic');
+  assert.equal((await set).ok, true);
+  assert.equal(server.rows[0].categoryId, WORK);
+  assert.equal((await sync.edit(id, fields({ text: 'Pay rent today' }))).ok, true);
+  assert.equal(server.rows[0].categoryId, WORK, 'an edit without categoryId keeps the link');
+  assert.equal((await sync.edit(id, fields({ text: 'Pay rent today', categoryId: null }))).ok, true);
+  assert.equal(server.rows[0].categoryId, null);
+  const bodies = server.requests.filter((r) => r.method === 'PATCH').map((r) => JSON.parse(r.body));
+  assert.deepEqual(bodies.map((body) => Object.hasOwn(body, 'categoryId')), [true, false, true]);
+  assert.ok(bodies.every((body) => !Object.hasOwn(body, 'tags')), 'no tags are sent');
+});
+
+test('assigning a category deleted elsewhere gets 404, rolls back and reloads the catalog', async () => {
+  const { server, sync } = setup();
+  server.categories = [{ id: WORK, name: 'Work', revision: 1 }];
+  server.rows = [base()];
+  await sync.load();
+  server.categories = [];
+  const outcome = await sync.edit(server.rows[0].id, fields({ categoryId: WORK }));
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.error.code, 'CATEGORY_NOT_FOUND');
+  assert.equal(outcome.reloaded, true);
+  assert.equal(sync.todos[0].categoryId, null);
+  assert.deepEqual(sync.categories, []);
 });

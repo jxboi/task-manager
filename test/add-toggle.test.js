@@ -38,7 +38,7 @@ test('the + button opens the new-task field', async (t) => {
     assert.equal(byId('empty-state').hidden, false);
   });
 
-  await t.test('tapping it reveals and focuses the field; a #tag is saved as a tag', async () => {
+  await t.test('tapping it reveals and focuses the field; a "#word" stays in the title', async () => {
     toggle.click();
     assert.equal(form.hidden, false);
     assert.equal(toggle.getAttribute('aria-expanded'), 'true');
@@ -47,8 +47,9 @@ test('the + button opens the new-task field', async (t) => {
     assert.equal(byId('add-button').disabled, false);
     form.dispatchEvent(new Event('submit'));
     await settle();
-    assert.deepEqual(texts(), ['Buy milk']);
-    assert.deepEqual(server.rows.at(-1).tags, ['home']);
+    assert.deepEqual(texts(), ['Buy milk #home']);
+    assert.deepEqual(server.rows.at(-1).tags, []);
+    assert.equal(server.rows.at(-1).text, 'Buy milk #home');
     // The field stays open for the next task.
     assert.equal(form.hidden, false);
     assert.equal(input.value, '');
@@ -99,7 +100,7 @@ test('the + button opens the new-task field', async (t) => {
     assert.equal(form.hidden, false);
     assert.equal(toggle.getAttribute('aria-expanded'), 'true');
     assert.equal(input.value, 'Call Sam #work');
-    assert.equal(byId('sync-text').textContent, "Couldn't add “Call Sam”.");
+    assert.equal(byId('sync-text').textContent, "Couldn't add “Call Sam #work”.");
     assert.equal(byId('sync-note').hidden, false);
     // Dismissing the note goes back to the open field.
     byId('sync-dismiss').click();

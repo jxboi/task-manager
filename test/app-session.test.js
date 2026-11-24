@@ -2,13 +2,16 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { installDom } from './dom.js';
 import { createFakeApi, settle } from './fake-api.js';
+import { categoryColor } from '../src/tags.js';
 
 const sessionA = { user: { name: 'Ana', email: 'ana@example.test' }, csrfToken: 'token-a' };
 const sessionB = { user: { name: 'Ben', email: 'ben@example.test' }, csrfToken: 'token-b' };
 const ID = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const row = (n, text, extra = {}) => ({
-  id: ID(n), text, completed: false, createdAt: n, tags: [], due: null, repeat: 'none', notified: null, revision: 1, ...extra,
+  id: ID(n), text, completed: false, createdAt: n, tags: [], categoryId: null, due: null, repeat: 'none', notified: null,
+  revision: 1, ...extra,
 });
+const HOME = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
 
 test('task view against the server API', async (t) => {
   // One fake server per account; the cookie decides which one answers.
@@ -73,6 +76,11 @@ test('task view against the server API', async (t) => {
     form.dispatchEvent(new Event('submit'));
     await settle();
   };
+  const selectFilter = (value) => {
+    byId('category-filter').value = value;
+    byId('category-filter').dispatchEvent(new Event('change'));
+  };
+  const categoryOf = (text) => rowOf(text).querySelector('.todo-category')?.textContent ?? null;
   const toggle = async (text) => {
     list.dispatchEvent(event(rowOf(text).querySelector('.todo-checkbox'), 'change'));
     await settle();
@@ -86,7 +94,8 @@ test('task view against the server API', async (t) => {
   });
 
   await t.test('signing in shows a loading state, then the server list', async () => {
-    servers.a.rows = [row(1, 'Existing', { tags: ['home'] })];
+    servers.a.categories = [{ id: HOME, name: 'Home', revision: 1 }];
+    servers.a.rows = [row(1, 'Existing', { categoryId: HOME })];
     let open;
     gate = new Promise((resolve) => { open = resolve; });
     signIn(sessionA);
@@ -98,47 +107,65 @@ test('task view against the server API', async (t) => {
     open();
     await settle();
     assert.deepEqual(texts(), ['Existing']);
-    // No count text once the list is shown: the unfiltered summary row is empty and collapsed.
+    // The card names its category and takes the color hashed from the name.
+    assert.equal(categoryOf('Existing'), 'Home');
+    assert.equal(rowOf('Existing').dataset.color, categoryColor('Home'));
+    assert.equal(byId('category-row').hidden, false);
+    assert.deepEqual(byId('category-filter').children.map((option) => option.textContent),
+      ['All categories', 'Uncategorized', 'Home']);
+    // No count text once the list is shown.
     assert.equal(summary.textContent, '');
-    assert.equal(byId('summary-row').className.split(' ').includes('is-quiet'), true);
     assert.equal(servers.a.requests[0].headers['X-CSRF-Token'], 'token-a');
   });
 
-  await t.test('adding parses inline tags and saves to the server', async () => {
+  await t.test('adding keeps a "#word" as title text, sends no tags and starts uncategorized', async () => {
     await add('Pay rent #bills');
     assert.equal(input.value, '');
-    assert.deepEqual(texts(), ['Existing', 'Pay rent']);
+    assert.deepEqual(texts(), ['Existing', 'Pay rent #bills']);
     const saved = servers.a.rows.at(-1);
-    assert.equal(saved.text, 'Pay rent');
-    assert.deepEqual(saved.tags, ['bills']);
+    assert.equal(saved.text, 'Pay rent #bills');
+    assert.deepEqual(saved.tags, []);
+    assert.equal(saved.categoryId, null);
+    const post = servers.a.requests.findLast((request) => request.method === 'POST');
+    assert.deepEqual(Object.keys(JSON.parse(post.body)), ['id', 'text']);
+    // No tag chip, no category label, no shelf color.
+    assert.equal(rowOf('Pay rent #bills').querySelector('.tag'), null);
+    assert.equal(categoryOf('Pay rent #bills'), null);
+    assert.equal(rowOf('Pay rent #bills').dataset.color, undefined);
   });
 
-  await t.test('an active filter tags new tasks, and filters reset is in memory only', async () => {
-    const chip = byId('filter-bar').children.find((item) => item.dataset.tag === 'home');
-    chip.click();
+  await t.test('the Category filter shows All, Uncategorized or one category; new tasks go to Uncategorized', async () => {
+    selectFilter(HOME);
     assert.deepEqual(texts(), ['Existing']);
-    // Filtering shows only Clear in the summary row, no "N to do in #home".
-    assert.equal(byId('summary-row').className.split(' ').includes('is-quiet'), false);
-    assert.equal(byId('clear-filters').hidden, false);
-    assert.equal(summary.textContent, '');
+    assert.equal(byId('app-title').textContent, 'Home');
+    assert.equal(byId('add-shelf').hidden, false);
+    assert.equal(byId('add-shelf').textContent, 'New tasks go to Uncategorized.');
     await add('Fix tap');
-    assert.deepEqual(servers.a.rows.at(-1).tags, ['home']);
-    assert.deepEqual(texts(), ['Existing', 'Fix tap']);
-    byId('clear-filters').click();
+    assert.equal(servers.a.rows.at(-1).categoryId, null);
+    assert.deepEqual(texts(), ['Existing'], 'the new task is not in this category');
+    assert.equal(byId('announcer').textContent, 'Added “Fix tap” to Uncategorized.');
+    selectFilter('none');
+    assert.deepEqual(texts(), ['Pay rent #bills', 'Fix tap']);
+    assert.equal(byId('add-shelf').hidden, true);
+    assert.equal(byId('app-title').textContent, 'Tasks');
+    selectFilter('all');
     assert.equal(texts().length, 3);
+    assert.equal(byId('filter-empty').hidden, true);
   });
 
   await t.test('completing saves; a revision conflict reloads and asks to try again', async () => {
     await toggle('Existing');
     assert.equal(servers.a.rows[0].completed, true);
-    // Another tab renames nothing but bumps the row.
-    servers.a.rows = servers.a.rows.map((item, i) => (i === 0 ? { ...item, tags: ['home', 'other'], revision: item.revision + 5 } : item));
+    // Another tab renames the task's category and bumps the row.
+    servers.a.categories = [{ id: HOME, name: 'House', revision: 2 }];
+    servers.a.rows = servers.a.rows.map((item, i) => (i === 0 ? { ...item, revision: item.revision + 5 } : item));
     await toggle('Existing');
     assert.equal(note.hidden, false);
     assert.match(byId('sync-text').textContent, /changed in another tab/);
     assert.equal(byId('sync-retry').hidden, true);
-    // The list was reloaded: the other tab's tag shows, and the toggle didn't apply.
-    assert.deepEqual(rowOf('Existing').querySelectorAll('.tag-label').map((label) => label.dataset.tag), ['home', 'other']);
+    // The list was reloaded: the other tab's name shows, and the toggle didn't apply.
+    assert.equal(categoryOf('Existing'), 'House');
+    assert.equal(byId('category-filter').children.at(-1).textContent, 'House');
     assert.equal(servers.a.rows[0].completed, true);
     byId('sync-dismiss').click();
     assert.equal(note.hidden, true);
@@ -146,14 +173,14 @@ test('task view against the server API', async (t) => {
 
   await t.test('a failed save rolls back and Try again repeats it', async () => {
     servers.a.failNext = () => new TypeError('Failed to fetch');
-    await toggle('Pay rent');
-    assert.equal(rowOf('Pay rent').className.includes('is-done'), false);
+    await toggle('Pay rent #bills');
+    assert.equal(rowOf('Pay rent #bills').className.includes('is-done'), false);
     assert.equal(note.hidden, false);
     assert.equal(byId('sync-retry').hidden, false);
     byId('sync-retry').click();
     await settle();
     assert.equal(note.hidden, true);
-    assert.equal(servers.a.rows.find((item) => item.text === 'Pay rent').completed, true);
+    assert.equal(servers.a.rows.find((item) => item.text === 'Pay rent #bills').completed, true);
   });
 
   await t.test('a create whose answer was lost keeps the draft and re-adding does not duplicate', async () => {
@@ -202,10 +229,10 @@ test('task view against the server API', async (t) => {
 
   await t.test('a 401 sends the view back to sign-in; a CSRF rejection re-reads the session', async () => {
     servers.a.session = { user: null, csrfToken: null };
-    await toggle('Pay rent');
+    await toggle('Pay rent #bills');
     assert.deepEqual(events, ['tasks:expired']);
     servers.a.session = { ...sessionA, csrfToken: 'token-a2' };
-    await toggle('Pay rent');
+    await toggle('Pay rent #bills');
     assert.deepEqual(events, ['tasks:expired', 'tasks:revalidate']);
     // The list stays hidden while the session is re-read.
     assert.deepEqual(texts(), []);
@@ -213,7 +240,7 @@ test('task view against the server API', async (t) => {
     servers.a.session = { ...sessionA };
     signIn(sessionA); // the auth module found the same session
     await settle();
-    assert.ok(texts().includes('Pay rent'));
+    assert.ok(texts().includes('Pay rent #bills'));
     assert.match(byId('sync-text').textContent, /blocked/);
     byId('sync-dismiss').click();
   });
@@ -222,7 +249,7 @@ test('task view against the server API', async (t) => {
     const before = texts();
     let open;
     gate = new Promise((resolve) => { open = resolve; });
-    list.dispatchEvent(event(rowOf('Pay rent').querySelector('.todo-checkbox'), 'change'));
+    list.dispatchEvent(event(rowOf('Pay rent #bills').querySelector('.todo-checkbox'), 'change'));
     // auth.js got a BroadcastChannel message from another tab.
     window.dispatchEvent(new CustomEvent('tasks:invalidate'));
     assert.deepEqual(texts(), []);
@@ -305,28 +332,18 @@ test('task view against the server API', async (t) => {
     assert.equal(input.value, '');
   });
 
-  await t.test('item 3: a retry ID only goes to exactly the same task (text and every tag, filter included)', async () => {
-    const chip = (tag) => byId('filter-bar').children.find((item) => item.dataset.tag === tag);
-    await add('Seed #home');
-    await add('Seed #work');
-    chip('home').click();
+  await t.test('item 3: a retry ID only goes to the same title, whatever the filter', async () => {
     servers.a.failNext = (method) => (method === 'POST' ? { afterWrite: true } : undefined);
-    await add('Check supplies'); // saved as #home, answer lost
+    await add('Check supplies'); // saved, answer lost
     assert.equal(input.value, 'Check supplies');
-    byId('clear-filters').click();
-    chip('work').click();
-    await add('Unrelated'); // under #work
-    await add('Check supplies'); // a different task: #work, not the #home one
+    await add('Unrelated'); // another title: its own new ID
+    selectFilter('none');
+    await add('Check supplies'); // the same title reuses the lost create's ID
     const rows = servers.a.rows.filter((item) => item.text === 'Check supplies');
-    assert.deepEqual(rows.map((item) => item.tags).sort(), [['home'], ['work']]);
-    assert.equal(new Set(rows.map((item) => item.id)).size, 2);
-    byId('clear-filters').click();
-    // The #home draft still reconciles to its own row when re-added under #home.
-    chip('home').click();
-    await add('Check supplies');
-    assert.equal(servers.a.rows.filter((item) => item.text === 'Check supplies').length, 2);
-    byId('clear-filters').click();
-    assert.equal(texts().filter((text) => text === 'Check supplies').length, 2);
+    assert.equal(rows.length, 1);
+    assert.notEqual(rows[0].id, servers.a.rows.find((item) => item.text === 'Unrelated').id);
+    selectFilter('all');
+    assert.equal(texts().filter((text) => text === 'Check supplies').length, 1);
   });
 
   await t.test('a draft can be edited after its UUID is recreated following empty reconciliation', async () => {
@@ -405,7 +422,11 @@ test('task view against the server API', async (t) => {
     rowOf('Existing').querySelector('.todo-open').click();
     setWhen('2031-05-05T08:00');
     byId('reminder-repeat').value = 'daily';
-    byId('filter-bar').children.find((item) => item.dataset.tag === 'home').click();
+    byId('edit-category').value = HOME;
+    byId('edit-category').dispatchEvent(new Event('change'));
+    selectFilter(HOME);
+    byId('category-manage').click();
+    byId('category-name').value = 'half-named';
     input.value = 'half-typed';
     let open;
     gate = new Promise((resolve) => { open = resolve; });
@@ -416,8 +437,16 @@ test('task view against the server API', async (t) => {
     await settle();
     assert.deepEqual(texts(), []);
     assert.equal(input.value, '');
-    assert.equal(byId('clear-filters').hidden, true);
-    assert.equal(byId('filter-wrap').hidden, true);
+    // No category of the old account is left: filter, options, panel, sheet select or tint.
+    assert.equal(byId('category-row').hidden, true);
+    assert.equal(byId('category-filter').value, 'all');
+    assert.deepEqual(byId('category-filter').children.map((option) => option.textContent), ['All categories', 'Uncategorized']);
+    assert.deepEqual(byId('edit-category').children.map((option) => option.textContent), ['Uncategorized']);
+    assert.equal(byId('edit-category').value, '');
+    assert.equal(byId('category-panel').hidden, true);
+    assert.deepEqual(byId('category-list').children, []);
+    assert.equal(byId('category-name').value, '');
+    assert.equal(byId('reminder-editor').dataset.color, undefined);
     assert.equal(byId('reminder-layer').hidden, true);
     assert.equal(note.hidden, true);
     assert.equal(byId('reminder-editor').getAttribute('aria-label'), null);
@@ -439,7 +468,7 @@ test('task view against the server API', async (t) => {
     assert.equal(byId('empty-state').hidden, false);
     // The empty state has no count (no "0 to do").
     assert.equal(summary.textContent, '');
-    assert.equal(byId('summary-row').className.split(' ').includes('is-quiet'), true);
+    assert.deepEqual(byId('category-filter').children.map((option) => option.textContent), ['All categories', 'Uncategorized']);
     await add('Ben only');
     assert.deepEqual(texts(), ['Ben only']);
     assert.equal(servers.a.rows.some((item) => item.text === 'Ben only'), false);
@@ -470,9 +499,8 @@ test('task view against the server API', async (t) => {
     signIn({ ...sessionA, csrfToken: 'token-a3' });
     servers.a.session = { ...sessionA, csrfToken: 'token-a3' };
     await settle();
-    // The summary row collapses; the error card in the list slot says it, with Try again.
+    // The error card in the list slot says it, with Try again.
     assert.equal(summary.textContent, '');
-    assert.equal(byId('summary-row').className.split(' ').includes('is-quiet'), true);
     assert.equal(byId('sync-text').textContent, "Couldn't load your tasks");
     assert.equal(byId('sync-note').className.split(' ').includes('is-block'), true);
     assert.equal(byId('sync-retry').hidden, false);

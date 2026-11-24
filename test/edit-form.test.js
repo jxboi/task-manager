@@ -1,8 +1,13 @@
-// The task sheet in src/app.js (title, tags, reminder picker, delete), run against the fake API.
+// The task sheet in src/app.js (title, category, reminder picker, delete), run against the fake API.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createFakeApi, settle } from './fake-api.js';
 import { installDom } from './dom.js';
+import { categoryColor } from '../src/tags.js';
+
+const HOME = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
+const BILLS = '0f8fad5b-d9cb-469f-a165-70867728950e';
+const categoryGone = 'The category you chose was deleted. The list is up to date now, so try again.';
 
 const changedElsewhere = 'This task changed in another tab or device. The list is up to date now, so try again.';
 const couldNotSave = "Couldn't save your change.";
@@ -16,9 +21,10 @@ test('edit form', async (t) => {
   const later = Date.parse('2099-03-04T09:30:00');
   const base = { completed: false, due: null, repeat: 'none', notified: null, revision: 1 };
   const server = createFakeApi();
+  server.categories = [{ id: HOME, name: 'Home', revision: 1 }, { id: BILLS, name: 'Bills', revision: 1 }];
   server.rows = [
-    { ...base, id: ids.rent, text: 'Pay rent', tags: ['home'], createdAt: 1 },
-    { ...base, id: ids.plants, text: 'Water plants', tags: [], createdAt: 2, due: later, repeat: 'weekly' },
+    { ...base, id: ids.rent, text: 'Pay rent', tags: [], categoryId: HOME, createdAt: 1 },
+    { ...base, id: ids.plants, text: 'Water plants', tags: [], categoryId: null, createdAt: 2, due: later, repeat: 'weekly' },
   ];
   await import('../src/app.js');
   window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: server.session } }));
@@ -36,6 +42,15 @@ test('edit form', async (t) => {
   const messageText = byId('reminder-message-text');
   const syncNote = byId('sync-note');
   const syncText = byId('sync-text');
+  const category = byId('edit-category');
+  const choose = (value) => {
+    category.value = value;
+    category.dispatchEvent(new Event('change'));
+  };
+  const refresh = async () => {
+    window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: server.session } }));
+    await settle();
+  };
   const row = (id) => list.children.find((item) => item.dataset.id === ids[id]);
   const editButton = (id) => row(id).querySelector('.todo-open');
   const open = (id) => editButton(id).click();
@@ -72,7 +87,7 @@ test('edit form', async (t) => {
     assert.equal(button.getAttribute('aria-label'), `Water plants. Reminder ${when}, repeats weekly. Edit task`);
     assert.equal(button.getAttribute('aria-haspopup'), 'dialog');
     assert.equal(button.getAttribute('aria-expanded'), 'false');
-    assert.equal(editButton('rent').getAttribute('aria-label'), 'Pay rent. Tags: home. Edit task');
+    assert.equal(editButton('rent').getAttribute('aria-label'), 'Pay rent. Category: Home. Edit task');
     // The row has no other controls: no pencil, trash, "+ tag", "+ reminder" or tag ×.
     for (const control of ['.todo-edit', '.todo-delete', '.tag-add', '.reminder-add', '.tag-remove']) {
       assert.equal(row('rent').querySelector(control), null, control);
@@ -95,15 +110,26 @@ test('edit form', async (t) => {
     byId('reminder-cancel').click();
   });
 
-  await t.test('the title field holds the title; the tags are chips', () => {
+  await t.test('the title field holds the title; the Category select holds the task\'s category', () => {
     open('rent');
     assert.equal(text.value, 'Pay rent');
-    assert.deepEqual(byId('edit-tags').querySelectorAll('.tag-label').map((chip) => chip.textContent), ['#home']);
+    assert.deepEqual(category.children.map((option) => [option.value, option.textContent]),
+      [['', 'Uncategorized'], [BILLS, 'Bills'], [HOME, 'Home']]);
+    assert.equal(category.value, HOME);
+    assert.equal(editor.dataset.color, categoryColor('Home'), 'the sheet takes the category color');
+    choose(BILLS);
+    assert.equal(editor.dataset.color, categoryColor('Bills'), 'and follows the select');
+    choose('');
+    assert.equal(editor.dataset.color, undefined, 'uncategorized: the plain sheet');
+    assert.equal(byId('edit-tags'), undefined, 'no tag chips or Add tag');
     assert.equal(on.checked, false);
     assert.equal(byId('picker-detail').hidden, true);
     assert.equal(date.value, '');
     assert.equal(time.value, '');
     assert.equal(repeat.value, 'none');
+    byId('reminder-cancel').click();
+    open('plants');
+    assert.equal(category.value, '', 'an uncategorized task shows Uncategorized');
     byId('reminder-cancel').click();
   });
 
@@ -131,8 +157,8 @@ test('edit form', async (t) => {
     assert.equal(focusKey(), JSON.stringify(['open', ids.plants]));
   });
 
-  await t.test('an empty title, or only #tags, is refused with the rule that disables Add', () => {
-    for (const value of ['', '   ', '#home #bills']) {
+  await t.test('an empty title is refused with the rule that disables Add; "#home" is a title', () => {
+    for (const value of ['', '   ']) {
       open('rent');
       type(text, value);
       assert.equal(save.getAttribute('aria-disabled'), 'true', JSON.stringify(value));
@@ -151,6 +177,11 @@ test('edit form', async (t) => {
       input.value = '';
       byId('reminder-cancel').click();
     }
+    open('rent');
+    type(text, '#home #bills');
+    assert.equal(save.getAttribute('aria-disabled'), 'false');
+    assert.equal(shownMessage(), null);
+    byId('reminder-cancel').click();
     assert.equal(patches().length, 0);
   });
 
@@ -178,9 +209,10 @@ test('edit form', async (t) => {
     assert.equal(patches().length, 0);
   });
 
-  await t.test('Save updates text, tags, date and repeat at once with one PATCH, then confirms', async () => {
+  await t.test('Save updates title, category, date and repeat at once with one PATCH, then confirms', async () => {
     open('rent');
-    type(text, 'Pay rent early #bills'); // the title's #tag is added after the home chip
+    type(text, 'Pay rent early');
+    choose(BILLS);
     setWhen('2099-01-01T12:00');
     repeat.value = 'daily';
     repeat.dispatchEvent(new Event('change'));
@@ -188,32 +220,42 @@ test('edit form', async (t) => {
     // Optimistic: shown before the server answers.
     assert.equal(layer.hidden, true);
     assert.equal(row('rent').querySelector('.todo-text').textContent, 'Pay rent early');
-    assert.deepEqual(row('rent').querySelectorAll('.tag-label').map((chip) => chip.dataset.tag), ['home', 'bills']);
+    assert.equal(row('rent').querySelector('.todo-category').textContent, 'Bills');
+    assert.equal(row('rent').dataset.color, categoryColor('Bills'));
     assert.ok(row('rent').querySelector('.stamp'));
     assert.equal(focusKey(), JSON.stringify(['open', ids.rent]));
     await settle();
     const due = Date.parse('2099-01-01T12:00:00');
     assert.deepEqual(JSON.parse(patches().at(-1).body), {
-      text: 'Pay rent early', tags: ['home', 'bills'], due, repeat: 'daily', revision: 1, action: 'edit',
+      text: 'Pay rent early', due, repeat: 'daily', categoryId: BILLS, revision: 1, action: 'edit',
     });
     assert.equal(patches().length, 1);
     const saved = serverRow('rent');
-    assert.deepEqual([saved.text, saved.tags, saved.due, saved.repeat, saved.revision], ['Pay rent early', ['home', 'bills'], due, 'daily', 2]);
+    assert.deepEqual([saved.text, saved.categoryId, saved.due, saved.repeat, saved.revision], ['Pay rent early', BILLS, due, 'daily', 2]);
     assert.equal(syncNote.hidden, true);
   });
 
-  await t.test('Enter in the title saves; saving with no change sends nothing', async () => {
+  await t.test('Enter in the title saves; saving with no change sends nothing; Uncategorized clears', async () => {
     const before = patches().length;
     open('rent');
     key(text, 'Enter');
     assert.equal(layer.hidden, true);
     await settle();
     assert.equal(patches().length, before);
+    // Changed and changed back is no change either.
     open('rent');
-    byId('edit-tags').querySelector('.tag-remove').click(); // × on #home
+    choose(HOME);
+    choose(BILLS);
     key(text, 'Enter');
     await settle();
-    assert.deepEqual(serverRow('rent').tags, ['bills']);
+    assert.equal(patches().length, before);
+    open('rent');
+    choose('');
+    key(text, 'Enter');
+    assert.equal(row('rent').querySelector('.todo-category'), null);
+    await settle();
+    assert.equal(JSON.parse(patches().at(-1).body).categoryId, null);
+    assert.equal(serverRow('rent').categoryId, null);
   });
 
   await t.test('turning the Reminder switch off removes the reminder', async () => {
@@ -245,10 +287,10 @@ test('edit form', async (t) => {
   await t.test('a draft opened before another tab changed the task is not saved over it', async () => {
     const original = { ...serverRow('rent') };
     open('rent');
-    // Another tab adds a tag and a reminder; this tab's list refreshes while the form is open.
+    // Another tab sets a category and a reminder; this tab's list refreshes while the form is open.
     const reminder = Date.parse('2099-05-06T08:00:00');
     server.rows = server.rows.map((item) => (item.id === ids.rent
-      ? { ...item, tags: ['home', 'bills'], due: reminder, repeat: 'daily', revision: item.revision + 1 } : item));
+      ? { ...item, categoryId: HOME, due: reminder, repeat: 'daily', revision: item.revision + 1 } : item));
     window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: server.session } }));
     await settle();
     const before = patches().length;
@@ -259,54 +301,76 @@ test('edit form', async (t) => {
     assert.equal(layer.hidden, true);
     assert.equal(syncNote.hidden, false);
     assert.equal(syncText.textContent, changedElsewhere);
-    assert.deepEqual([serverRow('rent').tags, serverRow('rent').due, serverRow('rent').repeat], [['home', 'bills'], reminder, 'daily']);
+    assert.deepEqual([serverRow('rent').categoryId, serverRow('rent').due, serverRow('rent').repeat], [HOME, reminder, 'daily']);
     byId('sync-dismiss').click();
-    // Opened again, the form has the refreshed values and saves.
+    // Opened again, the form has the refreshed values and saves. The category wasn't changed, so
+    // no categoryId is sent and the server keeps the link.
     open('rent');
     assert.equal(text.value, 'Pay rent early');
+    assert.equal(category.value, HOME);
     type(text, 'Pay rent today');
     save.click();
     await settle();
-    assert.deepEqual([serverRow('rent').text, serverRow('rent').due, serverRow('rent').tags], ['Pay rent today', reminder, ['home', 'bills']]);
+    assert.equal(Object.hasOwn(JSON.parse(patches().at(-1).body), 'categoryId'), false);
+    assert.deepEqual([serverRow('rent').text, serverRow('rent').due, serverRow('rent').categoryId], ['Pay rent today', reminder, HOME]);
     // Put the row back for the tests after this one.
     server.rows = server.rows.map((item) => (item.id === ids.rent ? { ...original, revision: item.revision + 1 } : item));
     window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: server.session } }));
     await settle();
   });
 
-  await t.test('a tag with # in it survives an untouched edit, and removing a chip removes only it', async () => {
+  await t.test('a sheet whose chosen or original category is deleted elsewhere closes and says so', async () => {
     const original = { ...serverRow('rent') };
-    server.rows = server.rows.map((item) => (item.id === ids.rent
-      ? { ...item, text: 'Review #42', tags: ['ref#42', 'c#'], revision: item.revision + 1 } : item));
-    window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: server.session } }));
-    await settle();
+    open('rent');
+    choose(BILLS);
     const before = patches().length;
+    server.categories = server.categories.filter((item) => item.id !== BILLS); // another tab deletes Bills
+    await refresh();
+    assert.equal(layer.hidden, true);
+    assert.equal(syncText.textContent, categoryGone);
+    assert.equal(focusKey(), JSON.stringify(['open', ids.rent]));
+    assert.deepEqual(category.children.map((option) => option.textContent), ['Uncategorized', 'Home']);
+    byId('sync-dismiss').click();
+    // The task's own category: the delete unlinks it (a new revision) while the sheet is open.
+    server.rows = server.rows.map((item) => (item.id === ids.rent ? { ...item, categoryId: HOME } : item));
+    await refresh();
     open('rent');
-    assert.equal(text.value, 'Review #42');
-    save.click();
-    await settle();
-    assert.equal(patches().length, before, 'untouched: nothing to send');
-    open('rent');
-    type(text, 'Review today');
-    save.click();
-    await settle();
-    assert.deepEqual([serverRow('rent').text, serverRow('rent').tags], ['Review today', ['ref#42', 'c#']]);
-    open('rent');
-    byId('edit-tags').querySelector('.tag-remove').click();
-    save.click();
-    await settle();
-    assert.deepEqual(serverRow('rent').tags, ['c#']);
+    assert.equal(category.value, HOME);
+    server.categories = [];
+    server.rows = server.rows.map((item) => (item.id === ids.rent ? { ...item, categoryId: null, revision: item.revision + 1 } : item));
+    await refresh();
+    assert.equal(layer.hidden, true);
+    assert.equal(syncText.textContent, categoryGone);
+    assert.equal(patches().length, before, 'nothing was sent');
+    byId('sync-dismiss').click();
+    server.categories = [{ id: HOME, name: 'Home', revision: 1 }, { id: BILLS, name: 'Bills', revision: 1 }];
     server.rows = server.rows.map((item) => (item.id === ids.rent ? { ...original, revision: item.revision + 1 } : item));
-    window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: server.session } }));
+    await refresh();
+  });
+
+  await t.test('a save that moves the task out of the filtered view sends focus to a neighbour or the filter', async () => {
+    const original = { ...serverRow('rent') };
+    server.rows = server.rows.map((item) => (item.id === ids.rent ? { ...item, categoryId: HOME, revision: item.revision + 1 } : item));
+    await refresh();
+    byId('category-filter').value = HOME;
+    byId('category-filter').dispatchEvent(new Event('change'));
+    assert.deepEqual(list.children.map((item) => item.dataset.id), [ids.rent]);
+    open('rent');
+    choose('');
+    save.click();
+    assert.equal(byId('filter-empty').hidden, false);
+    assert.equal(byId('empty-state').hidden, true, 'the global empty state stays for no tasks at all');
+    assert.equal(focusKey(), JSON.stringify(['category-filter']));
     await settle();
+    assert.equal(serverRow('rent').categoryId, null);
+    byId('category-filter').value = 'all';
+    byId('category-filter').dispatchEvent(new Event('change'));
+    server.rows = server.rows.map((item) => (item.id === ids.rent ? { ...original, revision: item.revision + 1 } : item));
+    await refresh();
   });
 
   await t.test('a reminder claim while the form is open keeps the draft; an edit of a field does not', async () => {
     const original = { ...serverRow('rent') };
-    const refresh = async () => {
-      window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: server.session } }));
-      await settle();
-    };
     open('rent');
     type(text, 'Pay rent (mine)');
     // This tab (or another) claims a reminder: only `notified` and the revision change.
@@ -382,66 +446,6 @@ test('edit form', async (t) => {
     assert.equal(serverRow('rent').text, 'Pay rent today');
     assert.equal(row('rent').querySelector('.todo-text').textContent, 'Pay rent today');
     assert.equal(syncNote.hidden, true);
-  });
-
-  await t.test('"Add tag" in the sheet adds to the draft with the "+ tag" rules, and Save sends it', async () => {
-    const tagAdd = byId('edit-tag-add');
-    const field = byId('edit-tag-field');
-    const enter = (value) => {
-      field.value = value;
-      const event = Object.assign(new Event('keydown'), { key: 'Enter' });
-      field.dispatchEvent(event);
-    };
-    const chips = () => byId('edit-tags').querySelectorAll('.tag-label').map((chip) => chip.textContent);
-    open('rent');
-    const saved = chips();
-    assert.equal(field.hidden, true);
-    tagAdd.click();
-    assert.equal(field.hidden, false);
-    assert.equal(tagAdd.hidden, true);
-    assert.equal(document.activeElement, field);
-    enter('#Errands');
-    assert.deepEqual(chips(), [...saved, '#errands']);
-    assert.equal(field.hidden, false, 'Enter adds and stays open');
-    assert.equal(field.value, '');
-    enter('errands'); // a duplicate is refused and flashed
-    assert.deepEqual(chips(), [...saved, '#errands']);
-    assert.equal(field.getAttribute('aria-invalid'), 'true');
-    enter('##bad');
-    assert.deepEqual(chips(), [...saved, '#errands']);
-    const escape = Object.assign(new Event('keydown'), { key: 'Escape' });
-    field.dispatchEvent(escape);
-    assert.equal(field.hidden, true, 'Esc closes the field');
-    assert.equal(layer.hidden, false, 'and not the sheet');
-    assert.equal(document.activeElement, tagAdd);
-    const before = patches().length;
-    save.click();
-    await settle();
-    assert.equal(patches().length, before + 1);
-    assert.deepEqual(serverRow('rent').tags, [...saved, '#errands'].map((tag) => tag.slice(1)));
-    // Back as it was, through the sheet's ×.
-    open('rent');
-    byId('edit-tags').querySelectorAll('.tag-remove').find((button) => button.dataset.tag === 'errands').click();
-    save.click();
-    await settle();
-    assert.deepEqual(serverRow('rent').tags, saved.map((tag) => tag.slice(1)));
-  });
-
-  await t.test('Save keeps a tag still typed in the focused Add tag field', async () => {
-    open('rent');
-    const before = serverRow('rent').tags;
-    byId('edit-tag-add').click();
-    const field = byId('edit-tag-field');
-    field.value = 'Pending';
-    assert.equal(document.activeElement, field);
-    save.click(); // no blur first
-    await settle();
-    assert.deepEqual(serverRow('rent').tags, [...before, 'pending']);
-    open('rent');
-    byId('edit-tags').querySelectorAll('.tag-remove').find((button) => button.dataset.tag === 'pending').click();
-    save.click();
-    await settle();
-    assert.deepEqual(serverRow('rent').tags, before);
   });
 
   await t.test('focus stays in the sheet when Previous month disables itself', async () => {

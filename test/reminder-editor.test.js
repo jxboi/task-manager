@@ -275,13 +275,11 @@ test('task sheet reminder picker', async (t) => {
     assert.equal(isFired('late'), false);
   });
 
-  await t.test('the pulse ending updates the row in place and keeps the sheet\'s open "Add tag" field', async () => {
+  await t.test('the pulse ending updates the row in place and keeps focus in the sheet\'s title field', async () => {
     await fireAgain('late');
     open('open');
-    byId('edit-tag-add').click();
-    const field = byId('edit-tag-field');
+    const field = byId('edit-text');
     const lateRow = row('late');
-    assert.equal(field.hidden, false);
     assert.equal(document.activeElement, field);
     assert.equal(isFired('late'), true);
     list.dispatchEvent(dispatch(lateRow, 'animationend', { animationName: 'reminder-pulse' }));
@@ -289,25 +287,7 @@ test('task sheet reminder picker', async (t) => {
     assert.equal(row('late'), lateRow, 'the row was not re-rendered');
     assert.equal(lateRow.style.animationDelay, '');
     assert.equal(isFired('late'), false);
-    assert.equal(field.hidden, false, 'the tag field stays open');
     assert.equal(document.activeElement, field);
-    cancel();
-  });
-
-  // The real handler runs in the capture phase, before the field's own Esc handler.
-  await t.test('Esc in the sheet\'s "Add tag" field clears the pulses and closes only the field', async () => {
-    await fireAgain('late');
-    open('open');
-    byId('edit-tag-add').click();
-    const field = byId('edit-tag-field');
-    const escape = dispatch(field, 'keydown', { key: 'Escape', preventDefault() { this.prevented = true; } });
-    document.dispatchEvent(escape);
-    field.dispatchEvent(escape);
-    await settle();
-    assert.equal(isFired('late'), false);
-    assert.equal(escape.prevented, true);
-    assert.equal(field.hidden, true);
-    assert.equal(byId('reminder-layer').hidden, false, 'the sheet stays open');
     cancel();
   });
 

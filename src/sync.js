@@ -1,16 +1,16 @@
-// The signed-in task list as the server has it, plus local changes still on their way there.
+// The signed-in task list and category catalog as the server has them, plus local todo changes
+// still on their way there.
 // Every request goes through one queue, so writes reach the server in the order they were made and
 // each one uses the revision the previous one returned. The view (`todos`) is the confirmed rows
 // with the pending changes applied on top, so the page updates at once. A change the server
-// rejects drops out of the view again. reset() starts a new session: anything still in flight
+// rejects drops out of the view again. Category changes are not optimistic: they wait for the
+// server's answer, in the same queue. reset() starts a new session: anything still in flight
 // from the old one is ignored when it settles.
 import {
-  addTag,
   appendTodo,
   clearReminder,
   editTodo,
   moveTodo,
-  removeTag,
   removeTodo,
   setReminder,
   sortByPosition,
@@ -22,11 +22,21 @@ const replace = (todos, row) => todos.map((todo) => (todo.id === row.id ? row : 
 const isStale = (error) => error?.code === 'STALE_SESSION';
 // The server's copy changed or is gone: reload before anything else.
 const needsReload = (error) => error?.status === 409 || error?.status === 404;
+// No answer, or a server error: the write may or may not have landed.
+const isUncertain = (error) => error?.status === 0 || error?.status >= 500;
+
+// Alphabetical by name for this browser's language, then by ID, so the list and the selects
+// always agree.
+const collator = new Intl.Collator(undefined, { sensitivity: 'base' });
+const sortCategories = (list) => [...list].sort((a, b) =>
+  collator.compare(a.name, b.name) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
 // `seenRevision(id)` is the revision of the row the user is looking at when a change is made (the
 // page passes what it has rendered). Defaults to the row in the current view.
 export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
   let confirmed = [];
+  // [{id, name, revision}], or null before a load and when the server sent no catalog.
+  let categories = null;
   let pending = [];
   let view = [];
   let generation = 0;
@@ -48,7 +58,7 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
   }
 
   async function reloadNow(gen) {
-    const todos = await api.listTodos();
+    const { todos, categories: catalog } = await api.readSnapshot();
     if (gen !== generation) return false;
     const previous = new Map(confirmed.map((todo) => [todo.id, todo]));
     refreshedAt = new Map(todos.map((todo) => {
@@ -57,6 +67,7 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
       return [todo.id, unchanged ? refreshedAt.get(todo.id) : todo.revision];
     }));
     confirmed = todos;
+    categories = catalog && sortCategories(catalog);
     loaded = true;
     changed();
     return true;
@@ -131,12 +142,44 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
     });
   }
 
+  // One category write, after everything queued before it. `send` resolves to the server's
+  // answer and `commit` applies it. A stale or missing row (409, 404) or an uncertain failure
+  // reloads the snapshot before the caller offers anything else, so a retry starts from the
+  // server's catalog and a stale rename is never replayed.
+  function categoryWrite(send, commit) {
+    const gen = generation;
+    return enqueue(async () => {
+      if (gen !== generation) return { ok: false, stale: true };
+      try {
+        const result = await send();
+        if (gen !== generation) return { ok: false, stale: true };
+        commit(result);
+        changed();
+        return { ok: true };
+      } catch (error) {
+        if (gen !== generation || isStale(error)) return { ok: false, stale: true };
+        const reload = needsReload(error) || isUncertain(error);
+        const reloaded = reload ? await reloadNow(gen).catch(() => false) : false;
+        if (gen !== generation) return { ok: false, stale: true };
+        return { ok: false, error, reloaded };
+      }
+    });
+  }
+
+  const revisionOf = (id) => categories?.find((category) => category.id === id)?.revision;
+  const putCategory = (category) => {
+    categories = sortCategories([...(categories ?? []).filter((item) => item.id !== category.id), category]);
+  };
+
   return {
     get todos() {
       return view;
     },
     get confirmed() {
       return confirmed;
+    },
+    get categories() {
+      return categories;
     },
     get loaded() {
       return loaded;
@@ -149,6 +192,7 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
       generation++;
       refreshedAt.clear();
       confirmed = [];
+      categories = null;
       pending = [];
       view = [];
       loaded = false;
@@ -189,11 +233,10 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
       return result;
     },
 
-    // Slice 2: call move(id, anchorId, 'before' | 'after', activeTags) with visible IDs.
-    // The result follows the normal write contract. An unchanged move resolves with skipped.
-    move(id, anchorId, side, activeTags = []) {
-      const tags = [...activeTags];
-      const apply = (todos) => moveTodo(todos, id, anchorId, side, tags);
+    // Moves a task before or after another one in the whole list. The result follows the normal
+    // write contract. An unchanged move resolves with skipped.
+    move(id, anchorId, side) {
+      const apply = (todos) => moveTodo(todos, id, anchorId, side);
       if (apply(view) === view) return Promise.resolve({ ok: false, skipped: true });
       return write({
         id,
@@ -230,26 +273,46 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
       });
     },
 
-    addTag(id, tag) {
-      return patch(id, (todos) => addTag(todos, id, tag), 'addTag', { tag });
-    },
-
-    removeTag(id, tag) {
-      return patch(id, (todos) => removeTag(todos, id, tag), 'removeTag', { tag });
-    },
-
     setReminder(id, due, repeat) {
       return patch(id, (todos) => setReminder(todos, id, due, repeat), 'setReminder', { due, repeat });
     },
 
-    // The edit form: title, tags and reminder in one write. `fields` is the whole new state,
-    // {text, tags, due, repeat}, so it applies the same on the server as it did here.
+    // The edit form: title, reminder and category in one write. `fields` is {text, due, repeat}
+    // plus `categoryId` only when the user changed it (omitted keeps the server's link), so it
+    // applies the same on the server as it did here.
     edit(id, fields) {
       return patch(id, (todos) => editTodo(todos, id, fields), 'edit', fields);
     },
 
     clearReminder(id) {
       return patch(id, (todos) => clearReminder(todos, id), 'clearReminder', {});
+    },
+
+    // A new category, under a fresh UUID. After an uncertain failure the reload tells whether it
+    // landed anyway: if that UUID is now in the catalog, the create succeeded.
+    async createCategory(name, id = crypto.randomUUID()) {
+      const result = await categoryWrite(() => api.createCategory({ id, name }), putCategory);
+      const category = categories?.find((item) => item.id === id);
+      if (result.ok || (result.reloaded && category)) return { ok: true, category };
+      return result;
+    },
+
+    // Sent against the revision on screen now, so a rename made before another tab's change is
+    // refused (409) rather than overwriting it.
+    renameCategory(id, name) {
+      const revision = revisionOf(id);
+      return categoryWrite(() => api.renameCategory(id, revision, name), putCategory);
+    },
+
+    // Removes the category and, in the same step, applies the todos the server unlinked (no
+    // category, new revisions), so later writes use those revisions.
+    deleteCategory(id) {
+      const revision = revisionOf(id);
+      return categoryWrite(() => api.deleteCategory(id, revision), (todos) => {
+        const unlinked = new Map(todos.map((todo) => [todo.id, todo]));
+        categories = categories.filter((category) => category.id !== id);
+        confirmed = confirmed.map((todo) => unlinked.get(todo.id) ?? todo);
+      });
     },
 
     // Claims each occurrence on the server before the caller alerts it, so two tabs alert once.

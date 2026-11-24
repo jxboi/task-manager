@@ -104,7 +104,8 @@ export function installDom(t, { fetch }) {
   const byId = (id) => elements.get(id);
   const app = new Element();
   const list = byId('todo-list');
-  app.append(list, byId('filter-bar'));
+  // The controls a render can move focus to: the rows, the category filter and the Manage panel.
+  app.append(list, byId('category-filter'), byId('category-name'), byId('category-list'));
   const queries = new Map();
   const matchMedia = (query) => {
     if (!queries.has(query)) {

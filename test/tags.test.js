@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { normalizeTag, parseTodoInput, tagColor, PALETTE_SIZE } from '../src/tags.js';
+import { categoryColor, normalizeTag, tagColor, PALETTE_SIZE } from '../src/tags.js';
 
 test('normalizeTag trims, strips one #, lowercases and turns inner spaces into -', () => {
   assert.equal(normalizeTag('  Work '), 'work');
@@ -41,58 +41,6 @@ test('normalizeTag accepts 1 and 24 characters', () => {
   assert.equal(normalizeTag('a'), 'a');
   assert.equal(normalizeTag('a'.repeat(24)), 'a'.repeat(24));
   assert.equal(normalizeTag(`#${'a'.repeat(24)}`), 'a'.repeat(24));
-});
-
-test('parseTodoInput pulls trailing tags out of the text', () => {
-  assert.deepEqual(parseTodoInput('Pay rent #home #money'), { text: 'Pay rent', tags: ['home', 'money'] });
-});
-
-test('parseTodoInput handles a tag mid-text and collapses the leftover space', () => {
-  assert.deepEqual(parseTodoInput('Call #work Sam today'), { text: 'Call Sam today', tags: ['work'] });
-  assert.deepEqual(parseTodoInput('#urgent fix the build'), { text: 'fix the build', tags: ['urgent'] });
-});
-
-test('parseTodoInput normalizes tags', () => {
-  assert.deepEqual(parseTodoInput('Buy milk #home #Errands'), { text: 'Buy milk', tags: ['home', 'errands'] });
-  assert.deepEqual(parseTodoInput('Report #Work').tags, ['work']);
-});
-
-test('parseTodoInput leaves things that are not tags in the text', () => {
-  for (const raw of ['Learn C#', 'Reply to email#1', 'Item # 5', 'Lone #', '# work']) {
-    assert.deepEqual(parseTodoInput(raw), { text: raw, tags: [] }, raw);
-  }
-});
-
-test('parseTodoInput keeps an over-long token in the text', () => {
-  const long = `#${'a'.repeat(25)}`;
-  assert.deepEqual(parseTodoInput(`Plan ${long} #ok`), { text: `Plan ${long}`, tags: ['ok'] });
-});
-
-test('parseTodoInput collapses duplicate tags and removes every copy', () => {
-  assert.deepEqual(parseTodoInput('Ship it #work #WORK'), { text: 'Ship it', tags: ['work'] });
-});
-
-test('parseTodoInput keeps at most 10 tags; the 11th stays in the text', () => {
-  const tags = Array.from({ length: 11 }, (_, i) => `t${i + 1}`);
-  const result = parseTodoInput(`Big ${tags.map((tag) => `#${tag}`).join(' ')}`);
-  assert.deepEqual(result.tags, tags.slice(0, 10));
-  assert.equal(result.text, 'Big #t11');
-});
-
-test('parseTodoInput with only tags gives empty text', () => {
-  assert.deepEqual(parseTodoInput('#home'), { text: '', tags: ['home'] });
-  assert.deepEqual(parseTodoInput('  #home  #work '), { text: '', tags: ['home', 'work'] });
-});
-
-test('parseTodoInput puts base (active filter) tags first and counts them toward the cap', () => {
-  assert.deepEqual(parseTodoInput('call Sam #phone', ['urgent', 'work']), {
-    text: 'call Sam',
-    tags: ['urgent', 'work', 'phone'],
-  });
-  assert.deepEqual(parseTodoInput('call Sam #Work', ['work']), { text: 'call Sam', tags: ['work'] });
-
-  const active = Array.from({ length: 9 }, (_, i) => `a${i}`);
-  assert.deepEqual(parseTodoInput('x #one #two', active), { text: 'x #two', tags: [...active, 'one'] });
 });
 
 test('tagColor returns an integer slot in range for a spread of tags', () => {
@@ -140,8 +88,9 @@ test('PALETTE_SIZE matches the data-color rules in styles.css', () => {
   );
 });
 
-test('parseTodoInput keeps the original "#" rules: a tag stops at the next "#"', () => {
-  assert.deepEqual(parseTodoInput('#ref#42'), { text: '#42', tags: ['ref'] });
-  assert.deepEqual(parseTodoInput('Review #ref#42'), { text: 'Review #42', tags: ['ref'] });
-  assert.deepEqual(parseTodoInput('Fix ##work'), { text: 'Fix ##work', tags: [] });
+test('categoryColor hashes the name like a tag, so a converted category keeps its tag\'s color', () => {
+  for (const tag of ['travel', 'work', 'errands', 'my-trip']) assert.equal(categoryColor(tag), tagColor(tag));
+  // Case and spacing don't recolor a category: "Work" and "My trip" match the tags they read as.
+  assert.equal(categoryColor('Work'), tagColor('work'));
+  assert.equal(categoryColor(' My  trip '), tagColor('my-trip'));
 });

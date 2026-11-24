@@ -1,4 +1,4 @@
-// The only browser module that talks to the server: session, auth and todo requests.
+// The only browser module that talks to the server: session, auth, todo and category requests.
 // Tasks are never read from or written to localStorage. The old "task-manager.todos.v1" key is
 // left untouched and ignored. The CSRF token lives only in memory.
 
@@ -89,13 +89,17 @@ export async function authRequest(path, body, { csrf = false } = {}) {
 
 const todoPath = (id, extra = '') => `/api/todos?id=${encodeURIComponent(id)}${extra}`;
 
+// The signed-in snapshot: {todos, categories}, read in one server transaction. `categories` is
+// null when the server sent no catalog (an older deployment), which turns category controls off.
 // The CSRF token is sent on reads too, so a tab can't load another account's list after a switch.
-export async function listTodos() {
-  return (await send('/api/todos', { csrf: true })).todos;
+export async function readSnapshot() {
+  const data = await send('/api/todos', { csrf: true });
+  return { todos: data.todos, categories: Array.isArray(data.categories) ? data.categories : null };
 }
 
-export async function createTodo({ id, text, tags }) {
-  return (await send('/api/todos', { method: 'POST', body: { id, text, tags }, csrf: true })).todo;
+// New tasks carry no tags.
+export async function createTodo({ id, text }) {
+  return (await send('/api/todos', { method: 'POST', body: { id, text }, csrf: true })).todo;
 }
 
 export async function patchTodo(id, revision, action, fields = {}) {
@@ -105,4 +109,21 @@ export async function patchTodo(id, revision, action, fields = {}) {
 
 export async function deleteTodo(id, revision) {
   await send(todoPath(id, `&revision=${revision}`), { method: 'DELETE', csrf: true });
+}
+
+// --- Categories --------------------------------------------------------------------------------
+
+const categoryPath = (id, extra = '') => `/api/categories?id=${encodeURIComponent(id)}${extra}`;
+
+export async function createCategory({ id, name }) {
+  return (await send('/api/categories', { method: 'POST', body: { id, name }, csrf: true })).category;
+}
+
+export async function renameCategory(id, revision, name) {
+  return (await send(categoryPath(id), { method: 'PATCH', body: { name, revision }, csrf: true })).category;
+}
+
+// Resolves to the todos the delete unlinked, with their new revisions.
+export async function deleteCategory(id, revision) {
+  return (await send(categoryPath(id, `&revision=${revision}`), { method: 'DELETE', csrf: true })).todos;
 }
