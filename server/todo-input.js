@@ -1,6 +1,6 @@
 import { isCompleted, isOverdue, normalizeReminder, REPEATS } from '../src/reminders.js';
 import { MAX_TAGS, normalizeTag, normalizeTags } from '../src/tags.js';
-import { addTag, clearReminder, editTodo, markNotified, removeTag, setReminder, validText } from '../src/todos.js';
+import { addTag, clearReminder, editTodo, foldTags, markNotified, removeTag, setReminder, validText } from '../src/todos.js';
 import { invalid, RequestError } from './http.js';
 
 export const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -125,6 +125,12 @@ export function patchTodo(todo, body) {
     }
     case 'edit': {
       const { categoryId, ...fields } = readEdit(body);
+      // An untouched title is kept verbatim, not re-normalized; stored tags stay with it.
+      if (body.text === todo.text) fields.text = todo.text;
+      else if (!fields.tags.length && body.text === foldTags(todo.text, todo.tags)) {
+        fields.text = todo.text;
+        delete fields.tags;
+      }
       const edited = editTodo(items, id, fields)[0];
       return categoryId === undefined || categoryId === todo.categoryId ? edited : { ...edited, categoryId };
     }

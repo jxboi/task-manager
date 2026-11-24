@@ -175,7 +175,7 @@ export function editTodo(todos, id, { text, tags, due, repeat, categoryId } = {}
   if (reminder.due !== due || reminder.repeat !== repeat) return todos;
   const next = {
     ...todo,
-    text: text.trim(),
+    text: text === todo.text ? text : text.trim(),
     tags: tags === undefined ? todo.tags : normalizeTags(tags),
     categoryId: categoryId === undefined ? todo.categoryId : categoryId,
     due: reminder.due,

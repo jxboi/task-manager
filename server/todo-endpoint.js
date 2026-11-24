@@ -12,7 +12,12 @@ export const columns = `id, text, completed, completed_until AS "completedUntil"
 // that title with no tags. They never become categories. `tags` stays in the shape, always
 // empty, because older clients read it.
 export function toTodo(row) {
-  return foldLegacyTags({
+  return foldLegacyTags(toStored(row));
+}
+
+// The row as stored, tags unfolded: legacy tag mutations apply to these.
+function toStored(row) {
+  return ({
     ...row,
     completedUntil: row.completedUntil === null ? null : Number(row.completedUntil),
     createdAt: Number(row.createdAt),
@@ -34,12 +39,12 @@ function stale() {
   return new RequestError(409, 'REVISION_CONFLICT', 'This todo changed. Refresh and try again.');
 }
 
-async function findTodo(pool, userId, id) {
+async function findTodo(pool, userId, id, convert = toTodo) {
   const { rows: [row] } = await pool.query(
     `SELECT ${columns} FROM todos WHERE user_id = $1 AND id = $2`, [userId, id],
   );
   if (!row) throw notFound();
-  return toTodo(row);
+  return convert(row);
 }
 
 async function listTodos(pool, userId) {
@@ -103,14 +108,17 @@ async function writeTodo(pool, userId, id, revision, body) {
   const todo = todos ? todos.find((item) => item.id === id) : await findTodo(pool, userId, id);
   if (!todo) throw notFound();
   if (todo.revision !== revision) throw stale();
+  // Legacy tag mutations act on the stored tags; only the result is folded into the title.
+  const stored = move ? todo : await findTodo(pool, userId, id, toStored);
   let changed;
   if (move) {
     if (!todos.some((item) => item.id === move.anchorId)) throw notFound();
     changed = moveTodo(todos, id, move.anchorId, move.side).find((item) => item.id === id);
   } else {
-    changed = patchTodo(todo, body);
+    changed = patchTodo(stored, body);
   }
-  if (changed.tags.length) {
+  if (changed === stored) changed = todo;
+  else if (changed.tags.length) {
     // A legacy edit or addTag. If folding its tags gives back the current title, it is a no-op.
     const folded = foldLegacyTags(changed);
     changed = Object.keys(folded).every((key) => folded[key] === todo[key] || key === 'tags') ? todo : folded;

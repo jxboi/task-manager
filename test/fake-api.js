@@ -7,7 +7,7 @@ import {
   createCategoryInput, MAX_CATEGORIES, readCategoryId, readQueryRevision, renameCategoryInput,
 } from '../server/category-input.js';
 import { RequestError } from '../server/http.js';
-import { foldTags, moveTodo, sortByPosition } from '../src/todos.js';
+import { foldLegacyTags, foldTags, moveTodo, sortByPosition } from '../src/todos.js';
 
 export function createFakeApi({ csrfToken = 'token-a', user = { name: 'Ana', email: 'ana@example.test' } } = {}) {
   const server = {
@@ -75,7 +75,7 @@ export function createFakeApi({ csrfToken = 'token-a', user = { name: 'Ana', ema
         if (!server.rows.some((item) => item.id === anchorId)) return failure(404, 'NOT_FOUND');
         changed = moveTodo(server.rows, id, anchorId, side).find((item) => item.id === id);
       } else {
-        changed = patchTodo(row, patch);
+        changed = foldLegacyTags(patchTodo(row, patch));
       }
       if (changed === row) return reply({ todo: row });
       const next = { ...changed, revision: row.revision + 1 };

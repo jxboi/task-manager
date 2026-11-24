@@ -244,3 +244,27 @@ test('assigning a category deleted elsewhere gets 404, rolls back and reloads th
   assert.equal(sync.todos[0].categoryId, null);
   assert.deepEqual(sync.categories, []);
 });
+
+// --- untouched titles stay verbatim ----------------------------------------------------------
+
+test('a category-only save sends and keeps the original title untouched', async () => {
+  const { server, sync } = setup();
+  server.rows = [base({ text: 'Original task #   ', categoryId: null })];
+  server.categories = [{ id: WORK, name: 'work', revision: 1 }];
+  await sync.load();
+  const id = server.rows[0].id;
+  // What saveEditor passes: the field's own string, not its trimmed form.
+  await sync.edit(id, { text: 'Original task #   ', due: null, repeat: 'none', categoryId: WORK });
+  const sent = server.requests.filter((r) => r.method === 'PATCH').map((r) => JSON.parse(r.body));
+  assert.equal(sent.at(-1).text, 'Original task #   ');
+  assert.equal(server.rows[0].text, 'Original task #   ');
+  assert.equal(server.rows[0].categoryId, WORK);
+  assert.equal(sync.todos.find((t) => t.id === id).text, 'Original task #   ');
+});
+
+test('server edit keeps an unchanged title and folds stored tags for it', () => {
+  const todo = base({ text: 'Original task #   ', tags: [] });
+  const edit = { action: 'edit', revision: 1, text: 'Original task #   ', tags: [], due: null, repeat: 'none', categoryId: WORK };
+  assert.equal(patchTodo(todo, edit).text, 'Original task #   ');
+  assert.equal(patchTodo(todo, { ...edit, text: 'Original task #  ' }).text, 'Original task #');
+});

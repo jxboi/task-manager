@@ -426,6 +426,39 @@ test('auth and todo API against PostgreSQL', {
     await authenticated(await post(signinPath, { email: user.email, password }, site), user.name, user.email, branchOrigin);
   });
 
+  await t.test('legacy tag mutations act on stored tags; untouched titles stay verbatim', async () => {
+    const user = { name: 'Fold order', email: 'cli-fold@example.test', password };
+    const account = await authenticated(await post(signupPath, user, { ip: '192.0.2.71' }), user.name, user.email);
+    const { userId } = account;
+    const [rm, add, keep] = [randomUUID(), randomUUID(), randomUUID()];
+    await admin.query(
+      `INSERT INTO todos (user_id, id, text, tags, created_at) VALUES
+         ($1, $2, 'Remove', '{work}', 1), ($1, $3, 'Add', '{work}', 2), ($1, $4, 'Original task #   ', '{}', 3)`,
+      [userId, rm, add, keep],
+    );
+    const stored = async (id) => (await admin.query(
+      'SELECT text, tags FROM todos WHERE user_id = $1 AND id = $2', [userId, id],
+    )).rows[0];
+    const removed = await patch(account, rm, { action: 'removeTag', revision: 1, tag: 'work' });
+    assert.equal(removed.status, 200, JSON.stringify(removed.data));
+    assert.equal(removed.data.todo.text, 'Remove');
+    assert.deepEqual(await stored(rm), { text: 'Remove', tags: [] });
+    const added = await patch(account, add, { action: 'addTag', revision: 1, tag: 'home' });
+    assert.equal(added.status, 200, JSON.stringify(added.data));
+    assert.equal(added.data.todo.text, 'Add #work #home');
+    assert.deepEqual(await stored(add), { text: 'Add #work #home', tags: [] });
+
+    // A category-only save sends the title as it was; the server stores it unchanged.
+    const category = randomUUID();
+    await admin.query("INSERT INTO categories (user_id, id, name) VALUES ($1, $2, 'home')", [userId, category]);
+    const saved = await patch(account, keep, {
+      action: 'edit', revision: 1, text: 'Original task #   ', tags: [], due: null, repeat: 'none', categoryId: category,
+    });
+    assert.equal(saved.status, 200, JSON.stringify(saved.data));
+    assert.equal(saved.data.todo.text, 'Original task #   ');
+    assert.deepEqual(await stored(keep), { text: 'Original task #   ', tags: [] });
+  });
+
   await t.test('isolates reads, writes, tags and reminders between two users', async () => {
     const left = await create(a, aId, '  Alice todo  ', ['#Work Task', 'work-task', 'home']);
     assert.equal(left.status, 201);

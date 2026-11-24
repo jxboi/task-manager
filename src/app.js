@@ -863,7 +863,8 @@ function saveEditor() {
     render(todo ? openerKeys(id) : undefined);
     return;
   }
-  const fields = { text, due, repeat: due === null ? 'none' : repeatSelect.value };
+  // An untouched title is sent as it was, not trimmed.
+  const fields = { text: textInput.value === todo.text ? todo.text : text, due, repeat: due === null ? 'none' : repeatSelect.value };
   // The category is sent only when the user changed it, so an edit made without touching it
   // can't undo another tab's change to the link.
   const categoryId = draft.chosenCategoryId;
