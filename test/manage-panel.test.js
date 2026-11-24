@@ -307,6 +307,42 @@ test('Manage requires a fresh delete confirmation after a remote rename', async 
   assert.deepEqual(server.categories, []);
 });
 
+for (const recovery of [false, true]) {
+  test(`Manage schedules a remote reminder from ${recovery ? 'a recovery snapshot' : 'a category delete'}`, async (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
+    const flush = () => new Promise((resolve) => setImmediate(resolve));
+    const server = createFakeApi({ user: { name: 'Ana', email: 'cli-ana@example.test' } });
+    const id = '00000000-0000-4000-8000-0000000000e1';
+    const task = { id: TASK, text: 'Task', completed: false, createdAt: 1, tags: [], categoryId: id,
+      due: null, repeat: 'none', notified: null, revision: 1 };
+    server.categories = [{ id, name: 'Home', revision: 1 }];
+    server.rows = [task];
+    const { byId, list } = installDom(t, { fetch: (...args) => server.fetch(...args) });
+    await import(`../src/app.js?category-reminder-${recovery}`);
+    window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: server.session } }));
+    await flush();
+
+    byId('category-manage').click();
+    const button = (action) => byId('category-list').children[0].querySelectorAll('button')
+      .find((element) => element.dataset.action === action);
+    button('delete').click();
+    const delay = 60_000;
+    const due = Date.now() + delay;
+    server.rows = [{ ...task, due, revision: 2 }];
+    if (recovery) server.failNext = (method) => method === 'DELETE' ? { afterWrite: true } : undefined;
+    button('confirm').click();
+    await flush();
+
+    assert.ok(list.children[0].querySelector('.reminder-when'));
+    assert.equal(server.rows[0].notified, null);
+    t.mock.timers.tick(delay);
+    await flush();
+    t.mock.timers.tick(1);
+    assert.equal(server.rows[0].notified, due, 'the new reminder was claimed when due');
+    assert.ok(list.children[0].classList.contains('is-overdue'));
+  });
+}
+
 test('Manage recovers failed category reads and writes', async (t) => {
   const server = createFakeApi();
   const home = { id: '00000000-0000-4000-8000-0000000000e1', name: 'Home', revision: 1 };

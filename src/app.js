@@ -1225,9 +1225,11 @@ async function createCategory() {
   panelBusy = { id: null, kind: 'create' };
   setPanelStatus('Adding…');
   render();
+  const todos = sync.confirmed;
   const result = await sync.createCategory(name, categoryCreateDraft.id, retry);
   if (result.stale || epoch !== viewEpoch) return;
   panelBusy = null;
+  if (sync.confirmed !== todos) check();
   if (result.ok) {
     categoryCreateDraft = null;
     if (readCategoryName(categoryName.value).name === name) categoryName.value = '';
@@ -1270,6 +1272,7 @@ async function renameCategory(id) {
     return;
   }
   if (handleSessionError(result.error)) return;
+  if (result.reloaded) check();
   if (result.error?.status === 409 || sync.categoryRefreshRequired) panelRow = null;
   setPanelStatus(categoryErrorText(result.error, result.reloaded), true);
   render([key(panelRow ? 'category-field' : 'category-rename', id), ...rowNeighbourKeys(id)]);
@@ -1288,6 +1291,7 @@ async function deleteCategory(id) {
   panelBusy = null;
   panelRow = null; // after a failure, deleting again needs a fresh confirmation
   if (handleSessionError(result.error)) return;
+  if (result.ok || result.reloaded || result.repairFailed) check();
   if (result.repairFailed) {
     setPanelStatus('');
     showSync("The task list couldn't be refreshed after deleting the category.", reloadList);
@@ -1333,6 +1337,7 @@ categoryList.addEventListener('click', async (event) => {
         render();
         return;
       }
+      check();
       if (panel.hidden || !findCategory(id)) {
         render(rowNeighbourKeys(id));
         return;
