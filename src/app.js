@@ -8,7 +8,7 @@ import {
 } from './todos.js';
 import { categoryColor } from './tags.js';
 import {
-  ALL, categoryErrorText, filterByCategory, keepFilter, NAME_MESSAGES, nameTaken, readCategoryName, UNCATEGORIZED,
+  ALL, categoryErrorText, filterByCategory, keepFilter, NAME_MESSAGES, readCategoryName, UNCATEGORIZED,
 } from './categories.js';
 import { isCompleted, isOverdue } from './reminders.js';
 import * as api from './storage.js';
@@ -802,6 +802,14 @@ function categoryOption(value, text) {
   return option;
 }
 
+function categoryOptions(catalog, ...builtIns) {
+  if (!catalog?.length) return builtIns;
+  const group = document.createElement('optgroup');
+  group.setAttribute('label', 'Categories');
+  group.append(...catalog.map(({ id, name }) => categoryOption(id, name)));
+  return [...builtIns, group];
+}
+
 // The filter select and the sheet's select, rebuilt only when the catalog changes, so a render
 // while one is open doesn't close it. The sheet's selection comes from the draft.
 function renderCategoryOptions() {
@@ -809,15 +817,12 @@ function renderCategoryOptions() {
   const signature = JSON.stringify(catalog?.map(({ id, name }) => [id, name]) ?? null);
   if (signature === optionsSignature) return;
   optionsSignature = signature;
-  const names = (catalog ?? []).map(({ id, name }) => categoryOption(id, name));
-  categoryFilter.replaceChildren(
-    categoryOption(ALL, 'All categories'), categoryOption(UNCATEGORIZED, 'Uncategorized'), ...names,
-  );
+  categoryFilter.replaceChildren(...categoryOptions(
+    catalog, categoryOption(ALL, 'All categories'), categoryOption(UNCATEGORIZED, 'Uncategorized'),
+  ));
   categoryFilter.value = filter;
   const chosen = reminderId === null ? null : draft.chosenCategoryId;
-  editCategory.replaceChildren(
-    categoryOption('', 'Uncategorized'), ...names.map((option) => categoryOption(option.value, option.textContent)),
-  );
+  editCategory.replaceChildren(...categoryOptions(catalog, categoryOption('', 'Uncategorized')));
   // Without a catalog the task's category can't be shown or changed; saves leave it as it is.
   editCategory.disabled = !catalog;
   editCategory.value = findCategory(chosen) ? chosen : '';
@@ -1204,22 +1209,16 @@ function rowNeighbourKeys(id) {
     .map((category) => key('category-rename', category.id)).concat(key('category-name'));
 }
 
-// The name problem the server would refuse, checked here first: empty, too long, or taken.
-function nameProblem(name, error, exceptId) {
-  return error ?? (nameTaken(sync.categories ?? [], name, exceptId) ? 'taken' : null);
-}
-
 async function createCategory() {
   if (panelBusy !== null || !sync.categories) return;
   const { name, error } = readCategoryName(categoryName.value);
-  const retry = categoryCreateDraft?.name === name;
-  const problem = retry ? error : nameProblem(name, error, null);
-  if (problem) {
+  if (error) {
     categoryName.setAttribute('aria-invalid', 'true');
-    setPanelStatus(NAME_MESSAGES[problem], true);
+    setPanelStatus(NAME_MESSAGES[error], true);
     categoryName.focus();
     return;
   }
+  const retry = categoryCreateDraft?.name === name;
   if (!retry) categoryCreateDraft = { id: crypto.randomUUID(), name };
   const epoch = viewEpoch;
   panelBusy = { id: null, kind: 'create' };
@@ -1245,11 +1244,10 @@ async function renameCategory(id) {
   if (panelBusy !== null || !category || panelRow?.id !== id) return;
   const { revision } = panelRow;
   const { name, error } = readCategoryName(panelRow.value);
-  const problem = nameProblem(name, error, id);
-  if (problem) {
+  if (error) {
     panelRow.invalid = true;
     panelSignature = null;
-    setPanelStatus(NAME_MESSAGES[problem], true);
+    setPanelStatus(NAME_MESSAGES[error], true);
     render([key('category-field', id)]);
     return;
   }

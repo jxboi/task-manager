@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  ALL, categoryErrorText, filterByCategory, keepFilter, nameTaken, readCategoryName, UNCATEGORIZED,
+  ALL, categoryErrorText, filterByCategory, keepFilter, readCategoryName, UNCATEGORIZED,
 } from '../src/categories.js';
 import { sortByUrgency } from '../src/todos.js';
 
@@ -40,17 +40,13 @@ test('the filter falls back to All when its category is deleted or the catalog i
   assert.equal(keepFilter(ALL, catalog), ALL);
 });
 
-test('a name is trimmed and 1 to 48 characters with no control characters; case-folded duplicates are taken', () => {
+test('a name is trimmed and 1 to 48 characters with no control characters', () => {
   assert.deepEqual(readCategoryName('  Home  '), { name: 'Home', error: null });
   assert.equal(readCategoryName('   ').error, 'empty');
   assert.equal(readCategoryName('😀'.repeat(48)).error, null);
   assert.equal(readCategoryName('😀'.repeat(49)).error, 'invalid');
   assert.equal(readCategoryName('a\tb').error, 'invalid');
   assert.equal(readCategoryName('#travel').error, null, 'a # is just text');
-  const catalog = [{ id: HOME, name: 'Home', revision: 1 }];
-  assert.equal(nameTaken(catalog, 'HOME'), true);
-  assert.equal(nameTaken(catalog, 'Home', HOME), false, 'renaming to its own name');
-  assert.equal(nameTaken(catalog, 'Work'), false);
 });
 
 test('failed writes read as something the user can act on', () => {

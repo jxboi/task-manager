@@ -113,7 +113,7 @@ test('edit form', async (t) => {
   await t.test('the title field holds the title; the Category select holds the task\'s category', () => {
     open('rent');
     assert.equal(text.value, 'Pay rent');
-    assert.deepEqual(category.children.map((option) => [option.value, option.textContent]),
+    assert.deepEqual(category.querySelectorAll('option').map((option) => [option.value, option.textContent]),
       [['', 'Uncategorized'], [BILLS, 'Bills'], [HOME, 'Home']]);
     assert.equal(category.value, HOME);
     assert.equal(editor.dataset.color, categoryColor('Home'), 'the sheet takes the category color');
@@ -354,7 +354,7 @@ test('edit form', async (t) => {
     assert.equal(layer.hidden, true);
     assert.equal(syncText.textContent, categoryGone);
     assert.equal(focusKey(), JSON.stringify(['open', ids.rent]));
-    assert.deepEqual(category.children.map((option) => option.textContent), ['Uncategorized', 'Home']);
+    assert.deepEqual(category.querySelectorAll('option').map((option) => option.textContent), ['Uncategorized', 'Home']);
     byId('sync-dismiss').click();
     // The task's own category: the delete unlinks it (a new revision) while the sheet is open.
     server.rows = server.rows.map((item) => (item.id === ids.rent ? { ...item, categoryId: HOME } : item));
@@ -623,4 +623,44 @@ test('edit form', async (t) => {
     assert.equal(layer.hidden, true);
     assert.equal(text.value, '');
   });
+});
+
+test('category options with built-in names are grouped and the built-in clears the task category', async (t) => {
+  const server = createFakeApi({ user: { name: 'Ana', email: 'cli-ana@example.test' } });
+  const id = '00000000-0000-4000-8000-0000000000a1';
+  server.categories = [
+    { id: HOME, name: 'Uncategorized', revision: 1 },
+    { id: BILLS, name: 'All categories', revision: 1 },
+  ];
+  server.rows = [{ id, text: 'Pay rent', completed: false, createdAt: 1, tags: [], categoryId: HOME,
+    due: null, repeat: 'none', notified: null, revision: 1 }];
+  const { byId, list } = installDom(t, { fetch: server.fetch });
+  await import('../src/app.js?grouped-categories');
+  window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: server.session } }));
+  await settle();
+  list.children[0].querySelector('.todo-open').click();
+
+  const edit = byId('edit-category');
+  const options = (elements) => elements.map(({ tagName, value, textContent }) => [tagName, value, textContent]);
+  for (const [select, builtIns] of [
+    [byId('category-filter'), [['option', 'all', 'All categories'], ['option', 'none', 'Uncategorized']]],
+    [edit, [['option', '', 'Uncategorized']]],
+  ]) {
+    const group = select.children.at(-1);
+    assert.equal(group.tagName, 'optgroup');
+    assert.equal(group.getAttribute('label'), 'Categories');
+    assert.deepEqual(options(select.children.slice(0, -1)), builtIns);
+    assert.deepEqual(options(group.children), [
+      ['option', BILLS, 'All categories'], ['option', HOME, 'Uncategorized'],
+    ]);
+  }
+  assert.equal(edit.value, HOME);
+  edit.value = edit.children[0].value;
+  edit.dispatchEvent(new Event('change'));
+  byId('reminder-save').click();
+  await settle();
+  assert.equal(server.rows[0].categoryId, null);
+  const body = JSON.parse(server.requests.find(({ method }) => method === 'PATCH').body);
+  assert.equal(body.categoryId, null);
+  assert.deepEqual(body.tags, []);
 });

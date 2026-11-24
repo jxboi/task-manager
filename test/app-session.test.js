@@ -111,7 +111,7 @@ test('task view against the server API', async (t) => {
     assert.equal(categoryOf('Existing'), 'Home');
     assert.equal(rowOf('Existing').dataset.color, categoryColor('Home'));
     assert.equal(byId('category-row').hidden, false);
-    assert.deepEqual(byId('category-filter').children.map((option) => option.textContent),
+    assert.deepEqual(byId('category-filter').querySelectorAll('option').map((option) => option.textContent),
       ['All categories', 'Uncategorized', 'Home']);
     // No count text once the list is shown.
     assert.equal(summary.textContent, '');
@@ -165,7 +165,7 @@ test('task view against the server API', async (t) => {
     assert.equal(byId('sync-retry').hidden, true);
     // The list was reloaded: the other tab's name shows, and the toggle didn't apply.
     assert.equal(categoryOf('Existing'), 'House');
-    assert.equal(byId('category-filter').children.at(-1).textContent, 'House');
+    assert.equal(byId('category-filter').querySelectorAll('option').at(-1).textContent, 'House');
     assert.equal(servers.a.rows[0].completed, true);
     byId('sync-dismiss').click();
     assert.equal(note.hidden, true);

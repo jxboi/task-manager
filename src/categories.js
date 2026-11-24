@@ -32,11 +32,6 @@ export function readCategoryName(raw) {
   return { name, error: null };
 }
 
-export function nameTaken(categories, name, exceptId = null) {
-  const folded = name.toLowerCase();
-  return categories.some((category) => category.id !== exceptId && category.name.toLowerCase() === folded);
-}
-
 export const NAME_MESSAGES = {
   empty: 'Enter a category name.',
   invalid: `Use 1 to ${MAX_NAME_LENGTH} characters for the name.`,
@@ -51,7 +46,7 @@ export function categoryErrorText(error, reloaded) {
     case 'CATEGORY_LIMIT':
       return `You can have up to ${MAX_CATEGORIES} categories. Delete one to add another.`;
     case 'DUPLICATE_NAME':
-      return NAME_MESSAGES.taken;
+      return error.message || NAME_MESSAGES.taken;
     case 'REVISION_CONFLICT':
     case 'NOT_FOUND':
       return `This category changed in another tab or device.${fresh} Try again if needed.`;

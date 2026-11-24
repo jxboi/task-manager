@@ -67,7 +67,7 @@ export class Element extends EventTarget {
   clientTop = 0;
   setPointerCapture() {}
   matches(selector) {
-    if (selector === 'button') return this.tagName === 'button';
+    if (selector === 'button' || selector === 'option') return this.tagName === selector;
     if (selector === '[data-focus-key]') return this.dataset.focusKey !== undefined;
     return selector.split(', ').some((part) => this.className.split(' ').includes(part.slice(1)));
   }

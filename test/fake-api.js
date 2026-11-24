@@ -91,6 +91,7 @@ export function createFakeApi({ csrfToken = 'token-a', user = { name: 'Ana', ema
   const sortedCategories = () => [...server.categories].sort((a, b) =>
     a.name.toLowerCase().localeCompare(b.name.toLowerCase()) || a.id.localeCompare(b.id));
   const sameName = (a, b) => a.toLowerCase() === b.toLowerCase();
+  const duplicateName = () => failure(409, 'DUPLICATE_NAME', 'A category with this name already exists.');
 
   // server/category-endpoint.js's answers: create, rename and delete (which unlinks its todos).
   function categories(method, url, body) {
@@ -98,7 +99,7 @@ export function createFakeApi({ csrfToken = 'token-a', user = { name: 'Ana', ema
       const { id, name } = createCategoryInput(JSON.parse(body));
       if (server.categories.some((category) => category.id === id)) return failure(409, 'DUPLICATE_ID');
       if (server.categories.length >= MAX_CATEGORIES) return failure(409, 'CATEGORY_LIMIT');
-      if (server.categories.some((category) => sameName(category.name, name))) return failure(409, 'DUPLICATE_NAME');
+      if (server.categories.some((category) => sameName(category.name, name))) return duplicateName();
       const category = { id, name, revision: 1 };
       server.categories = [...server.categories, category];
       return reply({ category }, 201);
@@ -111,7 +112,7 @@ export function createFakeApi({ csrfToken = 'token-a', user = { name: 'Ana', ema
       if (category.revision !== revision) return failure(409, 'REVISION_CONFLICT');
       if (category.name === name) return reply({ category });
       if (server.categories.some((item) => item !== category && sameName(item.name, name))) {
-        return failure(409, 'DUPLICATE_NAME');
+        return duplicateName();
       }
       const renamed = { ...category, name, revision: revision + 1 };
       server.categories = server.categories.map((item) => (item === category ? renamed : item));
