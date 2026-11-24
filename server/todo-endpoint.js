@@ -105,11 +105,13 @@ async function updateTodo(pool, userId, id, body) {
 async function writeTodo(pool, userId, id, revision, body) {
   const move = body.action === 'move' ? readMove(body, id) : null;
   const todos = move ? await listTodos(pool, userId) : null;
-  const todo = todos ? todos.find((item) => item.id === id) : await findTodo(pool, userId, id);
-  if (!todo) throw notFound();
+  // One read feeds the revision check, the patch and the response; the UPDATE's revision
+  // predicate then turns any change after it into a 409.
+  const stored = todos ? todos.find((item) => item.id === id) : await findTodo(pool, userId, id, toStored);
+  if (!stored) throw notFound();
+  const todo = todos ? stored : toTodo(stored);
   if (todo.revision !== revision) throw stale();
   // Legacy tag mutations act on the stored tags; only the result is folded into the title.
-  const stored = move ? todo : await findTodo(pool, userId, id, toStored);
   let changed;
   if (move) {
     if (!todos.some((item) => item.id === move.anchorId)) throw notFound();

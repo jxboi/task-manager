@@ -604,6 +604,37 @@ test('categories API against PostgreSQL', {
     await admin.query('DELETE FROM todos WHERE user_id = $1', [a.userId]);
   });
 
+  await t.test('an edit another tab applies between the revision check and the patch is a 409, not a stale 200', async () => {
+    const id = randomUUID();
+    const todo = (await addTodo(a, id, 'Before')).data.todo;
+    const body = editOf(todo, { text: 'After' });
+    const { pool } = services;
+    const query = pool.query.bind(pool);
+    let hooked = false;
+    let other;
+    pool.query = async (...args) => {
+      const result = await query(...args);
+      if (!hooked && /FROM todos WHERE user_id = \$1 AND id = \$2/.test(String(args[0]))) {
+        hooked = true;
+        pool.query = query;
+        other = await patchTodo(a, id, body); // the same edit, from another tab
+      }
+      return result;
+    };
+    let mine;
+    try {
+      mine = await patchTodo(a, id, body);
+    } finally {
+      pool.query = query;
+    }
+    assert.ok(hooked);
+    assert.equal(other.status, 200);
+    assert.equal(mine.status, 409, JSON.stringify(mine.data));
+    assert.equal(mine.data.error.code, 'REVISION_CONFLICT');
+    assert.deepEqual(await readTodo(a, id), other.data.todo);
+    await admin.query('DELETE FROM todos WHERE user_id = $1', [a.userId]);
+  });
+
   await t.test('legacy edit (no categoryId) racing a category delete, edit first, survives the unlink', async () => {
     const work = randomUUID();
     assert.equal((await create(a, work, 'Work')).status, 201);

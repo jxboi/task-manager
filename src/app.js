@@ -740,9 +740,11 @@ function openEditor(id) {
   reminderId = id;
   reminderTouched = false;
   const categoryId = todo.categoryId ?? null;
-  draft = { text: todo.text, categoryId, chosenCategoryId: categoryId, due: todo.due, repeat: todo.repeat };
+  draft = { text: todo.text, shownText: '', categoryId, chosenCategoryId: categoryId, due: todo.due, repeat: todo.repeat };
   editor.setAttribute('aria-label', `Edit “${todo.text}”`);
   textInput.value = todo.text;
+  // A single-line input may strip line breaks: what it shows is the baseline for "edited".
+  draft.shownText = textInput.value;
   optionsSignature = null; // rebuild the sheet's select for this task
   renderCategoryOptions();
   const fields = splitDue(todo.due);
@@ -863,8 +865,8 @@ function saveEditor() {
     render(todo ? openerKeys(id) : undefined);
     return;
   }
-  // An untouched title is sent as it was, not trimmed.
-  const fields = { text: textInput.value === todo.text ? todo.text : text, due, repeat: due === null ? 'none' : repeatSelect.value };
+  // An untouched title is sent as stored (untrimmed, line breaks kept), not as the input shows it.
+  const fields = { text: textInput.value === draft.shownText ? todo.text : text, due, repeat: due === null ? 'none' : repeatSelect.value };
   // The category is sent only when the user changed it, so an edit made without touching it
   // can't undo another tab's change to the link.
   const categoryId = draft.chosenCategoryId;

@@ -17,6 +17,7 @@ test('edit form', async (t) => {
   const ids = {
     rent: '00000000-0000-4000-8000-0000000000a1',
     plants: '00000000-0000-4000-8000-0000000000a2',
+    multi: '00000000-0000-4000-8000-0000000000a3',
   };
   const later = Date.parse('2099-03-04T09:30:00');
   const base = { completed: false, due: null, repeat: 'none', notified: null, revision: 1 };
@@ -256,6 +257,27 @@ test('edit form', async (t) => {
     await settle();
     assert.equal(JSON.parse(patches().at(-1).body).categoryId, null);
     assert.equal(serverRow('rent').categoryId, null);
+  });
+
+  await t.test('a category-only save keeps the line breaks of a multi-line title', async () => {
+    const title = 'First line\r\nSecond line';
+    server.rows.push({ ...base, id: ids.multi, text: title, tags: [], categoryId: null, createdAt: 3 });
+    await refresh();
+    // A native single-line input drops line breaks from what it shows.
+    let shown = '';
+    Object.defineProperty(text, 'value', {
+      configurable: true, get: () => shown, set: (value) => { shown = String(value).replace(/[\r\n]/g, ''); },
+    });
+    open('multi');
+    assert.equal(text.value, 'First lineSecond line');
+    choose(BILLS);
+    save.click();
+    await settle();
+    assert.equal(JSON.parse(patches().at(-1).body).text, title);
+    assert.equal(serverRow('multi').text, title);
+    delete text.value;
+    server.rows = server.rows.filter((item) => item.id !== ids.multi);
+    await refresh();
   });
 
   await t.test('turning the Reminder switch off removes the reminder', async () => {
