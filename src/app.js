@@ -1318,6 +1318,7 @@ list.addEventListener('pointerdown', (event) => {
   handle.addEventListener('pointerup', onDragEnd);
   handle.addEventListener('pointercancel', onDragCancel);
   handle.addEventListener('lostpointercapture', onDragEnd);
+  document.addEventListener('touchmove', onDragTouchMove, { passive: false });
   list.classList.add('is-reordering');
   document.documentElement.classList.add('is-reordering');
   row.classList.add('is-lifted');
@@ -1373,6 +1374,7 @@ function autoScroll() {
 // Drops (commit) or puts the row back. A drop moves the row in the page at once, so it doesn't
 // flash back to its old place before the held render shows the saved order.
 function endDrag(commit) {
+  document.removeEventListener('touchmove', onDragTouchMove);
   if (!drag) return;
   const { state, row, handle, rows, slot, frame, tags } = drag;
   drag = null;
@@ -1401,9 +1403,9 @@ document.addEventListener('keydown', (event) => {
     endDrag(false);
   }
 });
-document.addEventListener('touchmove', (event) => {
+function onDragTouchMove(event) {
   if (drag) event.preventDefault();
-}, { passive: false });
+}
 window.addEventListener('blur', () => endDrag(false));
 
 // Focus landing on a just-fired row (by Tab or click) ends its highlight.
