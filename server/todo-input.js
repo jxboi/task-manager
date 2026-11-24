@@ -16,7 +16,7 @@ export function readCategoryId(value) {
 }
 
 // An edit's optional category: undefined when omitted (keep the link), null to clear, else the ID.
-export function readEditCategory(body) {
+function readEditCategory(body) {
   if (body.action !== 'edit' || !Object.hasOwn(body, 'categoryId')) return undefined;
   return body.categoryId === null ? null : readCategoryId(body.categoryId);
 }
@@ -83,6 +83,20 @@ function complete(todo, { completed, due, completedUntil = null }) {
   throw invalid('Invalid completion or reminder change.');
 }
 
+// The whole editable state at once: title, tags, reminder (`due` null for none) and,
+// optionally, the category. Omitting `categoryId` keeps the current link. Validates everything
+// without touching the database, so callers can reject a bad edit before taking any lock.
+export function readEdit(body) {
+  checkFields(body, ['action', 'revision', 'text', 'tags', 'due', 'repeat', 'categoryId']);
+  const text = readText(body.text);
+  const tags = readTags(body.tags);
+  const due = body.due === null ? null : readDue(body.due);
+  if (!REPEATS.includes(body.repeat) || (due === null && body.repeat !== 'none')) {
+    throw invalid('Provide a valid repeat setting.');
+  }
+  return { text, tags, due, repeat: body.repeat, categoryId: readEditCategory(body) };
+}
+
 export function patchTodo(todo, body) {
   const items = [todo];
   const id = todo.id;
@@ -108,17 +122,8 @@ export function patchTodo(todo, body) {
       return setReminder(items, id, due, body.repeat)[0];
     }
     case 'edit': {
-      // The whole editable state at once: title, tags, reminder (`due` null for none) and,
-      // optionally, the category. Omitting `categoryId` keeps the current link.
-      checkFields(body, [...base, 'text', 'tags', 'due', 'repeat', 'categoryId']);
-      const text = readText(body.text);
-      const tags = readTags(body.tags);
-      const due = body.due === null ? null : readDue(body.due);
-      if (!REPEATS.includes(body.repeat) || (due === null && body.repeat !== 'none')) {
-        throw invalid('Provide a valid repeat setting.');
-      }
-      const categoryId = readEditCategory(body);
-      const edited = editTodo(items, id, { text, tags, due, repeat: body.repeat })[0];
+      const { categoryId, ...fields } = readEdit(body);
+      const edited = editTodo(items, id, fields)[0];
       return categoryId === undefined || categoryId === todo.categoryId ? edited : { ...edited, categoryId };
     }
     case 'clearReminder':

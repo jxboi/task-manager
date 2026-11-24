@@ -279,11 +279,11 @@ test('categories API against PostgreSQL', {
   await t.test('delete unlinks exactly its own todos and bumps their revisions', async () => {
     const work = randomUUID();
     const home = randomUUID();
-    const bWork = randomUUID();
     const [linked1, linked2, onHome, loose, bLinked] = Array.from({ length: 5 }, () => randomUUID());
     assert.equal((await create(a, work, 'Work')).status, 201);
     assert.equal((await create(a, home, 'Home')).status, 201);
-    assert.equal((await create(b, bWork, 'Work')).status, 201);
+    // Bob's category deliberately shares Alice's UUID (the primary key is per user).
+    assert.equal((await create(b, work, 'Work')).status, 201);
     for (const [account, id, text] of [[a, linked1, 'One'], [a, linked2, 'Two'], [a, onHome, 'Home task'],
       [a, loose, 'Loose'], [b, bLinked, 'Bob task']]) {
       const response = await request('/api/todos', { method: 'POST', account, body: { id, text, tags: ['t'] } });
@@ -294,7 +294,7 @@ test('categories API against PostgreSQL', {
        WHERE user_id = $1 AND id IN ($2, $3, $5)`,
       [a.userId, linked1, linked2, work, onHome, home],
     );
-    await admin.query('UPDATE todos SET category_id = $3 WHERE user_id = $1 AND id = $2', [b.userId, bLinked, bWork]);
+    await admin.query('UPDATE todos SET category_id = $3 WHERE user_id = $1 AND id = $2', [b.userId, bLinked, work]);
     // Give one linked todo a higher revision so the bump is visible as +1, not a reset.
     await admin.query('UPDATE todos SET revision = 4 WHERE user_id = $1 AND id = $2', [a.userId, linked2]);
     const snapshot = async (account) => (await request('/api/todos', { account })).data.todos;
@@ -321,11 +321,13 @@ test('categories API against PostgreSQL', {
     assert.deepEqual(after[onHome], before.find((todo) => todo.id === onHome));
     assert.deepEqual(after[loose], before.find((todo) => todo.id === loose));
     assert.deepEqual(await snapshot(b), bBefore);
+    assert.deepEqual((await snapshot(b)).map(({ id, categoryId, revision }) => ({ id, categoryId, revision })),
+      [{ id: bLinked, categoryId: work, revision: 1 }], "Bob's link and revision are intact");
     assert.deepEqual(await links(), linksBefore.map((row) => (
       row.user_id === a.userId && [linked1, linked2].includes(row.id) ? { ...row, category_id: null } : row
     )));
     assert.deepEqual((await stored(a.userId)).map((row) => row.id), [home]);
-    assert.deepEqual((await stored(b.userId)).map((row) => row.id), [bWork]);
+    assert.deepEqual((await stored(b.userId)).map((row) => row.id), [work]);
     await admin.query('DELETE FROM todos WHERE user_id = ANY($1)', [[a.userId, b.userId]]);
     await admin.query('DELETE FROM categories WHERE user_id = ANY($1)', [[a.userId, b.userId]]);
   });
@@ -511,6 +513,102 @@ test('categories API against PostgreSQL', {
     expectError(assigned, 404, 'CATEGORY_NOT_FOUND');
     assert.deepEqual((await request('/api/todos', { account: a })).data, { todos: [todo, unlinked], categories: [] });
     assert.deepEqual(await link(a.userId, id), { category_id: null, revision: todo.revision });
+    await admin.query('DELETE FROM todos WHERE user_id = $1', [a.userId]);
+  });
+
+  await t.test('a malformed edit gets 400 whether or not its category exists', async () => {
+    const work = randomUUID();
+    assert.equal((await create(a, work, 'Work')).status, 201);
+    const id = randomUUID();
+    const todo = (await addTodo(a, id, 'Plan')).data.todo;
+    for (const categoryId of [work, randomUUID()]) {
+      for (const bad of [{ userId: b.userId }, { text: '' }, { tags: 'x' }, { repeat: 'daily' }]) {
+        expectError(await patchTodo(a, id, editOf(todo, { categoryId, ...bad })), 400, 'INVALID_INPUT');
+      }
+    }
+    assert.deepEqual(await readTodo(a, id), todo);
+    await admin.query('DELETE FROM todos WHERE user_id = $1', [a.userId]);
+    await admin.query('DELETE FROM categories WHERE user_id = $1', [a.userId]);
+  });
+
+  await t.test('the collection read is one snapshot even if a delete commits between its queries', async () => {
+    const work = randomUUID();
+    assert.equal((await create(a, work, 'Work')).status, 201);
+    const id = randomUUID();
+    const todo = (await addTodo(a, id, 'Linked')).data.todo;
+    const linked = (await patchTodo(a, id, editOf(todo, { categoryId: work }))).data.todo;
+    // After the snapshot's todos read, commit a category delete (with its unlink) on another connection.
+    const { pool } = services;
+    const connect = pool.connect.bind(pool);
+    let hooked = false;
+    let deleted;
+    pool.connect = async (...args) => {
+      const client = await connect(...args);
+      if (hooked) return client;
+      const query = client.query.bind(client);
+      client.query = async (...queryArgs) => {
+        const result = await query(...queryArgs);
+        if (!hooked && /FROM todos/.test(String(queryArgs[0]))) {
+          hooked = true;
+          deleted = await remove(a, work, 1);
+        }
+        return result;
+      };
+      return client;
+    };
+    let list;
+    try {
+      list = await request('/api/todos', { account: a });
+    } finally {
+      pool.connect = connect;
+    }
+    assert.ok(hooked, 'the hook ran between the two reads');
+    assert.equal(deleted.status, 200, JSON.stringify(deleted.data));
+    assert.equal(list.status, 200);
+    const known = new Set(list.data.categories.map((category) => category.id));
+    for (const item of list.data.todos) assert.ok(item.categoryId === null || known.has(item.categoryId), 'no dangling link');
+    assert.deepEqual(list.data, { todos: [linked], categories: [{ id: work, name: 'Work', revision: 1 }] });
+    const fresh = await request('/api/todos', { account: a });
+    assert.deepEqual(fresh.data, { todos: [{ ...linked, categoryId: null, revision: linked.revision + 1 }], categories: [] });
+    await admin.query('DELETE FROM todos WHERE user_id = $1', [a.userId]);
+  });
+
+  await t.test('legacy edit (no categoryId) racing a category delete, edit first, survives the unlink', async () => {
+    const work = randomUUID();
+    assert.equal((await create(a, work, 'Work')).status, 201);
+    const id = randomUUID();
+    const todo = (await addTodo(a, id, 'Racer')).data.todo;
+    const linked = (await patchTodo(a, id, editOf(todo, { categoryId: work }))).data.todo;
+    const [edited, deleted] = await interleave(
+      id,
+      () => patchTodo(a, id, editOf(linked, { text: 'Renamed' })),
+      () => remove(a, work, 1),
+    );
+    assert.equal(edited.status, 200, JSON.stringify(edited.data));
+    assert.deepEqual(edited.data.todo, { ...linked, text: 'Renamed', revision: linked.revision + 1 });
+    assert.equal(deleted.status, 200, JSON.stringify(deleted.data));
+    const unlinked = { ...edited.data.todo, categoryId: null, revision: linked.revision + 2 };
+    assert.deepEqual(deleted.data.todos, [unlinked]);
+    assert.deepEqual(await readTodo(a, id), unlinked);
+    await admin.query('DELETE FROM todos WHERE user_id = $1', [a.userId]);
+  });
+
+  await t.test('legacy edit racing a category delete, delete first, gets 409 for the old revision', async () => {
+    const work = randomUUID();
+    assert.equal((await create(a, work, 'Work')).status, 201);
+    const id = randomUUID();
+    const todo = (await addTodo(a, id, 'Racer')).data.todo;
+    const linked = (await patchTodo(a, id, editOf(todo, { categoryId: work }))).data.todo;
+    const [deleted, edited] = await interleave(
+      id,
+      () => remove(a, work, 1),
+      () => patchTodo(a, id, editOf(linked, { text: 'Renamed' })),
+    );
+    assert.equal(deleted.status, 200, JSON.stringify(deleted.data));
+    const unlinked = { ...linked, categoryId: null, revision: linked.revision + 1 };
+    assert.deepEqual(deleted.data.todos, [unlinked]);
+    expectError(edited, 409, 'REVISION_CONFLICT');
+    assert.deepEqual(await readTodo(a, id), unlinked);
     await admin.query('DELETE FROM todos WHERE user_id = $1', [a.userId]);
   });
 });

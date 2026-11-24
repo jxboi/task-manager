@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { patchTodo, readMove } from '../server/todo-input.js';
+import { patchTodo, readEdit, readMove } from '../server/todo-input.js';
 
 const id = '0b7f2a3e-1c4d-4e5f-8a9b-0c1d2e3f4a5b';
 const work = '1c8e3b4f-2d5e-4f60-9bac-1d2e3f4a5b6c';
@@ -47,4 +47,12 @@ test('other actions reject categoryId as an unknown field', () => {
     rejects(() => patchTodo(todo, { ...body, categoryId: null }));
   }
   rejects(() => readMove({ action: 'move', revision: 3, anchorId: work, side: 'after', categoryId: null }, id));
+});
+
+test('readEdit validates the whole edit payload, not only categoryId', () => {
+  assert.deepEqual(readEdit({ ...edit, categoryId: work }), { text: 'Task', tags: ['a'], due: null, repeat: 'none', categoryId: work });
+  assert.equal(readEdit(edit).categoryId, undefined);
+  for (const bad of [{ userId: 'x' }, { text: '' }, { tags: 'a' }, { repeat: 'daily' }, { due: 'soon' }]) {
+    rejects(() => readEdit({ ...edit, categoryId: work, ...bad }));
+  }
 });

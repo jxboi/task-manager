@@ -1,5 +1,5 @@
 import { checkMutation, endpoint, invalid, json, readObject, RequestError, requireSession } from './http.js';
-import { createInput, patchTodo, readEditCategory, readId, readMove, readRevision } from './todo-input.js';
+import { createInput, patchTodo, readEdit, readId, readMove, readRevision } from './todo-input.js';
 import { transaction } from './transaction.js';
 import { moveTodo } from '../src/todos.js';
 
@@ -77,7 +77,8 @@ async function createTodo(pool, userId, { id, text, tags }) {
 
 async function updateTodo(pool, userId, id, body) {
   const revision = readRevision(body.revision);
-  const categoryId = readEditCategory(body);
+  // Reject a malformed edit before touching the category, so it never reads as a 404.
+  const categoryId = body.action === 'edit' ? readEdit(body).categoryId : undefined;
   if (!categoryId) return writeTodo(pool, userId, id, revision, body);
   // Key-share the category before the todo's write lock: a concurrent category delete either
   // waits for this edit (and then unlinks it) or finishes first and this edit sees no category.
