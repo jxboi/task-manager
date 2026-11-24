@@ -882,13 +882,19 @@ function saveEditor() {
     if (notificationsBlocked() && !noteDismissed) showBanner('note', NOTE_TEXT);
     else if (!banner.hidden && banner.classList.contains('is-note')) hideBanner();
   }
+  // An unchanged reminder that already fired is saved again to re-arm it (it alerts once more).
+  const rearmFired = due !== null && !reminderChanged && todo.notified === todo.due;
   if (editTodo([todo], id, fields)[0] !== todo) {
     if (reminderChanged) fired.delete(id);
     hideSync();
-    saveEdit(id, fields, originalCategoryId);
-  }
-  // An unchanged reminder that already fired is saved again to re-arm it (it alerts once more).
-  if (due !== null && !reminderChanged && todo.notified === todo.due) {
+    // Re-armed only once the edit has been accepted: a refused one rolls back and touches nothing.
+    saveEdit(id, fields, originalCategoryId).then((ok) => {
+      if (ok && rearmFired) {
+        fired.delete(id);
+        rearmReminder(id, due, fields.repeat);
+      }
+    });
+  } else if (rearmFired) {
     fired.delete(id);
     hideSync();
     rearmReminder(id, due, fields.repeat);
@@ -906,7 +912,7 @@ function rearmReminder(id, due, repeat) {
 
 // `retry` (after an uncertain failure) re-sends only if the row doesn't already match the edit.
 function saveEdit(id, fields, originalCategoryId) {
-  saved(id, sync.edit(id, fields), () => {
+  const done = saved(id, sync.edit(id, fields), () => {
     const todo = sync.confirmed.find((row) => row.id === id);
     if (!todo) return;
     const { categoryId, ...otherFields } = fields;
@@ -916,6 +922,7 @@ function saveEdit(id, fields, originalCategoryId) {
     if (editTodo([todo], id, retryFields)[0] !== todo) saveEdit(id, retryFields, originalCategoryId);
   });
   check();
+  return done;
 }
 
 // Delete task: at once, no confirm. Focus goes to the next row's checkbox, or the composer.
@@ -1855,21 +1862,21 @@ function handleSessionError(error) {
 async function saved(id, result, retry) {
   const epoch = viewEpoch;
   const outcome = await result;
-  if (outcome.stale || epoch !== viewEpoch) return;
+  if (outcome.stale || epoch !== viewEpoch) return false;
   if (outcome.ok) {
     rearm(Date.now());
-    return;
+    return true;
   }
   // The change rolled back (a deleted row came back, say): recheck reminders and re-arm the timer.
   check();
-  if (outcome.skipped) return; // the row is gone
+  if (outcome.skipped) return false; // the row is gone
   if (outcome.cancelled) {
     // The user acted before seeing the refreshed row.
     showSync(CHANGED_ELSEWHERE);
-    return;
+    return false;
   }
   const { error } = outcome;
-  if (handleSessionError(error)) return;
+  if (handleSessionError(error)) return false;
   if (error.status === 409 || error.status === 404) {
     if (outcome.reloaded) {
       showSync(CHANGED_ELSEWHERE);
@@ -1882,6 +1889,7 @@ async function saved(id, result, retry) {
     const retryNow = () => reconcileThen(id, outcome.revision, retry, epoch);
     showSync("Couldn't save your change.", retryNow);
   }
+  return false;
 }
 
 // After an uncertain failure the change may have been saved anyway (only the answer was lost),
