@@ -338,14 +338,14 @@ p {
   gap: 8px;
   height: 48px;
   padding: 1px 1px 1px 16px;
-  border: 1px solid var(--field);
   border-radius: 12px;
   background: var(--surface);
+  outline: 1px solid var(--field);
+  outline-offset: -1px;
 }
 
 .add-field:focus-within {
   outline: 2px solid var(--ink);
-  outline-offset: 2px;
 }
 
 .add-input {
@@ -1230,19 +1230,21 @@ p {
   width: 100%;
   height: 48px;
   padding: 0 16px;
-  border: 1px solid var(--field);
+  border: 0;
   border-radius: 10px;
   background: var(--surface);
   font-size: 16px;
+  outline: 1px solid var(--field);
+  outline-offset: -1px;
 }
 
 .reminder-control:focus-visible {
   outline: 2px solid var(--ink);
-  outline-offset: 2px;
+  outline-offset: -1px;
 }
 
 .reminder-control[aria-invalid="true"] {
-  border-color: var(--over);
+  outline-color: var(--over);
 }
 
 .edit-tags-row {
@@ -1298,14 +1300,21 @@ p {
   width: 140px;
   height: 32px;
   padding: 0 10px;
-  border: 1px solid var(--field);
+  border: 0;
   border-radius: 6px;
   background: var(--surface);
   font-size: 16px;
+  outline: 1px solid var(--field);
+  outline-offset: -1px;
+}
+
+.tag-field:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: -1px;
 }
 
 .tag-field[aria-invalid="true"] {
-  border-color: var(--over);
+  outline-color: var(--over);
 }
 
 /* The reminder picker: a grouped list (switch, date + inline calendar, time, repeat). */
@@ -1789,19 +1798,21 @@ p {
   width: 100%;
   height: 48px;
   padding: 0 16px;
-  border: 1px solid var(--field);
+  border: 0;
   border-radius: 10px;
   background: var(--surface);
   font-size: 16px;
+  outline: 1px solid var(--field);
+  outline-offset: -1px;
 }
 
 .auth-input:focus-visible {
   outline: 2px solid var(--ink);
-  outline-offset: 2px;
+  outline-offset: -1px;
 }
 
 .auth-input[aria-invalid="true"] {
-  border-color: var(--over);
+  outline-color: var(--over);
 }
 
 .auth-input:read-only {
@@ -2042,8 +2053,13 @@ body {
 .add-field {
   height: 56px;
   padding-left: 20px;
-  border: 1.5px solid var(--ink);
   border-radius: 28px;
+  outline: 1.5px solid var(--ink);
+  outline-offset: -1.5px;
+}
+
+.add-field:focus-within {
+  outline-width: 3px;
 }
 
 .add-input {
@@ -2355,7 +2371,6 @@ body {
 
 .reminder-control {
   min-height: 52px;
-  border: 0;
   border-radius: 16px;
   font-size: 20px;
   font-weight: 600;
@@ -2473,44 +2488,11 @@ body {
   clip-path: inset(50%);
 }
 
-/* Composer options: the shelf it adds to, a quick reminder, and how it repeats. */
-.add-options {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-top: 12px;
-}
-
+/* Under the composer: the shelf a new task goes on. */
 .add-shelf {
+  margin-top: 12px;
   color: var(--text-2);
   font-size: 14px;
   line-height: 20px;
   font-weight: 600;
-}
-
-.add-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.add-chip {
-  min-height: 40px;
-  padding: 0 14px;
-  border: 1.5px solid var(--ink);
-  border-radius: 20px;
-  background: transparent;
-  color: var(--ink);
-  font-size: 15px;
-  font-weight: 600;
-  transition: transform 120ms var(--ease);
-}
-
-.add-chip:active {
-  transform: scale(0.97);
-}
-
-.add-chip[aria-pressed="true"] {
-  background: var(--ink);
-  color: #fff;
 }
