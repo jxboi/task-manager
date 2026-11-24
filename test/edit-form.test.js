@@ -499,6 +499,25 @@ test('edit form', async (t) => {
     }
   });
 
+  await t.test('a reminder-only edit saves legacy tags as words in the title', async () => {
+    const original = serverRow('rent');
+    server.rows = server.rows.map((item) => (item === original ? { ...item, tags: ['home', 'urgent'] } : item));
+    try {
+      await refresh();
+      open('rent');
+      setWhen('2099-06-07T09:30');
+      save.click();
+      await settle();
+      const expected = `${original.text} #home #urgent`;
+      const body = JSON.parse(patches().at(-1).body);
+      assert.deepEqual([body.text, body.tags], [expected, []]);
+      assert.deepEqual([serverRow('rent').text, serverRow('rent').tags], [expected, []]);
+    } finally {
+      server.rows = server.rows.map((item) => (item.id === original.id ? { ...original, revision: item.revision + 1 } : item));
+      await refresh();
+    }
+  });
+
   await t.test('focus stays in the sheet when Previous month disables itself', async () => {
     open('plants');
     byId('reminder-date-button').click();

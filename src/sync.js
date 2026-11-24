@@ -20,6 +20,7 @@ import { isOverdue } from './reminders.js';
 
 const replace = (todos, row) => todos.map((todo) => (todo.id === row.id ? row : todo));
 const isStale = (error) => error?.code === 'STALE_SESSION';
+const isSessionError = (error) => error?.status === 401 || error?.code === 'INVALID_CSRF';
 // The server's copy changed or is gone: reload before anything else.
 const needsReload = (error) => error?.status === 409 || error?.status === 404;
 // No answer, or a server error: the write may or may not have landed.
@@ -79,6 +80,19 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
     return true;
   }
 
+  // Keep the original failure if the snapshot is unavailable, unless the read found a session error.
+  async function recoverSnapshot(gen, error) {
+    let reloaded = false;
+    try {
+      reloaded = await reloadNow(gen);
+    } catch (readError) {
+      if (isStale(readError)) return { ok: false, stale: true };
+      if (isSessionError(readError)) error = readError;
+    }
+    if (gen !== generation) return { ok: false, stale: true };
+    return { ok: false, error, reloaded };
+  }
+
   // One write. `apply` is the optimistic change (omitted for claims); `send` gets the confirmed row
   // (or null for a create) and resolves to the server's row (or null after a delete).
   // `holds(row)`, if given, is the change's assumption about the confirmed row when its turn comes;
@@ -112,10 +126,10 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
       }
       if (holds && !holds(row)) {
         settle();
-        const reloaded = await reloadNow(gen).catch(() => false);
-        if (gen !== generation) return { ok: false, stale: true };
-        if (!reloaded) changed();
-        return { ok: false, error: { status: 409, code: 'STALE_CHANGE' }, reloaded, revision: row.revision };
+        const result = await recoverSnapshot(gen, { status: 409, code: 'STALE_CHANGE' });
+        if (result.stale) return result;
+        if (!result.reloaded) changed();
+        return { ...result, revision: row.revision };
       }
       try {
         const result = await send(row);
@@ -129,11 +143,11 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
         if (gen !== generation || isStale(error)) return { ok: false, stale: true };
         settle();
         changed();
-        const reloaded = needsReload(error) ? await reloadNow(gen).catch(() => false) : false;
+        const result = needsReload(error) ? await recoverSnapshot(gen, error) : { ok: false, error, reloaded: false };
         if (gen !== generation) return { ok: false, stale: true };
         // `revision`: the row this change was sent against, so a retry can tell whether anything
         // (this change, or another tab) has touched the row since.
-        return { ok: false, error, reloaded, revision: row?.revision ?? null };
+        return result.stale ? result : { ...result, revision: row?.revision ?? null };
       }
     });
   }
@@ -162,19 +176,8 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
         result = await send(gen);
       } catch (error) {
         if (gen !== generation || isStale(error)) return { ok: false, stale: true };
-        let reloaded = false;
-        if (needsReload(error) || isUncertain(error)) {
-          try {
-            reloaded = await reloadNow(gen);
-          } catch (readError) {
-            if (gen !== generation || isStale(readError)) return { ok: false, stale: true };
-            if (readError.status === 401 || readError.code === 'INVALID_CSRF') {
-              return { ok: false, error: readError };
-            }
-          }
-        }
-        if (gen !== generation) return { ok: false, stale: true };
-        return { ok: false, error, reloaded };
+        if (needsReload(error) || isUncertain(error)) return recoverSnapshot(gen, error);
+        return { ok: false, error, reloaded: false };
       }
       if (gen !== generation) return { ok: false, stale: true };
       const reconcile = commit(result);
@@ -384,7 +387,11 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
             }
           }
         }
-        if (conflicts.length) await reloadNow(gen).catch(() => false);
+        if (conflicts.length) {
+          const recovery = await recoverSnapshot(gen, error);
+          if (recovery.stale) return { claimed: [], conflicts, error, stale: true };
+          error = recovery.error;
+        }
         if (gen !== generation) return { claimed: [], conflicts, error, stale: true };
         if (claimed.length || conflicts.length) changed();
         return { claimed, conflicts, error };

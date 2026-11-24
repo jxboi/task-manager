@@ -453,6 +453,24 @@ test('item 2: an edit made before the refreshed row is on screen is cancelled; a
 const HOME = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
 const WORK = '0f8fad5b-d9cb-469f-a165-70867728950e';
 
+for (const [status, code] of [[401, 'UNAUTHENTICATED'], [403, 'INVALID_CSRF']]) {
+  test(`an assignment rejected with 404 reports ${code} from the recovery snapshot`, async () => {
+    const { server, sync } = setup();
+    const todo = { ...newTodo('Assign me'), revision: 1 };
+    server.rows = [todo];
+    server.categories = [{ id: HOME, name: 'Home', revision: 1 }];
+    await sync.load();
+    server.categories = [];
+    server.failNext = (method) => (method === 'GET'
+      ? new Response(JSON.stringify({ error: { code } }), { status })
+      : undefined);
+    const result = await sync.edit(todo.id, { text: todo.text, due: null, repeat: 'none', categoryId: HOME });
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, code);
+    assert.equal(result.error.status, status);
+  });
+}
+
 test('a load carries the catalog alphabetically with the todo links; no catalog reads as null', async () => {
   const { server, sync } = setup();
   assert.equal(sync.categories, null, 'nothing before a load');

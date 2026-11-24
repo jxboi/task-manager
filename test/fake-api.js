@@ -2,12 +2,12 @@
 // tests. It reuses the server's own input rules and transforms (server/todo-input.js,
 // server/category-input.js), keeps a revision per row and checks the CSRF token, so client code
 // meets the same answers it gets from the real handlers.
-import { createInput, foldTags, patchTodo, readId, readMove } from '../server/todo-input.js';
+import { createInput, patchTodo, readId, readMove } from '../server/todo-input.js';
 import {
   createCategoryInput, MAX_CATEGORIES, readCategoryId, readQueryRevision, renameCategoryInput,
 } from '../server/category-input.js';
 import { RequestError } from '../server/http.js';
-import { moveTodo, sortByPosition } from '../src/todos.js';
+import { foldTags, moveTodo, sortByPosition } from '../src/todos.js';
 
 export function createFakeApi({ csrfToken = 'token-a', user = { name: 'Ana', email: 'ana@example.test' } } = {}) {
   const server = {

@@ -1,6 +1,7 @@
 // The only browser module that talks to the server: session, auth, todo and category requests.
 // Tasks are never read from or written to localStorage. The old "task-manager.todos.v1" key is
 // left untouched and ignored. The CSRF token lives only in memory.
+import { foldLegacyTags } from './todos.js';
 
 export class ApiError extends Error {
   constructor(status, code, message = code) {
@@ -94,18 +95,20 @@ const todoPath = (id, extra = '') => `/api/todos?id=${encodeURIComponent(id)}${e
 // The CSRF token is sent on reads too, so a tab can't load another account's list after a switch.
 export async function readSnapshot() {
   const data = await send('/api/todos', { csrf: true });
-  return { todos: data.todos, categories: Array.isArray(data.categories) ? data.categories : null };
+  return { todos: data.todos.map(foldLegacyTags), categories: Array.isArray(data.categories) ? data.categories : null };
 }
 
 // The rollback API requires a tag list on create and edit.
 export async function createTodo({ id, text }) {
-  return (await send('/api/todos', { method: 'POST', body: { id, text, tags: [] }, csrf: true })).todo;
+  const { todo } = await send('/api/todos', { method: 'POST', body: { id, text, tags: [] }, csrf: true });
+  return foldLegacyTags(todo);
 }
 
 export async function patchTodo(id, revision, action, fields = {}) {
   const body = { ...fields, revision, action };
   if (action === 'edit') body.tags = [];
-  return (await send(todoPath(id), { method: 'PATCH', body, csrf: true })).todo;
+  const { todo } = await send(todoPath(id), { method: 'PATCH', body, csrf: true });
+  return foldLegacyTags(todo);
 }
 
 export async function deleteTodo(id, revision) {
@@ -126,5 +129,6 @@ export async function renameCategory(id, revision, name) {
 
 // Resolves to the todos the delete unlinked, with their new revisions.
 export async function deleteCategory(id, revision) {
-  return (await send(categoryPath(id, `&revision=${revision}`), { method: 'DELETE', csrf: true })).todos;
+  const { todos } = await send(categoryPath(id, `&revision=${revision}`), { method: 'DELETE', csrf: true });
+  return todos.map(foldLegacyTags);
 }

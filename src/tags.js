@@ -1,5 +1,5 @@
-// Tags are no longer a user concept. The server still reads them from older clients and folds
-// them into the title (server/todo-input.js), and their colors live on as category colors.
+// Tags are no longer a user concept. Older clients and servers still exchange them, so they
+// fold into the title (todos.js), and their colors live on as category colors.
 export const MAX_TAGS = 10;
 export const MAX_TAG_LENGTH = 24;
 

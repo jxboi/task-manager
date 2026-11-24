@@ -1,7 +1,7 @@
 import { checkMutation, endpoint, invalid, json, readObject, RequestError, requireSession } from './http.js';
-import { createInput, foldTags, patchTodo, readEdit, readId, readMove, readRevision } from './todo-input.js';
+import { createInput, patchTodo, readEdit, readId, readMove, readRevision } from './todo-input.js';
 import { transaction } from './transaction.js';
-import { moveTodo } from '../src/todos.js';
+import { foldLegacyTags, foldTags, moveTodo } from '../src/todos.js';
 
 const position = 'COALESCE(position, todo_initial_position(created_at, id)) COLLATE "C"';
 export const columns = `id, text, completed, completed_until AS "completedUntil", created_at AS "createdAt",
@@ -11,10 +11,6 @@ export const columns = `id, text, completed, completed_until AS "completedUntil"
 // or an older app wrote during rollout, show as part of the title, and the next write stores
 // that title with no tags. They never become categories. `tags` stays in the shape, always
 // empty, because older clients read it.
-function foldLegacyTags(todo) {
-  return todo.tags.length ? { ...todo, text: foldTags(todo.text, todo.tags), tags: [] } : todo;
-}
-
 export function toTodo(row) {
   return foldLegacyTags({
     ...row,

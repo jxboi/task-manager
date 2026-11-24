@@ -1,6 +1,6 @@
 import { isCompleted, isOverdue, normalizeReminder, REPEATS } from '../src/reminders.js';
 import { MAX_TAGS, normalizeTag, normalizeTags } from '../src/tags.js';
-import { addTag, clearReminder, editTodo, markNotified, MAX_TEXT_LENGTH, removeTag, setReminder, validText } from '../src/todos.js';
+import { addTag, clearReminder, editTodo, markNotified, removeTag, setReminder, validText } from '../src/todos.js';
 import { invalid, RequestError } from './http.js';
 
 export const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -44,21 +44,6 @@ function readTag(raw) {
   const tag = normalizeTag(raw);
   if (tag === null || tag.includes('\0')) throw invalid('Provide a valid tag.');
   return tag;
-}
-
-// Appends tags to a title as " #tag" words in order, NULLs skipped, whole tags only while the
-// title stays within MAX_TEXT_LENGTH code points. Migration 0006 folds the tags it converts the
-// same way.
-export function foldTags(text, tags) {
-  let folded = text;
-  let length = [...text].length;
-  for (const tag of tags) {
-    if (tag === null) continue;
-    length += [...tag].length + 2;
-    if (length > MAX_TEXT_LENGTH) break;
-    folded += ` #${tag}`;
-  }
-  return folded;
 }
 
 export function createInput(body) {

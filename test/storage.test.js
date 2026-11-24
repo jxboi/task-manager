@@ -129,6 +129,17 @@ test('an edit always sends empty tags for the rollback API', async () => {
   assert.deepEqual(calls.map(({ body }) => JSON.parse(body)), [expected, { ...expected, categoryId: CATEGORY }]);
 });
 
+test('todo write responses fold legacy tags within the title code point limit', async () => {
+  const text = '😀'.repeat(1996);
+  const todo = { id: ID, text, tags: [null, 'é', 'z'] };
+  const folded = { ...todo, text: `${text} #é`, tags: [] };
+  responder = () => respond(200, { todo });
+  assert.deepEqual(await createTodo({ id: ID, text }), folded);
+  assert.deepEqual(await patchTodo(ID, 1, 'setReminder', { due: 10, repeat: 'daily' }), folded);
+  responder = () => respond(200, { todos: [todo] });
+  assert.deepEqual(await deleteCategory(CATEGORY, 1), [folded]);
+});
+
 test('category writes send JSON with the CSRF token and return the server\'s answer', async () => {
   const category = { id: CATEGORY, name: 'Home', revision: 1 };
   responder = () => respond(201, { category });

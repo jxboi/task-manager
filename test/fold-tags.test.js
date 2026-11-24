@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createInput, foldTags, readEdit } from '../server/todo-input.js';
+import { createInput, readEdit } from '../server/todo-input.js';
+import { foldTags } from '../src/todos.js';
 
 const id = '0b7f2a3e-1c4d-4e5f-8a9b-0c1d2e3f4a5b';
 

@@ -4,6 +4,24 @@ import { isCompleted, isOverdue, nextReminderAfterToday, normalizeReminder } fro
 // The title rule the server enforces too: 1 to 2,000 characters once trimmed, and no NUL.
 export const MAX_TEXT_LENGTH = 2000;
 
+// Append whole " #tag" words in order, skipping NULLs and stopping at the title limit.
+// Migration 0006 uses the same rule when converting stored tags.
+export function foldTags(text, tags) {
+  let folded = text;
+  let length = [...text].length;
+  for (const tag of tags) {
+    if (tag === null) continue;
+    length += [...tag].length + 2;
+    if (length > MAX_TEXT_LENGTH) break;
+    folded += ` #${tag}`;
+  }
+  return folded;
+}
+
+export function foldLegacyTags(todo) {
+  return todo?.tags?.length ? { ...todo, text: foldTags(todo.text, todo.tags), tags: [] } : todo;
+}
+
 export function validText(text) {
   if (typeof text !== 'string') return false;
   const trimmed = text.trim();
