@@ -25,6 +25,7 @@ const isSessionError = (error) => error?.status === 401 || error?.code === 'INVA
 const needsReload = (error) => error?.status === 409 || error?.status === 404;
 // No answer, or a server error: the write may or may not have landed.
 const isUncertain = (error) => error?.status === 0 || error?.status >= 500;
+const isInvalidWrite = (error) => error?.code === 'INVALID_WRITE_RESPONSE';
 
 // Alphabetical by name for this browser's language, then by ID, so the list and the selects
 // always agree.
@@ -43,6 +44,9 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
   let generation = 0;
   let queue = Promise.resolve();
   let loaded = false;
+  let todoRefreshError = null;
+  let categoryRefreshError = null;
+  const unconfirmedTodoCreates = new Set();
   // A server result that may include remote changes sets the oldest revision an edit may have seen.
   // Successful local writes may advance the row without invalidating other queued edits.
   const refreshedAt = new Map();
@@ -75,6 +79,8 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
     for (const todo of todos) trackRefresh(previous.get(todo.id), todo);
     confirmed = todos;
     categories = catalog && sortCategories(catalog);
+    todoRefreshError = null;
+    categoryRefreshError = null;
     loaded = true;
     changed();
     return true;
@@ -112,7 +118,21 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
     };
     return enqueue(async () => {
       if (gen !== generation) return { ok: false, stale: true };
+      if (todoRefreshError) {
+        const result = await recoverSnapshot(gen, todoRefreshError);
+        if (result.stale) return result;
+        if (!result.reloaded) {
+          settle();
+          changed();
+          return { ...result, revision: confirmed.find((todo) => todo.id === id)?.revision ?? null };
+        }
+      }
       const row = confirmed.find((todo) => todo.id === id) ?? null;
+      if (!needsRow && unconfirmedTodoCreates.delete(id) && row) {
+        settle();
+        changed();
+        return { ok: true, todo: row, reconciled: true };
+      }
       if (needsRow && !row) {
         settle();
         changed();
@@ -141,9 +161,14 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
         return { ok: true, todo: result };
       } catch (error) {
         if (gen !== generation || isStale(error)) return { ok: false, stale: true };
+        if (isInvalidWrite(error)) {
+          todoRefreshError = error;
+          if (!needsRow) unconfirmedTodoCreates.add(id);
+        }
         settle();
         changed();
-        const result = needsReload(error) ? await recoverSnapshot(gen, error) : { ok: false, error, reloaded: false };
+        const result = needsReload(error) || isInvalidWrite(error)
+          ? await recoverSnapshot(gen, error) : { ok: false, error, reloaded: false };
         if (gen !== generation) return { ok: false, stale: true };
         // `revision`: the row this change was sent against, so a retry can tell whether anything
         // (this change, or another tab) has touched the row since.
@@ -167,16 +192,20 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
   // row (409, 404) or an uncertain failure
   // reloads the snapshot before the caller offers anything else, so a retry starts from the
   // server's catalog and a stale rename is never replayed.
-  function categoryWrite(send, commit) {
+  function categoryWrite(send, commit, creating = false) {
     const gen = generation;
     return enqueue(async () => {
       if (gen !== generation) return { ok: false, stale: true };
+      if (!creating && categoryRefreshError) return { ok: false, error: categoryRefreshError, reloaded: false };
       let result;
       try {
         result = await send(gen);
       } catch (error) {
         if (gen !== generation || isStale(error)) return { ok: false, stale: true };
-        if (needsReload(error) || isUncertain(error)) return recoverSnapshot(gen, error);
+        if (needsReload(error) || isUncertain(error)) {
+          if (!creating || isInvalidWrite(error)) categoryRefreshError = error;
+          return recoverSnapshot(gen, error);
+        }
         return { ok: false, error, reloaded: false };
       }
       if (gen !== generation) return { ok: false, stale: true };
@@ -209,6 +238,9 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
     get categories() {
       return categories;
     },
+    get categoryRefreshRequired() {
+      return categoryRefreshError !== null;
+    },
     get loaded() {
       return loaded;
     },
@@ -219,6 +251,9 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
     reset() {
       generation++;
       refreshedAt.clear();
+      unconfirmedTodoCreates.clear();
+      todoRefreshError = null;
+      categoryRefreshError = null;
       confirmed = [];
       categories = null;
       pending = [];
@@ -254,9 +289,10 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
           return row.position == null ? next : sortByPosition(next);
         },
       });
-      if (!result.ok && result.error?.code === 'DUPLICATE_ID' && result.reloaded &&
-          confirmed.some((item) => item.id === todo.id)) {
-        return { ok: true, todo: confirmed.find((item) => item.id === todo.id), reconciled: true };
+      if (!result.ok && result.reloaded && (result.error?.code === 'DUPLICATE_ID' || isInvalidWrite(result.error))) {
+        unconfirmedTodoCreates.delete(todo.id);
+        const row = confirmed.find((item) => item.id === todo.id);
+        if (row) return { ok: true, todo: row, reconciled: true };
       }
       return result;
     },
@@ -319,13 +355,13 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
     // A retry keeps the draft's UUID and checks the current catalog before sending another POST.
     async createCategory(name, id = crypto.randomUUID(), retry = false) {
       const result = await categoryWrite(async (gen) => {
-        if (retry) {
+        if (retry || categoryRefreshError) {
           if (!await reloadNow(gen)) return null;
           const existing = categories?.find((item) => item.id === id);
           if (existing) return existing;
         }
         return api.createCategory({ id, name });
-      }, putCategory);
+      }, putCategory, true);
       const category = categories?.find((item) => item.id === id);
       if (result.ok || (result.reloaded && category)) return { ok: true, category };
       return result;
@@ -369,6 +405,10 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
         const conflicts = [];
         let error = null;
         if (gen !== generation) return { claimed, conflicts, error, stale: true };
+        if (todoRefreshError) {
+          const recovery = await recoverSnapshot(gen, todoRefreshError);
+          if (recovery.stale || !recovery.reloaded) return { ...recovery, claimed, conflicts };
+        }
         for (const { id, due } of candidates) {
           const row = confirmed.find((todo) => todo.id === id);
           if (!row || row.due !== due || row.notified === due || !isOverdue(row, clock())) continue;
@@ -379,7 +419,11 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
             claimed.push(result);
           } catch (failure) {
             if (gen !== generation || isStale(failure)) return { claimed: [], conflicts, error, stale: true };
-            if (needsReload(failure)) {
+            if (isInvalidWrite(failure)) {
+              todoRefreshError = failure;
+              error = failure;
+              break;
+            } else if (needsReload(failure)) {
               conflicts.push({ id, due });
             } else {
               error = failure;
@@ -387,7 +431,7 @@ export function createSync(api, { onChange = () => {}, seenRevision } = {}) {
             }
           }
         }
-        if (conflicts.length) {
+        if (conflicts.length || isInvalidWrite(error)) {
           const recovery = await recoverSnapshot(gen, error);
           if (recovery.stale) return { claimed: [], conflicts, error, stale: true };
           error = recovery.error;

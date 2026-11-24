@@ -510,8 +510,8 @@ test('category writes wait for the server: create, rename and the limit', async 
 test('deleting a category applies the unlinked todos with their new revisions in the same step', async () => {
   const { server, sync } = setup();
   server.categories = [{ id: HOME, name: 'Home', revision: 1 }];
-  const linked = { ...newTodo('Linked'), position: 'a', categoryId: HOME, revision: 4 };
-  const other = { ...newTodo('Other'), position: 'b', revision: 1 };
+  const linked = { ...newTodo('Linked'), position: '00000000000000000000a', categoryId: HOME, revision: 4 };
+  const other = { ...newTodo('Other'), position: '00000000000000000000b', revision: 1 };
   server.rows = [linked, other];
   await sync.load();
   let seen = [];
@@ -582,10 +582,10 @@ test('category deletion reloads an omitted, remotely reassigned todo before queu
 test('category deletion inserts a returned todo that was assigned in another tab', async () => {
   const { server, sync } = setup();
   server.categories = [{ id: HOME, name: 'Home', revision: 1 }];
-  const other = { ...newTodo('Other'), position: 'b', revision: 1 };
+  const other = { ...newTodo('Other'), position: '00000000000000000000b', revision: 1 };
   server.rows = [other];
   await sync.load();
-  const linked = { ...newTodo('Remote task'), position: 'a', categoryId: HOME, revision: 4 };
+  const linked = { ...newTodo('Remote task'), position: '00000000000000000000a', categoryId: HOME, revision: 4 };
   server.rows = [linked, other];
 
   assert.equal((await sync.deleteCategory(HOME)).ok, true);
@@ -610,6 +610,72 @@ test('an uncertain create is reconciled by its UUID after the reload', async () 
   assert.equal(lost.error.code, 'NETWORK');
   assert.equal(lost.reloaded, true);
   assert.deepEqual(sync.categories.map(({ name }) => name), ['Home']);
+});
+
+test('a truncated category create response reloads and reconciles the committed UUID', async () => {
+  const { server, sync } = setup();
+  globalThis.fetch = async (path, init) => {
+    const response = await server.fetch(path, init);
+    return init.method === 'POST' ? new Response('{"category":', { status: 201 }) : response;
+  };
+  const outcome = await sync.createCategory('Home', HOME);
+  assert.deepEqual(outcome, { ok: true, category: server.categories[0] });
+  assert.deepEqual(server.requests.map(({ method }) => method), ['POST', 'GET']);
+});
+
+test('an invalid todo create response requires a fresh snapshot before retrying the UUID', async () => {
+  const { server, sync } = setup();
+  const todo = newTodo('Maybe saved');
+  let failReads = true;
+  globalThis.fetch = async (path, init) => {
+    if (failReads && init.method === 'GET') {
+      server.failNext = () => new Response('{}', { status: 503 });
+    }
+    const response = await server.fetch(path, init);
+    return init.method === 'POST' && response.ok
+      ? new Response(JSON.stringify({ todo: { id: todo.id, revision: 1 } }), { status: 201 })
+      : response;
+  };
+  const lost = await sync.create(todo);
+  assert.equal(lost.error?.code, 'INVALID_WRITE_RESPONSE');
+  assert.equal(lost.reloaded, false);
+  assert.equal((await sync.create(todo)).ok, false);
+  failReads = false;
+  assert.deepEqual(await sync.create(todo), { ok: true, todo: server.rows[0], reconciled: true });
+  assert.deepEqual(server.requests.map(({ method }) => method), ['POST', 'GET', 'GET', 'GET']);
+});
+
+test('an invalid category delete response reloads the category and its unlinked todos', async () => {
+  const { server, sync } = setup();
+  server.categories = [{ id: HOME, name: 'Home', revision: 1 }];
+  server.rows = [{ ...newTodo('Linked'), categoryId: HOME, revision: 1 }];
+  await sync.load();
+  globalThis.fetch = async (path, init) => {
+    const response = await server.fetch(path, init);
+    return init.method === 'DELETE' ? new Response('{"todos":[{}]}') : response;
+  };
+  const outcome = await sync.deleteCategory(HOME);
+  assert.equal(outcome.error?.code, 'INVALID_WRITE_RESPONSE');
+  assert.equal(outcome.reloaded, true);
+  assert.deepEqual(sync.categories, []);
+  assert.deepEqual(sync.todos, server.rows);
+});
+
+test('a truncated todo edit response reloads the committed revision before a queued edit', async () => {
+  const { server, sync } = setup();
+  const todo = newTodo('Original');
+  await sync.create(todo);
+  globalThis.fetch = async (path, init) => {
+    const response = await server.fetch(path, init);
+    return init.method === 'PATCH' && response.ok ? new Response('{"todo":') : response;
+  };
+  const first = retitle(sync, todo.id, 'Committed');
+  const queued = retitle(sync, todo.id, 'Queued against the old revision');
+  assert.equal((await first).reloaded, true);
+  assert.deepEqual(await queued, { ok: false, cancelled: true });
+  assert.deepEqual(sync.todos, server.rows);
+  assert.equal(sync.todos[0].text, 'Committed');
+  assert.deepEqual(server.requests.map(({ method }) => method), ['POST', 'PATCH', 'GET']);
 });
 
 test('reset drops the catalog and ignores a category answer from the previous session', async () => {

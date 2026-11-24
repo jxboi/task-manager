@@ -17,6 +17,8 @@ import {
 
 const ID = '0f8fad5b-d9cb-469f-a165-70867728950e';
 const CATEGORY = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
+const row = { id: ID, text: 'One', completed: false, createdAt: 1, tags: [], categoryId: null,
+  due: null, repeat: 'none', notified: null, revision: 1 };
 let calls;
 let responder;
 
@@ -98,12 +100,12 @@ test('a snapshot without a catalog (an older server) reads as categories: null',
 });
 
 test('createTodo, patchTodo and deleteTodo send JSON with the CSRF token', async () => {
-  responder = () => respond(201, { todo: { id: ID } });
-  assert.deepEqual(await createTodo({ id: ID, text: 'Pay rent #home', tags: ['x'], createdAt: 5, extra: true }), { id: ID });
+  responder = () => respond(201, { todo: row });
+  assert.deepEqual(await createTodo({ id: ID, text: 'Pay rent #home', tags: ['x'], createdAt: 5, extra: true }), row);
   assert.equal(calls[0].method, 'POST');
   assert.deepEqual(JSON.parse(calls[0].body), { id: ID, text: 'Pay rent #home', tags: [] });
 
-  responder = () => respond(200, { todo: { id: ID, revision: 3 } });
+  responder = () => respond(200, { todo: { ...row, revision: 3 } });
   await patchTodo(ID, 2, 'setReminder', { due: 10, repeat: 'daily' });
   assert.equal(calls[1].path, `/api/todos?id=${ID}`);
   assert.equal(calls[1].method, 'PATCH');
@@ -122,6 +124,7 @@ test('createTodo, patchTodo and deleteTodo send JSON with the CSRF token', async
 });
 
 test('an edit always sends empty tags for the rollback API', async () => {
+  responder = () => respond(200, { todo: { ...row, revision: 3 } });
   const fields = { text: 'Updated', due: null, repeat: 'none' };
   await patchTodo(ID, 2, 'edit', fields);
   await patchTodo(ID, 2, 'edit', { ...fields, tags: ['ignored'], categoryId: CATEGORY });
@@ -131,7 +134,7 @@ test('an edit always sends empty tags for the rollback API', async () => {
 
 test('todo write responses fold legacy tags within the title code point limit', async () => {
   const text = '😀'.repeat(1996);
-  const todo = { id: ID, text, tags: [null, 'é', 'z'] };
+  const todo = { ...row, text, tags: [null, 'é', 'z'] };
   const folded = { ...todo, text: `${text} #é`, tags: [] };
   responder = () => respond(200, { todo });
   assert.deepEqual(await createTodo({ id: ID, text }), folded);
@@ -152,7 +155,7 @@ test('category writes send JSON with the CSRF token and return the server\'s ans
   assert.deepEqual({ method: calls[1].method, path: calls[1].path, body: JSON.parse(calls[1].body) },
     { method: 'PATCH', path: `/api/categories?id=${CATEGORY}`, body: { name: 'House', revision: 1 } });
 
-  const todos = [{ id: ID, categoryId: null, revision: 4 }];
+  const todos = [{ ...row, revision: 4 }];
   responder = () => respond(200, { todos });
   assert.deepEqual(await deleteCategory(CATEGORY, 2), todos);
   assert.equal(calls[2].method, 'DELETE');

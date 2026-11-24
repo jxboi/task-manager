@@ -151,7 +151,7 @@ let optionsSignature = null; // the catalog the two category selects were built 
 // confirmation ({id, mode: 'confirm', name, revision}); `panelBusy` is the write waiting for the server.
 let panelRow = null;
 let categoryCreateDraft = null; // { id, name }, retained if the create is unconfirmed
-let panelBusy = null; // null | { id, kind: 'create' | 'rename' | 'delete' }
+let panelBusy = null; // null | { id, kind: 'create' | 'rename' | 'delete' | 'refresh' }
 let panelSignature = null;
 let reminderTouched = false; // a field was changed, or Save tried: show its error
 const fired = new Map(); // todo id -> when its "just fired" pulse started (performance.now())
@@ -1270,7 +1270,7 @@ async function renameCategory(id) {
     return;
   }
   if (handleSessionError(result.error)) return;
-  if (result.error?.status === 409) panelRow = null;
+  if (result.error?.status === 409 || sync.categoryRefreshRequired) panelRow = null;
   setPanelStatus(categoryErrorText(result.error, result.reloaded), true);
   render([key(panelRow ? 'category-field' : 'category-rename', id), ...rowNeighbourKeys(id)]);
 }
@@ -1315,23 +1315,37 @@ categoryForm.addEventListener('submit', (event) => {
 });
 categoryName.addEventListener('input', () => categoryName.removeAttribute('aria-invalid'));
 
-categoryList.addEventListener('click', (event) => {
+categoryList.addEventListener('click', async (event) => {
   const button = event.target.closest('button');
   const id = button?.closest('.category-item')?.dataset.id;
   if (!id || panelBusy !== null) return;
   const { action } = button.dataset;
-  if (action === 'rename') {
+  if (action === 'rename' || action === 'delete') {
+    if (sync.categoryRefreshRequired) {
+      const epoch = viewEpoch;
+      panelBusy = { id, kind: 'refresh' };
+      render();
+      const result = await sync.load();
+      if (result.stale || epoch !== viewEpoch) return;
+      panelBusy = null;
+      if (!result.ok) {
+        if (!handleSessionError(result.error)) setPanelStatus("The latest list couldn't be loaded.", true);
+        render();
+        return;
+      }
+      if (panel.hidden || !findCategory(id)) {
+        render(rowNeighbourKeys(id));
+        return;
+      }
+    }
     const category = findCategory(id);
     if (!category) return;
-    panelRow = { id, mode: 'rename', value: category.name, revision: category.revision };
+    const renaming = action === 'rename';
+    panelRow = renaming
+      ? { id, mode: 'rename', value: category.name, revision: category.revision }
+      : { id, mode: 'confirm', name: category.name, revision: category.revision };
     setPanelStatus('');
-    render([key('category-field', id)]);
-  } else if (action === 'delete') {
-    const category = findCategory(id);
-    if (!category) return;
-    panelRow = { id, mode: 'confirm', name: category.name, revision: category.revision };
-    setPanelStatus('');
-    render([key('category-cancel', id)]);
+    render([key(renaming ? 'category-field' : 'category-cancel', id)]);
   } else if (action === 'cancel') {
     const mode = panelRow?.mode;
     panelRow = null;

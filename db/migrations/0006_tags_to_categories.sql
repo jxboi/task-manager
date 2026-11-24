@@ -9,8 +9,9 @@ LOCK TABLE todos, categories IN SHARE ROW EXCLUSIVE MODE;
 -- this file once, in one transaction. No later migration may create categories from tags:
 -- tags an older app writes during rollout are folded into the title by the server instead.
 
--- A first tag is a category name when its btrim() passes the categories CHECK. Names that
--- differ only by case share one category with a deterministic spelling. A category the user
+-- A first tag is a category name when its btrim() has 1 to 48 characters and no controls.
+-- The explicit ranges match Unicode Cc: C0, DEL and C1. PostgreSQL text cannot contain U+0000.
+-- Names that differ only by case share one category with a deterministic spelling. A category the user
 -- already created through the API with the same lower(name) is reused.
 -- This ignores the API's cap of 50 categories per account: every valid distinct first tag
 -- becomes a category, and the API then rejects new categories until the account is below 50.
@@ -20,7 +21,7 @@ FROM (
   SELECT user_id, btrim((SELECT tag FROM unnest(tags) AS u(tag) LIMIT 1)) AS name
   FROM todos WHERE cardinality(tags) > 0
 ) AS first_tags
-WHERE char_length(name) BETWEEN 1 AND 48 AND name !~ '[[:cntrl:]]'
+WHERE char_length(name) BETWEEN 1 AND 48 AND name !~ U&'[\0001-\001F\007F-\009F]'
 GROUP BY user_id, lower(name)
 ON CONFLICT (user_id, lower(name)) DO NOTHING;
 
@@ -36,7 +37,7 @@ WITH links AS (
     SELECT btrim(tag) AS name FROM unnest(t.tags) AS u(tag) LIMIT 1
   ) AS first_tag
   LEFT JOIN categories c ON c.user_id = t.user_id
-    AND char_length(first_tag.name) BETWEEN 1 AND 48 AND first_tag.name !~ '[[:cntrl:]]'
+    AND char_length(first_tag.name) BETWEEN 1 AND 48 AND first_tag.name !~ U&'[\0001-\001F\007F-\009F]'
     AND lower(c.name) = lower(first_tag.name)
 )
 UPDATE todos t

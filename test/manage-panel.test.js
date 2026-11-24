@@ -369,3 +369,69 @@ test('Manage recovers failed category reads and writes', async (t) => {
     assert.equal(events.at(-1), 'tasks:expired');
   });
 });
+
+test('Manage waits for a fresh snapshot after uncertain rename and delete outcomes', async (t) => {
+  const server = createFakeApi();
+  const id = '00000000-0000-4000-8000-0000000000e1';
+  server.categories = [{ id, name: 'Home', revision: 1 }];
+  let offline = false;
+  const { byId } = installDom(t, { fetch: (path, init) => {
+    if (offline && init.method === 'GET') return new Response('{}', { status: 503 });
+    return server.fetch(path, init);
+  } });
+  await import('../src/app.js?category-recovery-retry');
+  window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: server.session } }));
+  await settle();
+  byId('category-manage').click();
+  const row = () => byId('category-list').children[0];
+  const button = (action) => row().querySelectorAll('button').find((el) => el.dataset.action === action);
+  const writes = () => server.requests.filter(({ method }) => method !== 'GET');
+  const rename = (value) => {
+    const field = row().querySelector('.category-field');
+    field.value = value;
+    const input = new Event('input');
+    Object.defineProperty(input, 'target', { value: field });
+    byId('category-list').dispatchEvent(input);
+    button('save').click();
+  };
+
+  button('rename').click();
+  offline = true;
+  server.failNext = () => ({ afterWrite: true });
+  rename('House');
+  await settle();
+  button('save')?.click();
+  button('rename')?.click();
+  await settle();
+  assert.equal(writes().length, 1);
+  assert.equal(button('save'), undefined);
+
+  offline = false;
+  button('rename').click();
+  await settle();
+  assert.equal(row().querySelector('.category-field').value, 'House');
+  rename('Flat');
+  await settle();
+  assert.equal(JSON.parse(writes().at(-1).body).revision, 2);
+
+  button('delete').click();
+  offline = true;
+  server.failNext = () => new TypeError('Failed to fetch');
+  button('confirm').click();
+  await settle();
+  button('delete').click();
+  await settle();
+  assert.equal(button('confirm'), undefined);
+  assert.equal(writes().length, 3);
+
+  offline = false;
+  server.categories = [{ id, name: 'Office', revision: 4 }];
+  button('delete').click();
+  await settle();
+  assert.equal(writes().length, 3, 'refreshing only opens the confirmation');
+  assert.equal(button('confirm').getAttribute('aria-label'), 'Delete Office');
+  button('confirm').click();
+  await settle();
+  assert.match(writes().at(-1).path, /revision=4$/);
+  assert.deepEqual(server.categories, []);
+});

@@ -397,6 +397,8 @@ test('0006 turns first tags into categories and the other tags into title words,
         [alice, 13, 'No tags, linked', [], errands, 'Errands', 'No tags, linked'],
         [alice, 14, 'No tags', [], null, null, 'No tags'],
         [alice, 15, 'Zero-based', '[0:1]={home,work}', null, 'home', 'Zero-based #work'],
+        [alice, 16, 'C1 controls', ['bad\u0080\u0085\u009ftag', 'home'], errands, null,
+          'C1 controls #bad\u0080\u0085\u009ftag #home'],
         [bob, 1, 'Other account', ['work', 'home'], null, 'work', 'Other account #home'],
         [bob, 2, 'Bob errands', ['Errands'], null, 'Errands', 'Bob errands'],
         ...Array.from({ length: 55 }, (_, i) => [carol, i + 1, `Bulk ${i + 1}`, [`tag-${i + 1}`], null, `tag-${i + 1}`, `Bulk ${i + 1}`]),
@@ -443,6 +445,9 @@ test('0006 turns first tags into categories and the other tags into title words,
       const converted = await todos();
       assert.deepEqual(converted, expected);
       for (const row of converted) assert.ok([...row.text].length <= 2000);
+      // Some PostgreSQL builds already include C1 in the POSIX class. Keep the conversion
+      // independent of that classification even when this fixture passes on those builds.
+      assert.doesNotMatch(await readFile(new URL(conversionMigration, migrations), 'utf8'), /\[:cntrl:\]/);
 
       // The ledger keeps a second run from converting anything again.
       assert.deepEqual(await runMigrations(fixtureOptions), []);
