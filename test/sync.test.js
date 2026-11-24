@@ -7,12 +7,12 @@ import { createFakeApi, settle } from './fake-api.js';
 
 const HOUR = 3_600_000;
 
-function setup(options) {
+function setup(options, onChange) {
   const server = createFakeApi(options);
   globalThis.fetch = server.fetch;
   api.setToken(server.session.csrfToken);
   let changes = 0;
-  const sync = createSync(api, { onChange: () => changes++ });
+  const sync = createSync(api, { onChange: () => { changes++; onChange?.(); } });
   return { server, sync, changes: () => changes };
 }
 
@@ -643,6 +643,59 @@ test('an invalid todo create response requires a fresh snapshot before retrying 
   failReads = false;
   assert.deepEqual(await sync.create(todo), { ok: true, todo: server.rows[0], reconciled: true });
   assert.deepEqual(server.requests.map(({ method }) => method), ['POST', 'GET', 'GET', 'GET']);
+});
+
+test('a category retry drops its draft when the session switches after the recovery read', async () => {
+  const { server, sync } = setup(undefined, () => {
+    // Switch after reloadNow accepts the snapshot, before the retry resumes.
+    queueMicrotask(() => {
+      server.session = { user: { email: 'cli-next@example.test' }, csrfToken: 'token-b' };
+      sync.reset();
+      api.setToken('token-b');
+    });
+  });
+
+  const outcome = await sync.createCategory('Old account category', HOME, true);
+
+  assert.equal(server.requests.some(({ headers }) => headers['X-CSRF-Token'] === 'token-b'), false);
+  assert.deepEqual(server.requests.map(({ method }) => method), ['GET']);
+  assert.deepEqual(outcome, { ok: false, stale: true });
+});
+
+test('a queued todo edit drops its draft when the token switches after the recovery read', async () => {
+  let recovered = false;
+  const { server, sync } = setup(undefined, () => {
+    if (!recovered) return;
+    recovered = false;
+    // Let recoverSnapshot accept the reload before changing the token its caller would use.
+    queueMicrotask(() => queueMicrotask(() => {
+      server.session = { user: { email: 'cli-next@example.test' }, csrfToken: 'token-b' };
+      api.setToken('token-b');
+    }));
+  });
+  const todo = { ...newTodo('Original'), revision: 1 };
+  server.rows = [todo];
+  await sync.load();
+  server.failNext = () => new Response('{"todo":');
+  globalThis.fetch = (path, init) => {
+    if (init.method === 'PATCH') {
+      const response = server.fetch(path, init);
+      server.failNext = () => new Response('{}', { status: 503 });
+      return response;
+    }
+    return server.fetch(path, init);
+  };
+  const first = retitle(sync, todo.id, 'Uncertain edit');
+  const retry = retitle(sync, todo.id, 'Old account task title');
+  assert.equal((await first).reloaded, false);
+  recovered = true;
+
+  const outcome = await retry;
+
+  assert.equal(server.requests.some(({ headers }) => headers['X-CSRF-Token'] === 'token-b'), false);
+  assert.deepEqual(server.requests.map(({ method }) => method), ['GET', 'PATCH', 'GET', 'GET']);
+  assert.deepEqual(outcome, { ok: false, stale: true });
+  assert.equal(sync.busy, false);
 });
 
 test('an invalid category delete response reloads the category and its unlinked todos', async () => {

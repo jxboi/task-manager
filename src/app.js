@@ -1850,8 +1850,9 @@ function handleSessionError(error) {
 // Reports a failed save. The change has already dropped out of the list (and a conflict has
 // reloaded it); `retry` repeats the same change if it still applies.
 async function saved(id, result, retry) {
+  const epoch = viewEpoch;
   const outcome = await result;
-  if (outcome.stale) return;
+  if (outcome.stale || epoch !== viewEpoch) return;
   if (outcome.ok) {
     rearm(Date.now());
     return;
@@ -1875,7 +1876,7 @@ async function saved(id, result, retry) {
   } else if (error.status === 400) {
     showSync("Couldn't save that change.");
   } else {
-    const retryNow = () => reconcileThen(id, outcome.revision, retry);
+    const retryNow = () => reconcileThen(id, outcome.revision, retry, epoch);
     showSync("Couldn't save your change.", retryNow);
   }
 }
@@ -1886,12 +1887,13 @@ async function saved(id, result, retry) {
 // Any other revision means the row moved on (this change, or a later edit elsewhere, such as a
 // recurring reminder that was claimed and advanced). The server's row is kept and shown, and
 // nothing is re-sent or re-alerted.
-async function reconcileThen(id, revision, retry) {
+async function reconcileThen(id, revision, retry, epoch) {
+  if (epoch !== viewEpoch) return;
   const result = await sync.load();
-  if (result.stale) return;
+  if (result.stale || epoch !== viewEpoch) return;
   if (!result.ok) {
     if (!handleSessionError(result.error)) {
-      showSync("Couldn't save your change.", () => reconcileThen(id, revision, retry));
+      showSync("Couldn't save your change.", () => reconcileThen(id, revision, retry, epoch));
     }
     return;
   }
