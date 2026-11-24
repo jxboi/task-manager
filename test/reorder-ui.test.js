@@ -43,6 +43,17 @@ test('drag handle reorder', async (t) => {
     { ...base, id: ids.charlie, text: 'Charlie', tags: [], createdAt: 3 },
     { ...base, id: ids.delta, text: 'Delta', tags: ['work'], createdAt: 4 },
   ];
+  const touchMoves = new Map();
+  const addListener = document.addEventListener.bind(document);
+  const removeListener = document.removeEventListener.bind(document);
+  document.addEventListener = (type, listener, options) => {
+    if (type === 'touchmove') touchMoves.set(listener, options);
+    addListener(type, listener, options);
+  };
+  document.removeEventListener = (type, listener, options) => {
+    if (type === 'touchmove') touchMoves.delete(listener);
+    removeListener(type, listener, options);
+  };
   await import('../src/app.js');
   window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: server.session } }));
   await settle();
@@ -256,5 +267,41 @@ test('drag handle reorder', async (t) => {
     assert.deepEqual(shown(), ['late', 'Echo', 'alpha', 'charlie', 'bravo', 'delta'], 'rolled back after the 409');
     assert.equal(byId('sync-note').hidden, false);
     assert.match(byId('sync-text').textContent, /changed in another tab/);
+  });
+
+  await t.test('document touchmove is blocked only during a reorder drag', async () => {
+    const touchMove = () => {
+      const event = new Event('touchmove', { cancelable: true });
+      document.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    assert.equal(touchMoves.size, 0, 'idle');
+    assert.equal(touchMove(), false);
+
+    const endDrag = {
+      drop: (grip, y) => {
+        pointer(grip, 'pointermove', y + ROW);
+        pointer(grip, 'pointerup', y + ROW);
+      },
+      Escape: () => document.dispatchEvent(Object.assign(new Event('keydown'), { key: 'Escape' })),
+      pointercancel: (grip, y) => pointer(grip, 'pointercancel', y),
+      blur: () => window.dispatchEvent(new Event('blur')),
+      'row removed': (grip, y) => {
+        row('alpha').remove();
+        pointer(grip, 'pointermove', y);
+      },
+    };
+    for (const [reason, finish] of Object.entries(endDrag)) {
+      layout();
+      const grip = handle('alpha');
+      const y = row('alpha').getBoundingClientRect().top + ROW / 2;
+      pointer(grip, 'pointerdown', y);
+      assert.deepEqual([...touchMoves.values()], [{ passive: false }], `before ${reason}`);
+      assert.equal(touchMove(), true, `before ${reason}`);
+      finish(grip, y);
+      assert.equal(touchMoves.size, 0, `after ${reason}`);
+      assert.equal(touchMove(), false, `after ${reason}`);
+      await settle();
+    }
   });
 });
