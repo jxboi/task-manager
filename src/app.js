@@ -98,6 +98,7 @@ const sheetViewport = createSheetViewport({ layer, body: sheetBody });
 // Static controls that a render may send focus back to.
 withKey(categoryFilter, 'category-filter');
 withKey(categoryName, 'category-name');
+withKey(viewGraph, 'view-graph');
 
 const MAX_DELAY = 2 ** 31 - 1; // setTimeout's limit (about 24.8 days); check() re-arms when it fires
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -152,6 +153,7 @@ let filter = ALL; // ALL, UNCATEGORIZED or a category ID
 let reminderId = null; // todo whose task sheet is open
 let view = 'list'; // 'list' | 'graph': the graph replaces the list while it is shown
 let graph = null; // the mounted graph (src/graph-view.js, loaded on first open)
+let graphHistoryPending = false; // a programmatic Back is waiting for popstate
 let listScroll = 0; // the list's scroll position, put back on leaving the graph
 let draft = null; // the sheet's starting values and the user's category choice
 let optionsSignature = null; // the catalog the two category selects were built from
@@ -758,6 +760,7 @@ function openEditor(id) {
   const todo = findTodo(id);
   if (!todo) return;
   reminderId = id;
+  if (view === 'graph') syncGraphHistory();
   reminderTouched = false;
   const categoryId = todo.categoryId ?? null;
   draft = { text: todo.text, shownText: '', categoryId, chosenCategoryId: categoryId, due: todo.due, repeat: todo.repeat };
@@ -786,6 +789,7 @@ function openEditor(id) {
 // Hides the sheet without rendering; callers render (or renderSoon) with their focus.
 function closeEditor() {
   reminderId = null;
+  if (view === 'graph') syncGraphHistory();
   layer.hidden = true;
   sheetViewport.stop();
   app.inert = false;
@@ -964,10 +968,12 @@ function saveEdit(id, fields, originalCategoryId, rearm, base) {
   return done;
 }
 
-// Delete task: at once, no confirm. Focus goes to the next row's checkbox, or the composer.
+// Delete task: at once, then return focus to a surviving task or the view's fallback control.
 function deleteFromEditor() {
   const id = reminderId;
-  const keys = rowFallbackKeys(id);
+  const keys = view === 'graph'
+    ? [...state.filter((todo) => todo.id !== id).map((todo) => key('graph-node', todo.id)), key('view-graph')]
+    : rowFallbackKeys(id);
   closeEditor();
   removeRow(id);
   render(keys);
@@ -1866,14 +1872,34 @@ syncDismiss.addEventListener('click', () => {
 
 // --- Graph view ----------------------------------------------------------------------------
 
+function graphHistoryDepth() {
+  const entry = window.history?.state;
+  return entry?.graph ? (entry.editor ? 2 : 1) : 0;
+}
+
+// One entry for Graph and one more while its sheet is open. Reopening after a close replaces
+// the forward entry. Wait for popstate before changing history again if the UI changes meanwhile.
+function syncGraphHistory() {
+  if (graphHistoryPending || !window.history?.pushState) return;
+  const depth = graphHistoryDepth();
+  const target = view === 'list' ? 0 : reminderId === null ? 1 : 2;
+  if (depth > target) {
+    graphHistoryPending = true;
+    window.history.go(target - depth);
+  } else if (depth < target) {
+    if (depth === 0) window.history.pushState({ graph: true }, '');
+    if (target === 2) window.history.pushState({ graph: true, editor: true }, '');
+  }
+}
+
 // The graph replaces the list (which stays in the DOM, so its filter, scroll and drafts are kept).
-// Its code loads on the first open. One history entry, so Back (or the iOS back swipe) leaves it.
+// Its code loads on the first open.
 async function openGraph() {
   if (view === 'graph' || phase !== 'ready') return;
   view = 'graph';
   listScroll = window.scrollY ?? 0;
   const epoch = viewEpoch;
-  window.history?.pushState?.({ graph: true }, '');
+  syncGraphHistory();
   render();
   let mountGraph = null;
   try {
@@ -1898,7 +1924,7 @@ function closeGraph() {
   view = 'list';
   graph?.destroy();
   graph = null;
-  if (window.history?.state?.graph) window.history.back();
+  syncGraphHistory();
 }
 
 function leaveGraph(focusTarget) {
@@ -1918,7 +1944,18 @@ document.addEventListener('keydown', (event) => {
   event.preventDefault();
   leaveGraph(viewGraph);
 });
-window.addEventListener('popstate', () => leaveGraph(viewGraph));
+window.addEventListener('popstate', () => {
+  if (graphHistoryPending) {
+    graphHistoryPending = false;
+    syncGraphHistory();
+    return;
+  }
+  if (view !== 'graph') return;
+  const depth = graphHistoryDepth();
+  if (depth < 2 && reminderId !== null) cancelEditor();
+  if (depth === 0) leaveGraph(viewGraph);
+  else if (depth === 2 && reminderId === null) syncGraphHistory();
+});
 
 // --- Saving and the session ----------------------------------------------------------------
 

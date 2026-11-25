@@ -240,6 +240,11 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
     }
   }
 
+  function setButtonTitle(button, text) {
+    button.textContent = text;
+    if (button.classList.contains('is-done')) button.setAttribute('aria-label', `${text}, done`);
+  }
+
   function renderList(todos) {
     const byTodo = new Map(todos.map((todo) => [todo.id, todo]));
     const focused = [...buttons.entries()].find(([, button]) => button === document.activeElement)?.[0];
@@ -261,8 +266,7 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
         button.className = `graph-node is-${node.state}`;
         button.dataset.focusKey = JSON.stringify(['graph-node', node.todoId]);
         button.dataset.nodeId = node.id;
-        button.textContent = todo?.text ?? node.label;
-        if (node.state === 'done') button.setAttribute('aria-label', `${button.textContent}, done`);
+        setButtonTitle(button, todo?.text ?? node.label);
         const row = document.createElement('li');
         row.append(button);
         tasks.append(row);
@@ -383,7 +387,14 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
     update({ todos, categories, now }) {
       if (destroyed) return;
       const graph = toGraph(todos, categories, now);
-      if (graph.signature === signature) return;
+      if (graph.signature === signature) {
+        // The canvas label can stay the same when the full title changes.
+        for (const todo of todos) {
+          const button = buttons.get(`task:${todo.id}`);
+          if (button && button.textContent !== todo.text) setButtonTitle(button, todo.text);
+        }
+        return;
+      }
       signature = graph.signature;
       nodes = graph.nodes;
       positions = layout(graph, positions);

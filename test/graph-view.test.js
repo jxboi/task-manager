@@ -141,6 +141,25 @@ test('without a 2D canvas the graph is the list: buttons grouped by hub that ope
   assert.deepEqual(env.opened, ['t3']);
 });
 
+for (const mode of ['list', 'full']) {
+  test(`${mode} task buttons update full titles and accessible names without a canvas label change`, (t) => {
+    const env = mode === 'list' ? setup(t, { canvas: () => ({}) }) : setup(t);
+    const update = (text) => env.graph.update({ todos: [{ ...todos[0], text }], categories, now: NOW });
+    update('Review the quarterly report before Monday');
+    env.flush();
+    const [button] = env.buttons();
+    button.focus();
+    for (const title of ['review the quarterly report before Monday', 'review the quarterly report before Friday']) {
+      update(title);
+      assert.equal(env.buttons()[0], button);
+      assert.equal(button.textContent, title);
+      assert.equal(button.getAttribute('aria-label'), `${title}, done`);
+      assert.equal(document.activeElement, button);
+      assert.equal(env.pending, 0, 'the canvas label did not change');
+    }
+  });
+}
+
 test('draws only on demand: one frame per change, none at rest, none for an unchanged update', (t) => {
   const env = setup(t);
   assert.equal(env.root.dataset.mode, 'full');
@@ -419,20 +438,34 @@ test('in the app: the graph replaces the list, opens tasks in the edit sheet, an
   ];
   const { byId, app, list, matchMedia } = installDom(t, { fetch: (...args) => server.fetch(...args) });
   const root = byId('graph-view');
-  app.append(root); // in the page, the graph sits inside .app like the list
   const layer = byId('reminder-layer');
   const viewList = byId('view-list');
   const viewGraph = byId('view-graph');
   const switcher = byId('view-switch');
+  app.append(root, viewList, viewGraph); // these controls sit inside .app in the page
   // History and scrolling, as the browser has them.
   const pushed = [];
+  const entries = [null];
+  let entryIndex = 0;
   Object.assign(window, {
     scrollY: 0,
     scrollTo: (x, y) => { window.scrollY = y; },
     history: {
-      state: null,
-      pushState(state) { this.state = state; pushed.push(state); },
-      back() { this.state = null; setTimeout(() => window.dispatchEvent(new Event('popstate'))); },
+      get state() { return entries[entryIndex]; },
+      pushState(state) {
+        entries.splice(entryIndex + 1, entries.length, state);
+        entryIndex += 1;
+        pushed.push(state);
+      },
+      go(delta) {
+        setTimeout(() => {
+          const next = entryIndex + delta;
+          if (next < 0 || next >= entries.length) return;
+          entryIndex = next;
+          window.dispatchEvent(new Event('popstate'));
+        });
+      },
+      back() { this.go(-1); },
     },
   });
   // Canvases are off (dom.js elements have no getContext) until a test turns them on.
@@ -572,11 +605,44 @@ test('in the app: the graph replaces the list, opens tasks in the edit sheet, an
 
   await t.test('Back (popstate) leaves the graph', async () => {
     await open();
-    window.history.state = null;
-    window.dispatchEvent(new Event('popstate'));
+    window.history.back();
+    await settle();
     assert.equal(root.hidden, true);
     assert.equal(root.children.length, 0);
     assert.equal(viewGraph.getAttribute('aria-pressed'), 'false');
+  });
+
+  await t.test('Back closes the sheet first, with one Graph entry across repeated closes and reopens', async () => {
+    await open();
+    for (let i = 0; i < 2; i += 1) {
+      buttonFor(1).click();
+      assert.equal(layer.hidden, false);
+      byId('reminder-cancel').click();
+      assert.equal(layer.hidden, true);
+      await settle();
+      assert.equal(entryIndex, 1);
+    }
+    buttonFor(1).click();
+    byId('reminder-cancel').click();
+    buttonFor(3).click(); // reopen before the asynchronous Back from Cancel arrives
+    await settle();
+    assert.equal(layer.hidden, false);
+    assert.equal(byId('edit-text').value, 'Water plants');
+    assert.equal(entryIndex, 2);
+    assert.equal(entries.length, 3);
+    window.history.back();
+    await settle();
+    assert.equal(layer.hidden, true);
+    assert.equal(app.inert, false);
+    assert.equal(root.hidden, false);
+    assert.equal(document.activeElement, buttonFor(3));
+    assert.equal(entryIndex, 1);
+
+    window.history.back();
+    await settle();
+    assert.equal(root.hidden, true);
+    assert.equal(document.activeElement, viewGraph);
+    assert.equal(entryIndex, 0);
   });
 
   await t.test('with a canvas: a tap on a node opens that task, a drag turns the scene instead', async () => {
@@ -677,5 +743,36 @@ test('in the app: the graph replaces the list, opens tasks in the edit sheet, an
     await settle();
     assert.equal(root.children.length, 0);
     assert.equal(root.hidden, true);
+  });
+
+  await t.test('deleting from a graph sheet focuses a surviving task or the Graph toggle', async () => {
+    server.rows = [row(1, 'Canvas task'), row(2, 'Fallback task'), row(3, 'Last task')];
+    window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: server.session } }));
+    await settle();
+    canvasContext = fakeContext();
+    await open();
+    assert.equal(root.dataset.mode, 'full');
+    const remove = async (n) => {
+      buttonFor(n).click();
+      assert.equal(layer.hidden, false);
+      byId('task-delete').click();
+      await settle();
+      assert.equal(layer.hidden, true);
+      assert.equal(root.hidden, false);
+      assert.equal(buttonFor(n), undefined);
+    };
+    await remove(1);
+    assert.ok(buttons().includes(document.activeElement));
+
+    viewList.click();
+    await settle();
+    canvasContext = null;
+    await open();
+    assert.equal(root.dataset.mode, 'list');
+    await remove(2);
+    assert.equal(document.activeElement, buttonFor(3));
+    await remove(3);
+    assert.equal(buttons().length, 0);
+    assert.equal(document.activeElement, viewGraph);
   });
 });
