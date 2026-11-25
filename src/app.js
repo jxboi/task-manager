@@ -21,7 +21,7 @@ import {
   EARLIEST_DAY, localDate, monthGrid, monthLabel, parseDate, pickerDue, splitDue,
 } from './picker.js';
 import { createSheetViewport, viewportBox } from './viewport.js';
-import { createPendingDelete, createSwipe } from './swipe.js';
+import { createPendingDelete, createReveal, createSwipe, REVEAL_PX } from './swipe.js';
 
 const app = document.querySelector('.app');
 const header = document.getElementById('app-header');
@@ -86,6 +86,7 @@ const repeatIcon = document.getElementById('repeat-icon');
 const alertIcon = document.getElementById('alert-icon');
 const infoIcon = document.getElementById('info-icon');
 const gripIcon = document.getElementById('grip-icon');
+const trashIcon = document.getElementById('trash-icon');
 const syncNote = document.getElementById('sync-note');
 const syncText = document.getElementById('sync-text');
 const syncRetry = document.getElementById('sync-retry');
@@ -138,6 +139,8 @@ const pendingDelete = createPendingDelete({
     removeRow(id);
   },
 });
+// The row whose Delete button a partial swipe left showing (one at most).
+const reveal = createReveal();
 // A reminder claimed for the task while it waited behind Undo: alerted only if Undo brings it back.
 let heldAlert = null;
 // The revision of each row as it is on screen. A change is made against what the user sees, and
@@ -419,6 +422,23 @@ function renderTodo(todo, now) {
     handle.append(icon(gripIcon));
     item.append(handle);
   }
+  // Delete, revealed by a partial swipe left (or ArrowLeft); not shown or focusable while closed.
+  const remove = withKey(document.createElement('button'), 'delete', todo.id);
+  remove.type = 'button';
+  remove.className = 'todo-delete';
+  remove.setAttribute('aria-label', `Delete ${todo.text}`);
+  const pill = document.createElement('span');
+  pill.className = 'todo-delete-pill';
+  pill.append(icon(trashIcon));
+  const label = document.createElement('span');
+  label.className = 'todo-delete-label';
+  label.textContent = 'Delete';
+  remove.append(pill, label);
+  item.append(remove);
+  if (reveal.openId === todo.id) {
+    item.classList.add('is-open');
+    item.style.transform = `translateX(${-REVEAL_PX}px)`;
+  }
   return item;
 }
 
@@ -488,6 +508,7 @@ function render(focusKeys) {
   endDrag(false);
   if (loading) list.replaceChildren(...Array.from({ length: SKELETON_ROWS }, renderSkeleton));
   else list.replaceChildren(...visible.map((todo) => renderTodo(todo, now)));
+  if (!visible.some((todo) => todo.id === reveal.openId)) reveal.close();
   list.classList.toggle('is-loading', loading);
   list.setAttribute('aria-busy', String(loading));
   list.hidden = !loading && visible.length === 0;
@@ -764,6 +785,7 @@ function dismissAllFired() {
 function openEditor(id) {
   const todo = findTodo(id);
   if (!todo) return;
+  closeRow();
   reminderId = id;
   reminderTouched = false;
   const categoryId = todo.categoryId ?? null;
@@ -1600,6 +1622,7 @@ function reorderableIds(now = Date.now()) {
 // went, counted among the rows shown.
 function reorder(id, target, base) {
   if (reorderLocked()) return;
+  closeRow();
   const todo = findTodo(id);
   if (!todo) return;
   saved(id, sync.move(id, target.anchorId, target.side, base), () => {
@@ -1766,16 +1789,92 @@ const TOAST_GAP = 12; // preferred gap at the bottom of the visual viewport or n
 let swipe = null; // { gesture, row, pointerId }
 let swallowClick = false;
 let swallowTimer = null;
+let openScrollY = 0; // the page's scroll when a row opened: scrolling closes it
+let pressClosed = false; // this press closed the open row: its click only did that
+
+// A click will follow this press or release, and belongs to it: it is swallowed (in the capture
+// phase below) unless it hasn't come CLICK_WAIT_MS after the release.
+function swallowNextClick(armed = true) {
+  swallowClick = true;
+  clearTimeout(swallowTimer);
+  swallowTimer = armed ? setTimeout(() => { swallowClick = false; }, CLICK_WAIT_MS) : null;
+}
+
+const rowById = (id) => Array.from(list.children).find((item) => item.dataset?.id === id);
+
+// The card springs to `offset` (0: closed), with the settle transition (none under reduced motion).
+function settleRow(row, offset) {
+  row.classList.add('is-settling');
+  row.style.transform = offset ? `translateX(${offset}px)` : '';
+  const button = row.querySelector('.todo-delete');
+  if (button) button.style.transform = '';
+  setTimeout(() => row.classList.remove('is-settling'), SETTLE_MS);
+}
+
+// Holds a row open on its Delete button; the row open before it closes.
+function openRow(row) {
+  const other = reveal.open(row.dataset.id);
+  if (other) shutRow(rowById(other));
+  row.classList.add('is-open');
+  settleRow(row, -REVEAL_PX);
+  openScrollY = window.scrollY;
+}
+
+// Closes the open row, if any. Focus on its Delete button (about to be hidden) goes to the row;
+// `focus` sends it there anyway (Escape from inside the row).
+function closeRow({ focus = false } = {}) {
+  const id = reveal.close();
+  if (id !== null) shutRow(rowById(id), focus);
+}
+
+function shutRow(row, focus = false) {
+  if (!row) return;
+  const held = row.querySelector('.todo-delete')?.contains(document.activeElement);
+  row.classList.remove('is-open');
+  settleRow(row, 0);
+  if (focus || held) row.querySelector('.todo-open')?.focus({ preventScroll: true });
+}
+
+// Slides the row out and deletes it (behind Undo), from a full swipe or its Delete button.
+function slideOut(row, width, { keyboard = false } = {}) {
+  reveal.close(row.dataset.id);
+  row.classList.remove('is-open');
+  // The delete starts now, for the task and revision on screen; the slide is only the animation.
+  const slide = !reducedMotion.matches;
+  if (slide) {
+    row.classList.add('is-leaving');
+    row.style.transform = 'translateX(-100%)';
+    const button = row.querySelector('.todo-delete');
+    if (button) button.style.transform = `translateX(${Math.max(0, width - REVEAL_PX)}px)`;
+  }
+  deleteLater(row.dataset.id, { slide, keyboard });
+}
+
+// A press anywhere while a row is open: elsewhere closes it (a tap on another row, or on the
+// open row's card, only closes: its click is swallowed). Capture, before the reorder drag starts.
+document.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0 || event.isPrimary === false) return;
+  pressClosed = false;
+  if (reveal.openId === null) return;
+  const target = event.target;
+  const row = list.contains(target) ? target.closest?.('.todo') : null;
+  const part = target.closest?.('.todo-delete') ? 'delete' : target.closest?.('.todo-handle') ? 'handle' : 'card';
+  if (reveal.press(row?.dataset.id ?? null, part) !== 'close') return;
+  closeRow();
+  pressClosed = Boolean(row) && part !== 'handle';
+}, true);
 
 list.addEventListener('pointerdown', (event) => {
-  swallowClick = false;
   if (event.button !== 0 || event.isPrimary === false) return;
+  swallowClick = false;
+  if (pressClosed) swallowNextClick(false); // armed at the release
   // A primary press means any earlier gesture is over, whether or not its release was seen.
   if (swipe) endSwipe({ pointerId: swipe.pointerId }, true);
   const row = event.target.closest('.todo');
-  if (!row?.dataset.id || drag || app.inert || event.target.closest('.todo-handle')) return;
+  if (!row?.dataset.id || drag || app.inert || event.target.closest('.todo-handle, .todo-delete')) return;
   const { width } = row.getBoundingClientRect();
-  swipe = { row, pointerId: event.pointerId, gesture: createSwipe(width, event.clientX, event.clientY, event.timeStamp) };
+  const open = reveal.openId === row.dataset.id;
+  swipe = { row, pointerId: event.pointerId, gesture: createSwipe(width, event.clientX, event.clientY, event.timeStamp, { open }) };
 });
 
 // On the document, so a mouse that leaves the list (or a pointer the row captured) is still
@@ -1792,6 +1891,7 @@ document.addEventListener('pointermove', (event) => {
   const phase = gesture.move(event.clientX, event.clientY, event.timeStamp);
   if (phase === 'vertical' || drag || !row.isConnected) {
     swipe = null;
+    if (gesture.open) closeRow(); // the page scrolls
     return;
   }
   if (phase !== 'horizontal') return;
@@ -1806,10 +1906,19 @@ document.addEventListener('pointermove', (event) => {
     window.getSelection?.()?.removeAllRanges();
   }
   row.style.transform = `translateX(${gesture.offset}px)`;
+  // Past the open position the Delete button stays at the list's edge; the card goes on.
+  const button = row.querySelector('.todo-delete');
+  if (button) button.style.transform = `translateX(${Math.max(0, -gesture.offset - REVEAL_PX)}px)`;
 });
 
-document.addEventListener('pointerup', (event) => endSwipe(event, false), true);
-document.addEventListener('pointercancel', (event) => endSwipe(event, true), true);
+document.addEventListener('pointerup', (event) => {
+  endSwipe(event, false);
+  if (swallowClick && swallowTimer === null) swallowNextClick(); // a close-only tap's click is due
+}, true);
+document.addEventListener('pointercancel', (event) => {
+  endSwipe(event, true);
+  if (swallowClick && swallowTimer === null) swallowNextClick();
+}, true);
 // The row lost its capture without a release (pointerup comes first, so this is the odd case).
 // Not the touch's implicit capture moving to the row when it locks: that fires on the old target.
 document.addEventListener('lostpointercapture', (event) => {
@@ -1825,41 +1934,68 @@ function endSwipe(event, cancelled, swallow = true) {
   const { row, gesture } = swipe;
   swipe = null;
   document.documentElement.classList.remove('is-swiping');
-  if (gesture.phase !== 'horizontal') return;
-  if (swallow) {
-    swallowClick = true;
-    clearTimeout(swallowTimer);
-    swallowTimer = setTimeout(() => { swallowClick = false; }, CLICK_WAIT_MS);
+  if (gesture.phase !== 'horizontal') {
+    // A tap on the open row's card closes it, and is not a tap on the card.
+    if (gesture.open && gesture.phase === 'tracking') {
+      closeRow();
+      if (swallow) swallowNextClick();
+    }
+    return;
   }
+  if (swallow) swallowNextClick();
   row.classList.remove('is-swiping');
   const outcome = cancelled ? 'back' : gesture.end(event.timeStamp);
-  if (outcome === 'delete' && row.isConnected) {
-    // The delete starts now, for the task and revision on screen at the release; the slide is
-    // only the animation.
-    const slide = !reducedMotion.matches;
-    if (slide) {
-      row.classList.add('is-leaving');
-      row.style.transform = 'translateX(-100%)';
-    }
-    deleteLater(row.dataset.id, { slide });
-  } else {
-    row.classList.add('is-settling');
-    row.style.transform = '';
-    setTimeout(() => row.classList.remove('is-settling'), SETTLE_MS);
-  }
+  if (outcome === 'delete' && row.isConnected) slideOut(row, row.getBoundingClientRect().width);
+  else if (outcome === 'open' && row.isConnected) openRow(row);
+  else if (reveal.openId === row.dataset.id) closeRow();
+  else settleRow(row, 0);
 }
 
-// Delete or Backspace on a row's checkbox, body or handle deletes it, with the same Undo. A held
-// key's auto-repeat is ignored: focus has moved to the next row, which it must not delete too.
+// The revealed Delete button deletes through the same deferred delete, toast and Undo. A click
+// with no pointer (detail 0: Enter or Space) is a keyboard delete: the toast says Ctrl+Z.
+list.addEventListener('click', (event) => {
+  const row = event.target.closest('.todo-delete')?.closest('.todo');
+  if (!row?.dataset.id || row.classList.contains('is-leaving')) return;
+  slideOut(row, row.getBoundingClientRect().width, { keyboard: event.detail === 0 });
+});
+
+// Delete or Backspace on a row's checkbox, body, handle or Delete button deletes it, with the
+// same Undo. A held key's auto-repeat is ignored: focus has moved to the next row, which it must
+// not delete too. ArrowLeft on the checkbox or body opens the row on its Delete button (focused);
+// ArrowRight there closes it again.
 list.addEventListener('keydown', (event) => {
-  if ((event.key !== 'Delete' && event.key !== 'Backspace') || event.isComposing || drag ||
-      event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
-  const row = event.target.closest('.todo-checkbox, .todo-open, .todo-handle')?.closest('.todo');
+  if (event.isComposing || drag || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+  if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+    const row = event.target.closest(event.key === 'ArrowLeft' ? '.todo-checkbox, .todo-open' : '.todo-delete')?.closest('.todo');
+    if (!row?.dataset.id || row.classList.contains('is-leaving')) return;
+    event.preventDefault();
+    if (event.key === 'ArrowRight') return closeRow({ focus: true });
+    openRow(row);
+    row.querySelector('.todo-delete')?.focus({ preventScroll: true });
+    return;
+  }
+  if (event.key !== 'Delete' && event.key !== 'Backspace') return;
+  const row = event.target.closest('.todo-checkbox, .todo-open, .todo-handle, .todo-delete')?.closest('.todo');
   if (!row) return;
   event.preventDefault();
   if (event.repeat) return;
   deleteLater(row.dataset.id, { keyboard: true });
 });
+
+// Escape closes the open row (focus back on the row, if it was in it); so does focus or the page
+// scroll moving away from it.
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || event.isComposing || reveal.openId === null) return;
+  const inRow = rowById(reveal.openId)?.contains(event.target);
+  if (inRow) event.preventDefault();
+  closeRow({ focus: inRow });
+});
+document.addEventListener('focusin', (event) => {
+  if (reveal.openId !== null && !rendering && !rowById(reveal.openId)?.contains(event.target)) closeRow();
+});
+window.addEventListener('scroll', () => {
+  if (reveal.openId !== null && Math.abs(window.scrollY - openScrollY) > 4) closeRow();
+}, { passive: true });
 
 const undoKeyReaches = (target) =>
   list.contains(target) || toast.contains(target) || target === addToggle || target === document.body;
@@ -1881,6 +2017,7 @@ document.addEventListener('keydown', (event) => {
 function deleteLater(id, { slide = false, keyboard = false } = {}) {
   const todo = findTodo(id);
   if (!todo) return;
+  closeRow();
   const keys = rowFallbackKeys(id);
   fired.delete(id);
   const entry = { id, revision: displayed.get(id) ?? todo.revision };
@@ -2282,6 +2419,7 @@ function clearView() {
   viewEpoch += 1;
   // A delete still waiting for its Undo belongs to this session: dropped, never sent for the next.
   pendingDelete.drop();
+  reveal.close();
   sliding = null;
   heldAlert = null;
   hideToast();

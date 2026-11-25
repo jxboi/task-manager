@@ -89,10 +89,13 @@ test('edit form', async (t) => {
     assert.equal(button.getAttribute('aria-haspopup'), 'dialog');
     assert.equal(button.getAttribute('aria-expanded'), 'false');
     assert.equal(editButton('rent').getAttribute('aria-label'), 'Pay rent. Category: Home. Edit task');
-    // The row has no other controls: no pencil, trash, "+ tag", "+ reminder" or tag ×.
-    for (const control of ['.todo-edit', '.todo-delete', '.tag-add', '.reminder-add', '.tag-remove']) {
+    // The row has no other controls: no pencil, "+ tag", "+ reminder" or tag ×. Its one trash
+    // is the Delete button a swipe left reveals; closed, it is not shown (styles.css).
+    for (const control of ['.todo-edit', '.tag-add', '.reminder-add', '.tag-remove']) {
       assert.equal(row('rent').querySelector(control), null, control);
     }
+    assert.equal(row('rent').querySelectorAll('.todo-delete').length, 1);
+    assert.doesNotMatch(row('rent').className, /is-open/);
     open('plants');
     assert.equal(layer.hidden, false);
     assert.equal(editor.getAttribute('aria-label'), 'Edit “Water plants”');

@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createFakeApi, settle } from './fake-api.js';
 import { Element, installDom } from './dom.js';
-import { UNDO_MS } from '../src/swipe.js';
+import { REVEAL_PX, UNDO_MS } from '../src/swipe.js';
 
 const ROW = 72;
 const WIDTH = 390;
@@ -163,9 +163,11 @@ test('swipe left to delete, with Undo', async (t) => {
     assert.equal(layer.hidden, true);
   });
 
+  // Changed with the iOS-style reveal: this was an 80px slow swipe, which now opens and holds the
+  // Delete button (see the reveal tests below). Under half the button (38px) still springs back.
   await t.test('a short slow swipe springs back; the row still opens on a later tap', async () => {
     const charlie = row('Charlie');
-    gesture(charlie.querySelector('.todo-open'), [[-12, 0, 16], [-60, 0, 400], [-80, 0, 400]]);
+    gesture(charlie.querySelector('.todo-open'), [[-12, 0, 16], [-24, 0, 400], [-36, 0, 400]]);
     assert.equal(charlie.style.transform, '');
     assert.match(charlie.className, /is-settling/);
     await slid();
@@ -834,5 +836,482 @@ test('swipe left to delete, with Undo', async (t) => {
     form.rect = { top: 0, height: 0 };
     toast.rect = { top: 0, height: 0 };
     await settle();
+  });
+  // --- iOS-style reveal: a partial swipe holds the Delete button open -----------------------
+  const OPEN = `translateX(${-REVEAL_PX}px)`;
+  const isOpen = (text) => /\bis-open\b/.test(row(text).className);
+  const openRows = () => rows().filter((item) => /\bis-open\b/.test(item.className)).map((item) => item.querySelector('.todo-text').textContent);
+  const deleteButton = (text) => row(text).querySelector('.todo-delete');
+  const wait = (ms) => new Promise((resolve) => realSetTimeout(resolve, ms));
+  // A real press is heard by the document (capture) before the list: what closes an open row.
+  const docDown = (target, extra = {}) => {
+    const event = Object.assign(new Event('pointerdown', { cancelable: true }), {
+      clientX: 0, clientY: 0, pointerId: 3, button: 0, isPrimary: true, pointerType: 'touch', ...extra,
+    });
+    Object.defineProperty(event, 'target', { value: target });
+    document.dispatchEvent(event);
+  };
+  const drag = (target, steps, extra = {}) => {
+    docDown(target, extra);
+    gesture(target, steps, extra);
+  };
+  // A slow partial swipe: 100px, past half the button, well under 65% of the row.
+  const reveal = (text, extra) => drag(row(text).querySelector('.todo-open'), [[-12, 0, 16], [-60, 0, 300], [-100, 0, 300]], extra);
+  const tap = (target, extra) => {
+    drag(target, [[0, 0, 40]], extra);
+    target.click();
+  };
+  // Releases the press (no click reaches the fake document) and lets held renders run.
+  const released = async () => { await wait(450); await settle(); };
+  // Deletes sent since `fresh()`: earlier subtests' deletes are not this one's.
+  let sentBefore = 0;
+  const sent = () => deleted().slice(sentBefore);
+  const freshReveal = async () => { await fresh(); sentBefore = deleted().length; };
+
+  await t.test('a partial swipe reveals Delete and holds it; under half the button springs closed', async () => {
+    await freshReveal();
+    const golf = row('Golf');
+    reveal('Golf');
+    golf.querySelector('.todo-open').click(); // the swipe's own click
+    assert.equal(layer.hidden, true);
+    assert.match(golf.className, /is-open/);
+    assert.equal(golf.style.transform, OPEN);
+    assert.equal(toast.hidden, true);
+    await released();
+    assert.equal(row('Golf'), golf, 'held open, not re-rendered away');
+    assert.equal(golf.style.transform, OPEN);
+    assert.deepEqual(sent(), []);
+    // The button: a real button named for its task, its visible "Delete" part of that name.
+    const button = deleteButton('Golf');
+    assert.equal(button.tagName, 'button');
+    assert.equal(button.type, 'button');
+    assert.equal(button.getAttribute('aria-label'), 'Delete Golf');
+    assert.equal(button.querySelector('.todo-delete-label').textContent, 'Delete');
+    assert.match(button.getAttribute('aria-label'), /^Delete\b/);
+    assert.equal(button.dataset.focusKey, JSON.stringify(['delete', idFor('Golf')]));
+    // Under half the button: springs back closed (and pressing Hotel closed Golf).
+    drag(row('Hotel').querySelector('.todo-open'), [[-12, 0, 16], [-30, 0, 400]]);
+    assert.equal(row('Hotel').style.transform, '');
+    assert.equal(isOpen('Hotel'), false);
+    assert.deepEqual(openRows(), []);
+    await released();
+  });
+
+  await t.test('the Delete button deletes through the waiting delete, with the toast; Undo restores', async () => {
+    await freshReveal();
+    reveal('Golf');
+    await released();
+    const golf = row('Golf');
+    const button = deleteButton('Golf');
+    docDown(button);
+    pointer(button, 'pointerdown', 380, 230);
+    pointer(button, 'pointerup', 380, 230);
+    button.click();
+    assert.match(golf.className, /is-leaving/);
+    assert.doesNotMatch(golf.className, /is-open/);
+    assert.equal(golf.style.transform, 'translateX(-100%)');
+    assert.equal(toast.hidden, false);
+    assert.equal(toastText.textContent, 'Task deleted');
+    assert.equal(byId('toast-hint').hidden, true); // a pointer delete: no Ctrl+Z hint
+    await slid();
+    await released();
+    assert.deepEqual(shown(), more.slice(1));
+    assert.deepEqual(sent(), []);
+    assert.equal(focusKey(), JSON.stringify(['checkbox', idFor('Hotel')]));
+    undo.click();
+    await settle();
+    assert.deepEqual(shown(), more);
+    assert.deepEqual(openRows(), [], 'it comes back closed');
+    runUndoTimer();
+    await settle(10);
+    assert.deepEqual(sent(), []);
+    // And when the toast runs out instead, the delete is sent.
+    reveal('Golf');
+    await released();
+    deleteButton('Golf').click();
+    await slid();
+    runUndoTimer();
+    await settle(10);
+    assert.deepEqual(sent(), ['Golf']);
+    await freshReveal();
+  });
+
+  await t.test('a tap elsewhere, a scroll, Escape or a swipe back right closes it', async () => {
+    await freshReveal();
+    // A tap outside the list.
+    reveal('Golf');
+    await released();
+    docDown(byId('add-toggle'));
+    assert.equal(isOpen('Golf'), false);
+    assert.equal(row('Golf').style.transform, '');
+    await released();
+    // A tap on another row only closes: its click doesn't open the sheet.
+    reveal('Golf');
+    await released();
+    tap(row('India').querySelector('.todo-open'));
+    assert.equal(isOpen('Golf'), false);
+    assert.equal(layer.hidden, true);
+    await released();
+    // ...nor tick its checkbox.
+    reveal('Golf');
+    await released();
+    const box = row('India').querySelector('.todo-checkbox');
+    drag(box, [[0, 0, 40]]);
+    const click = new Event('click', { cancelable: true });
+    Object.defineProperty(click, 'target', { value: box });
+    list.dispatchEvent(click);
+    assert.equal(click.defaultPrevented, true);
+    assert.equal(isOpen('Golf'), false);
+    await released();
+    // The page scrolls.
+    reveal('Golf');
+    await released();
+    window.scrollY = 2; // jitter: stays open
+    window.dispatchEvent(new Event('scroll'));
+    assert.equal(isOpen('Golf'), true);
+    window.scrollY = 60;
+    window.dispatchEvent(new Event('scroll'));
+    assert.equal(isOpen('Golf'), false);
+    window.scrollY = 0;
+    // Escape, with focus on the open row's button: closed, focus back on the row.
+    reveal('Golf');
+    await released();
+    deleteButton('Golf').focus();
+    const escape = keydown(deleteButton('Golf'), 'Escape');
+    assert.equal(escape.defaultPrevented, true);
+    assert.equal(isOpen('Golf'), false);
+    assert.equal(document.activeElement, row('Golf').querySelector('.todo-open'));
+    // Escape with focus elsewhere closes it too, and leaves focus alone.
+    reveal('Golf');
+    await released();
+    byId('add-toggle').focus();
+    assert.equal(keydown(byId('add-toggle'), 'Escape').defaultPrevented, false);
+    assert.equal(isOpen('Golf'), false);
+    assert.equal(document.activeElement, byId('add-toggle'));
+    // Swiping the card back right.
+    reveal('Golf');
+    await released();
+    drag(row('Golf').querySelector('.todo-open'), [[12, 0, 16], [50, 0, 300], [70, 0, 300]]);
+    assert.equal(isOpen('Golf'), false);
+    assert.equal(row('Golf').style.transform, '');
+    // A small move right (still past half the button) stays open.
+    reveal('Golf');
+    await released();
+    drag(row('Golf').querySelector('.todo-open'), [[12, 0, 300], [20, 0, 300]]);
+    assert.equal(isOpen('Golf'), true);
+    assert.equal(row('Golf').style.transform, OPEN);
+    await released();
+    // Focus moving out of the open row (Tab past its button) closes it.
+    const focusIn = new Event('focusin');
+    Object.defineProperty(focusIn, 'target', { value: row('Hotel').querySelector('.todo-checkbox') });
+    document.dispatchEvent(focusIn);
+    assert.equal(isOpen('Golf'), false);
+    assert.deepEqual(sent(), []);
+    assert.equal(toast.hidden, true);
+  });
+
+  await t.test('one row open at a time: opening another closes the first', async () => {
+    await freshReveal();
+    reveal('Golf');
+    await released();
+    reveal('India');
+    assert.deepEqual(openRows(), ['India']);
+    assert.equal(row('Golf').style.transform, '');
+    assert.equal(row('India').style.transform, OPEN);
+    await released();
+    // ArrowLeft on another row opens that one instead.
+    press(row('Kilo').querySelector('.todo-checkbox'), 'ArrowLeft');
+    assert.deepEqual(openRows(), ['Kilo']);
+    assert.equal(row('India').style.transform, '');
+  });
+
+  await t.test('a tap on the open card closes it and does not open the edit sheet', async () => {
+    await freshReveal();
+    reveal('Golf');
+    await released();
+    const body = row('Golf').querySelector('.todo-open');
+    tap(body);
+    assert.equal(isOpen('Golf'), false);
+    assert.equal(row('Golf').style.transform, '');
+    assert.equal(layer.hidden, true);
+    await released();
+    // The next tap opens the sheet as usual. Opening the sheet closes an open row.
+    reveal('Hotel');
+    await released();
+    row('Golf').querySelector('.todo-open').click(); // e.g. Enter on a focused row: no press
+    assert.equal(layer.hidden, false);
+    assert.deepEqual(openRows(), []);
+    byId('reminder-cancel').click();
+    await settle();
+  });
+
+  await t.test('a full slow swipe still deletes at once; so does a long one from open', async () => {
+    await freshReveal();
+    const golf = row('Golf');
+    drag(golf.querySelector('.todo-open'), [[-12, 0, 16], [-120, 0, 400], [-260, 0, 600]]); // 260 > 65% of 390
+    assert.match(golf.className, /is-leaving/);
+    assert.equal(toast.hidden, false);
+    // Past the open position, the button stayed at the list's edge while the card went on.
+    await slid();
+    await released();
+    assert.deepEqual(shown(), more.slice(1));
+    undo.click();
+    await settle();
+    // From open, a further 190px left (76 + 190 = 266): deletes.
+    reveal('Hotel');
+    await released();
+    const hotel = row('Hotel');
+    drag(hotel.querySelector('.todo-open'), [[-12, 0, 16], [-100, 0, 400], [-190, 0, 600]]);
+    assert.match(hotel.className, /is-leaving/);
+    assert.equal(toast.hidden, false);
+    await slid();
+    await released();
+    assert.equal(shown().includes('Hotel'), false);
+    undo.click();
+    await settle();
+    runUndoTimer();
+    await settle(10);
+    assert.deepEqual(sent(), []);
+  });
+
+  await t.test('past the open position the Delete button stays at the edge as the card goes on', async () => {
+    await freshReveal();
+    const golf = row('Golf');
+    const body = golf.querySelector('.todo-open');
+    layout();
+    docDown(body);
+    pointer(body, 'pointerdown', 300, golf.rect.top + 30);
+    clock += 300;
+    pointer(body, 'pointermove', 250, golf.rect.top + 30);
+    assert.equal(deleteButton('Golf').style.transform, 'translateX(0px)');
+    clock += 300;
+    pointer(body, 'pointermove', 150, golf.rect.top + 30);
+    assert.equal(golf.style.transform, 'translateX(-150px)');
+    assert.equal(deleteButton('Golf').style.transform, `translateX(${150 - REVEAL_PX}px)`);
+    clock += 300;
+    pointer(body, 'pointermove', 220, golf.rect.top + 30); // back to 80px: open
+    clock += 300;
+    pointer(body, 'pointerup', 220, golf.rect.top + 30);
+    assert.equal(golf.style.transform, OPEN);
+    assert.equal(deleteButton('Golf').style.transform, '');
+    await released();
+  });
+
+  await t.test('the reorder handle still works with a row open, and closes it', async () => {
+    await freshReveal();
+    reveal('Golf');
+    await released();
+    layout();
+    const handle = row('Hotel').querySelector('.todo-handle');
+    const handleEvent = (type, clientX, clientY) => {
+      const event = Object.assign(new Event(type, { cancelable: true }), { clientX, clientY, pointerId: 9, button: 0, isPrimary: true });
+      Object.defineProperty(event, 'target', { value: handle });
+      if (type === 'pointerdown') document.dispatchEvent(event);
+      (type === 'pointerdown' ? list : handle).dispatchEvent(event);
+    };
+    const y = row('Hotel').rect.top + 30;
+    handleEvent('pointerdown', 360, y);
+    assert.equal(isOpen('Golf'), false, 'the drag closes the open row');
+    handleEvent('pointermove', 360, y + ROW * 1.6);
+    handleEvent('pointerup', 360, y + ROW * 1.6);
+    pointer(handle, 'pointerup', 360, y + ROW * 1.6, { pointerId: 9 });
+    await released();
+    assert.deepEqual(shown().slice(0, 3), ['Golf', 'India', 'Hotel']);
+    assert.deepEqual(sent(), []);
+    assert.equal(toast.hidden, true);
+    // The open row's own handle closes it too, and never starts a swipe.
+    reveal('Golf');
+    await released();
+    const own = row('Golf').querySelector('.todo-handle');
+    docDown(own);
+    assert.equal(isOpen('Golf'), false);
+    gesture(own, [[-20, 0, 16], [-200, 0, 100]]);
+    // The handle's press is the reorder drag's (translateY), never a sideways swipe.
+    assert.doesNotMatch(row('Golf').style.transform ?? '', /translateX/);
+    assert.doesNotMatch(row('Golf').className, /is-swiping|is-leaving/);
+    const up = Object.assign(new Event('pointerup', { cancelable: true }), { pointerId: 3, clientX: 100, clientY: 0 });
+    Object.defineProperty(up, 'target', { value: own });
+    own.dispatchEvent(up);
+    assert.equal(toast.hidden, true);
+    await released();
+    // Keyboard reorder closes it as well.
+    reveal('India');
+    await released();
+    press(row('Golf').querySelector('.todo-handle'), 'ArrowDown');
+    await settle();
+    assert.deepEqual(openRows(), []);
+    await freshReveal();
+  });
+
+  await t.test('a vertical gesture still scrolls: nothing opens or deletes, an open row closes', async () => {
+    await freshReveal();
+    reveal('Golf');
+    await released();
+    drag(row('Hotel').querySelector('.todo-open'), [[-4, 14, 16], [-30, 120, 60]], { end: 'pointercancel' });
+    assert.deepEqual(openRows(), []);
+    assert.equal(row('Hotel').style.transform ?? '', '');
+    // A vertical gesture that starts on the open card closes it.
+    reveal('Golf');
+    await released();
+    drag(row('Golf').querySelector('.todo-open'), [[2, 14, 16], [4, 120, 60]], { end: 'pointercancel' });
+    assert.deepEqual(openRows(), []);
+    await released();
+    assert.deepEqual(shown(), more);
+    assert.equal(toast.hidden, true);
+  });
+
+  await t.test('mouse drag: the same reveal, hold and full-drag delete', async () => {
+    await freshReveal();
+    const mouse = { pointerType: 'mouse', pointerId: 1, buttons: 1 };
+    reveal('Golf', mouse);
+    assert.equal(isOpen('Golf'), true);
+    row('Golf').querySelector('.todo-open').click();
+    assert.equal(layer.hidden, true);
+    await released();
+    deleteButton('Golf').click();
+    assert.equal(toast.hidden, false);
+    await slid();
+    await released();
+    assert.deepEqual(shown(), more.slice(1));
+    undo.click();
+    await settle();
+    drag(row('Hotel').querySelector('.todo-open'), [[-12, 0, 16], [-150, 0, 500], [-280, 0, 500]], mouse);
+    assert.equal(toast.hidden, false);
+    await slid();
+    await released();
+    assert.equal(shown().includes('Hotel'), false);
+    undo.click();
+    await settle();
+    runUndoTimer();
+    await settle(10);
+    assert.deepEqual(sent(), []);
+  });
+
+  await t.test('keyboard: ArrowLeft opens on the Delete button; Escape returns to the row; Enter deletes', async () => {
+    await freshReveal();
+    const golf = row('Golf');
+    const body = golf.querySelector('.todo-open');
+    body.focus();
+    const left = press(body, 'ArrowLeft');
+    assert.equal(left.defaultPrevented, true);
+    assert.equal(isOpen('Golf'), true);
+    assert.equal(golf.style.transform, OPEN);
+    assert.equal(document.activeElement, deleteButton('Golf'));
+    // A re-render while open keeps it open, with focus on the rebuilt button.
+    const before = deleteButton('Golf');
+    signIn({ ...servers.a.session }); // same session re-read: reloads and re-renders the list
+    await settle();
+    assert.notEqual(deleteButton('Golf'), before, 'the row was rebuilt');
+    assert.equal(isOpen('Golf'), true);
+    assert.equal(row('Golf').style.transform, OPEN);
+    assert.equal(document.activeElement, deleteButton('Golf'));
+    // Escape closes it and focus goes back to the row.
+    keydown(document.activeElement, 'Escape');
+    assert.equal(isOpen('Golf'), false);
+    assert.equal(document.activeElement, row('Golf').querySelector('.todo-open'));
+    // ArrowRight on the button closes it too.
+    press(row('Golf').querySelector('.todo-checkbox'), 'ArrowLeft');
+    assert.equal(document.activeElement, deleteButton('Golf'));
+    press(deleteButton('Golf'), 'ArrowRight');
+    assert.equal(isOpen('Golf'), false);
+    assert.equal(document.activeElement, row('Golf').querySelector('.todo-open'));
+    // With a modifier, ArrowLeft does nothing; on the handle it does nothing.
+    press(row('Golf').querySelector('.todo-open'), 'ArrowLeft', { altKey: true });
+    press(row('Golf').querySelector('.todo-handle'), 'ArrowLeft');
+    assert.deepEqual(openRows(), []);
+    // Enter (a click with no pointer: detail 0) deletes, with the keyboard hint.
+    press(row('Golf').querySelector('.todo-open'), 'ArrowLeft');
+    const enter = new Event('click');
+    Object.assign(enter, { detail: 0 });
+    Object.defineProperty(enter, 'target', { value: deleteButton('Golf') });
+    for (let element = deleteButton('Golf'); element; element = element.parent) element.dispatchEvent(enter);
+    assert.equal(toast.hidden, false);
+    assert.equal(byId('toast-hint').hidden, false);
+    await slid();
+    await settle();
+    assert.equal(shown().includes('Golf'), false);
+    assert.equal(focusKey(), JSON.stringify(['checkbox', idFor('Hotel')]));
+    undo.click();
+    await settle();
+    // Delete on the focused Delete button deletes too; the row's Delete key still does.
+    press(row('Golf').querySelector('.todo-open'), 'ArrowLeft');
+    press(deleteButton('Golf'), 'Delete');
+    await settle();
+    assert.equal(shown().includes('Golf'), false);
+    undo.click();
+    await settle();
+    press(row('Hotel').querySelector('.todo-checkbox'), 'Delete');
+    await settle();
+    assert.equal(shown().includes('Hotel'), false);
+    undo.click();
+    await settle();
+    runUndoTimer();
+    await settle(10);
+    assert.deepEqual(sent(), []);
+  });
+
+  await t.test('a new delete, a re-render without the row, or a session reset closes it', async () => {
+    await freshReveal();
+    // Another row deleted from the keyboard.
+    reveal('Golf');
+    await released();
+    press(row('India').querySelector('.todo-checkbox'), 'Delete');
+    await settle();
+    assert.deepEqual(openRows(), []);
+    undo.click();
+    await settle();
+    // The open task deleted on another device: the refresh drops it; it is not open when back.
+    reveal('Golf');
+    await released();
+    const golf = servers.a.rows.find((item) => item.text === 'Golf');
+    servers.a.rows = servers.a.rows.filter((item) => item !== golf);
+    signIn({ ...servers.a.session }); // same session re-read: reloads and re-renders the list
+    await released();
+    assert.equal(shown().includes('Golf'), false);
+    servers.a.rows = [golf, ...servers.a.rows];
+    signIn({ ...servers.a.session }); // same session re-read: reloads and re-renders the list
+    await released();
+    assert.equal(shown().includes('Golf'), true);
+    assert.deepEqual(openRows(), []);
+    // A session reset (same account re-read): nothing stays open.
+    reveal('Hotel');
+    await released();
+    servers.a.session = { ...servers.a.session, csrfToken: 'token-a5' };
+    signIn(servers.a.session);
+    await settle();
+    assert.deepEqual(openRows(), []);
+    assert.equal(row('Hotel').style.transform ?? '', '');
+    // Account switch while open: B's list has nothing open, and nothing was deleted.
+    reveal('Hotel');
+    await released();
+    cookie = 'b';
+    signIn(servers.b.session);
+    await settle();
+    assert.deepEqual(openRows(), []);
+    cookie = 'a';
+    signIn(servers.a.session);
+    await settle();
+    assert.deepEqual(openRows(), []);
+    assert.deepEqual(sent(), []);
+  });
+
+  await t.test('reduced motion: the reveal and the Delete button act at once, with no slide', async () => {
+    await freshReveal();
+    matchMedia('(prefers-reduced-motion: reduce)').matches = true;
+    reveal('Golf');
+    assert.equal(row('Golf').style.transform, OPEN);
+    await released();
+    const golf = row('Golf');
+    deleteButton('Golf').click();
+    assert.doesNotMatch(golf.className, /is-leaving/);
+    await settle();
+    assert.equal(shown().includes('Golf'), false);
+    assert.equal(toast.hidden, false);
+    undo.click();
+    await settle();
+    matchMedia('(prefers-reduced-motion: reduce)').matches = false;
+    runUndoTimer();
+    await settle(10);
+    assert.deepEqual(sent(), []);
   });
 });
