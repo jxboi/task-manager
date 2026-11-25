@@ -20,7 +20,7 @@ import {
   CALENDAR_KEYS, DEFAULT_TIME, addDays, addMonths, canGoBack, dayLabel, dayName, defaultReminder,
   EARLIEST_DAY, localDate, monthGrid, monthLabel, parseDate, pickerDue, splitDue,
 } from './picker.js';
-import { createSheetViewport } from './viewport.js';
+import { createSheetViewport, viewportBox } from './viewport.js';
 import { createPendingDelete, createSwipe } from './swipe.js';
 
 const app = document.querySelector('.app');
@@ -93,6 +93,7 @@ const syncDismiss = document.getElementById('sync-dismiss');
 const toast = document.getElementById('toast');
 const toastText = document.getElementById('toast-text');
 const toastUndo = document.getElementById('toast-undo');
+const toastHint = document.getElementById('toast-hint');
 
 const sheetViewport = createSheetViewport({ layer, body: sheetBody });
 // Static controls that a render may send focus back to.
@@ -132,10 +133,13 @@ const sync = createSync(api, { onChange: syncChanged, seenRevision: (id) => disp
 // shows or alerts it, and sent through the usual delete when the toast runs out.
 const pendingDelete = createPendingDelete({
   commit: ({ id }) => {
+    if (heldAlert?.id === id) heldAlert = null;
     hideToast();
     removeRow(id);
   },
 });
+// A reminder claimed for the task while it waited behind Undo: alerted only if Undo brings it back.
+let heldAlert = null;
 // The revision of each row as it is on screen. A change is made against what the user sees, and
 // sync.js cancels a change made against a row that a reload has since replaced.
 const displayed = new Map();
@@ -174,6 +178,7 @@ let rendering = false;
 let renderPending = false;
 let pendingFocus; // focus keys for the deferred render
 let pressing = false;
+let sliding = null; // a swiped task's pending entry while its row slides out: renders wait for it
 const afterPress = []; // updates that would move the list, held until the press is released
 let viewEpoch = 0; // bumped whenever the view is cleared for another (or a re-read) session
 let timer; // the one reminder timeout
@@ -571,7 +576,7 @@ function renderSoon(focusKeys) {
 
 // Checked when it runs, not when queued: a press may have started since. release() flushes it.
 function flushRender() {
-  if (renderPending && !pressing) render(pendingFocus);
+  if (renderPending && !pressing && !sliding) render(pendingFocus);
 }
 
 // Neighbouring rows in the current view, for when the acted-on row leaves it.
@@ -622,8 +627,12 @@ async function claim(ready) {
   const result = await sync.claim(ready.map(({ id, due }) => ({ id, due })));
   for (const name of names) claiming.delete(name);
   if (result.stale) return;
-  if (result.claimed.length > 0) {
-    const claimed = sortByUrgency(result.claimed, Date.now());
+  // A task swiped (waiting behind Undo) or deleted while the claim was out isn't alerted; Undo
+  // alerts the swiped one then, as for any due reminder.
+  for (const todo of result.claimed) if (todo.id === pendingDelete.id) heldAlert = todo;
+  const shown = result.claimed.filter((todo) => findTodo(todo.id));
+  if (shown.length > 0) {
+    const claimed = sortByUrgency(shown, Date.now());
     notify(claimed);
     // The pulse is the whole highlight: with reduced motion the row is simply overdue.
     if (!reducedMotion.matches) {
@@ -1449,6 +1458,7 @@ function setComposerOpen(open) {
   form.hidden = !open;
   addToggle.setAttribute('aria-expanded', String(open));
   syncAddButton();
+  placeToast(); // an Undo toast stays clear of the field
 }
 
 // Where focus goes back to after an action: the field while it is open, else the + button.
@@ -1752,21 +1762,31 @@ window.addEventListener('blur', () => endDrag(false));
 // takes over only once it locks horizontal (src/swipe.js). The handle is the reorder drag's.
 const SLIDE_MS = 180; // styles.css .todo.is-leaving
 const SETTLE_MS = 200; // .todo.is-settling
+const TOAST_GAP = 12; // between the toast and the bottom of the visual viewport (the iOS keyboard)
 let swipe = null; // { gesture, row, pointerId }
 let swallowClick = false;
 let swallowTimer = null;
 
 list.addEventListener('pointerdown', (event) => {
   swallowClick = false;
+  if (event.button !== 0 || event.isPrimary === false) return;
+  // A primary press means any earlier gesture is over, whether or not its release was seen.
+  if (swipe) endSwipe({ pointerId: swipe.pointerId }, true);
   const row = event.target.closest('.todo');
-  if (!row?.dataset.id || swipe || drag || app.inert || event.button !== 0 || event.isPrimary === false ||
-      event.target.closest('.todo-handle')) return;
+  if (!row?.dataset.id || drag || app.inert || event.target.closest('.todo-handle')) return;
   const { width } = row.getBoundingClientRect();
   swipe = { row, pointerId: event.pointerId, gesture: createSwipe(width, event.clientX, event.clientY, event.timeStamp) };
 });
 
-list.addEventListener('pointermove', (event) => {
+// On the document, so a mouse that leaves the list (or a pointer the row captured) is still
+// followed, and its release always ends the gesture.
+document.addEventListener('pointermove', (event) => {
   if (!swipe || event.pointerId !== swipe.pointerId) return;
+  // No button held: the release happened where nothing heard it. Spring back, never delete.
+  if (event.buttons === 0) {
+    endSwipe(event, true, false);
+    return;
+  }
   const { row, gesture } = swipe;
   const locked = gesture.phase === 'horizontal';
   const phase = gesture.move(event.clientX, event.clientY, event.timeStamp);
@@ -1779,7 +1799,7 @@ list.addEventListener('pointermove', (event) => {
     try {
       row.setPointerCapture(event.pointerId); // a mouse keeps the row when it leaves the list
     } catch {
-      // Not capturable: the row still follows while the pointer is over the list.
+      // Not capturable: the document still hears the move and the release.
     }
     row.classList.add('is-swiping');
     document.documentElement.classList.add('is-swiping'); // no text selection mid-drag
@@ -1788,27 +1808,40 @@ list.addEventListener('pointermove', (event) => {
   row.style.transform = `translateX(${gesture.offset}px)`;
 });
 
-list.addEventListener('pointerup', (event) => endSwipe(event, false));
-list.addEventListener('pointercancel', (event) => endSwipe(event, true));
+document.addEventListener('pointerup', (event) => endSwipe(event, false), true);
+document.addEventListener('pointercancel', (event) => endSwipe(event, true), true);
+// The row lost its capture without a release (pointerup comes first, so this is the odd case).
+// Not the touch's implicit capture moving to the row when it locks: that fires on the old target.
+document.addEventListener('lostpointercapture', (event) => {
+  if (swipe && event.target === swipe.row) endSwipe(event, true);
+}, true);
+window.addEventListener('blur', () => {
+  if (swipe) endSwipe({ pointerId: swipe.pointerId }, true, false);
+});
 
-function endSwipe(event, cancelled) {
+// `swallow`: a click will follow this release (a real pointerup or cancel), and belongs to it.
+function endSwipe(event, cancelled, swallow = true) {
   if (!swipe || event.pointerId !== swipe.pointerId) return;
   const { row, gesture } = swipe;
   swipe = null;
   document.documentElement.classList.remove('is-swiping');
   if (gesture.phase !== 'horizontal') return;
-  // The click that follows this release (if any) belongs to the swipe.
-  swallowClick = true;
-  clearTimeout(swallowTimer);
-  swallowTimer = setTimeout(() => { swallowClick = false; }, CLICK_WAIT_MS);
+  if (swallow) {
+    swallowClick = true;
+    clearTimeout(swallowTimer);
+    swallowTimer = setTimeout(() => { swallowClick = false; }, CLICK_WAIT_MS);
+  }
   row.classList.remove('is-swiping');
   const outcome = cancelled ? 'back' : gesture.end(event.timeStamp);
-  if (outcome === 'delete' && row.isConnected && !reducedMotion.matches) {
-    row.classList.add('is-leaving');
-    row.style.transform = 'translateX(-100%)';
-    setTimeout(() => deleteLater(row.dataset.id), SLIDE_MS);
-  } else if (outcome === 'delete') {
-    deleteLater(row.dataset.id);
+  if (outcome === 'delete' && row.isConnected) {
+    // The delete starts now, for the task and revision on screen at the release; the slide is
+    // only the animation.
+    const slide = !reducedMotion.matches;
+    if (slide) {
+      row.classList.add('is-leaving');
+      row.style.transform = 'translateX(-100%)';
+    }
+    deleteLater(row.dataset.id, { slide });
   } else {
     row.classList.add('is-settling');
     row.style.transform = '';
@@ -1816,28 +1849,55 @@ function endSwipe(event, cancelled) {
   }
 }
 
-// Delete or Backspace on a row's checkbox, body or handle deletes it, with the same Undo.
+// Delete or Backspace on a row's checkbox, body or handle deletes it, with the same Undo. A held
+// key's auto-repeat is ignored: focus has moved to the next row, which it must not delete too.
 list.addEventListener('keydown', (event) => {
   if ((event.key !== 'Delete' && event.key !== 'Backspace') || event.isComposing || drag ||
       event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
   const row = event.target.closest('.todo-checkbox, .todo-open, .todo-handle')?.closest('.todo');
   if (!row) return;
   event.preventDefault();
-  deleteLater(row.dataset.id);
+  if (event.repeat) return;
+  deleteLater(row.dataset.id, { keyboard: true });
+});
+
+// Ctrl+Z (Cmd+Z) undoes the waiting delete from the list, the toast or the + button: after a
+// keyboard delete focus is on the next row, and Undo is far behind it in the tab order. Text
+// fields keep their own undo.
+document.addEventListener('keydown', (event) => {
+  if (!pendingDelete.entry || event.defaultPrevented || event.isComposing || event.repeat || app.inert ||
+      event.key?.toLowerCase() !== 'z' || !(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey) return;
+  const target = event.target;
+  if (!(list.contains(target) || toast.contains(target) || target === addToggle || target === document.body)) return;
+  event.preventDefault();
+  undoDelete();
 });
 
 // Takes the task off the list now and shows Undo; the delete is sent when the toast runs out,
-// at the next delete, or when the page is hidden. Focus goes to the next row, like the sheet's Delete.
-function deleteLater(id) {
+// at the next delete, or when the page is hidden. Focus goes to the next row, like the sheet's
+// Delete. With `slide`, the row stays on screen (renders wait) until its slide-out ends.
+function deleteLater(id, { slide = false, keyboard = false } = {}) {
   const todo = findTodo(id);
   if (!todo) return;
   const keys = rowFallbackKeys(id);
   fired.delete(id);
-  pendingDelete.start({ id, revision: displayed.get(id) ?? todo.revision });
+  const entry = { id, revision: displayed.get(id) ?? todo.revision };
+  sliding = slide ? entry : null;
+  pendingDelete.start(entry);
   syncChanged();
-  render(keys);
-  showToast();
+  if (slide) setTimeout(() => endSlide(entry, keys), SLIDE_MS);
+  else render(keys);
+  showToast(keyboard);
   check();
+}
+
+// The slide is over: show the list without the row, unless Undo, another delete or a session
+// reset has dealt with it since (each renders on its own).
+function endSlide(entry, keys) {
+  if (sliding !== entry) return;
+  sliding = null;
+  if (pendingDelete.entry === entry) render(keys);
+  else flushRender();
 }
 
 // Undo: the task never left the sync model, so it comes back with its place, category and fields.
@@ -1845,21 +1905,90 @@ function undoDelete() {
   const entry = pendingDelete.undo();
   hideToast();
   if (!entry) return;
+  if (sliding === entry) sliding = null;
   syncChanged();
   render([key('open', entry.id), key('checkbox', entry.id)]);
+  // Its reminder was claimed while it waited: alert it now, as for any due reminder.
+  const held = heldAlert?.id === entry.id ? findTodo(entry.id) ?? heldAlert : null;
+  heldAlert = null;
+  if (held) {
+    notify([held]);
+    if (!reducedMotion.matches) fired.set(held.id, performance.now());
+    renderSoon(renderPending ? pendingFocus : undefined);
+  }
   check();
 }
 
-function showToast() {
+// The toast's clock stops while it is hovered or has focus.
+let toastHovered = false;
+let toastFocused = false;
+function holdToast() {
+  if (toastHovered || toastFocused) pendingDelete.pause();
+  else pendingDelete.resume();
+}
+toast.addEventListener('pointerenter', () => { toastHovered = true; holdToast(); });
+toast.addEventListener('pointerleave', () => { toastHovered = false; holdToast(); });
+toast.addEventListener('focusin', () => { toastFocused = true; holdToast(); });
+toast.addEventListener('focusout', (event) => { toastFocused = toast.contains(event.relatedTarget); holdToast(); });
+
+const APPLE = /Mac|iPhone|iPad/.test(globalThis.navigator?.platform ?? '');
+
+function showToast(keyboard = false) {
   toastText.textContent = 'Task deleted';
+  // After a keyboard delete, say how to undo without tabbing to the button.
+  toastHint.textContent = keyboard ? (APPLE ? '⌘Z to undo' : 'Ctrl+Z to undo') : '';
+  toastHint.hidden = !keyboard;
   toast.hidden = false;
+  holdToast();
+  followViewport(true);
+  placeToast();
 }
 
 function hideToast() {
   const focused = toast.contains(document.activeElement);
   toast.hidden = true;
   toastText.textContent = '';
+  toastHint.textContent = '';
+  toastHovered = false;
+  toastFocused = false;
+  followViewport(false);
   if (focused) focusComposer();
+}
+
+// iOS Safari keeps a fixed element on the layout viewport, so the keyboard can cover it. While
+// the toast is up it follows the visual viewport: when that ends above the layout viewport's
+// bottom (the keyboard is up), the toast sits just above it. If it would still cover the open
+// composer (a very short visual viewport), the delete is committed rather than hidden or covering.
+let followed = null;
+function followViewport(on) {
+  const vv = on ? window.visualViewport ?? null : null;
+  if (vv === followed) return;
+  followed?.removeEventListener('resize', placeToast);
+  followed?.removeEventListener('scroll', placeToast);
+  followed = vv;
+  vv?.addEventListener('resize', placeToast);
+  vv?.addEventListener('scroll', placeToast);
+}
+
+function placeToast() {
+  if (toast.hidden) return;
+  const box = viewportBox(window);
+  const layoutHeight = document.documentElement.clientHeight || window.innerHeight;
+  const bottom = box ? box.top + box.height : layoutHeight;
+  if (!box || bottom >= layoutHeight - 1) {
+    toast.style.top = '';
+    toast.style.bottom = '';
+  } else {
+    const height = toast.getBoundingClientRect().height || 56;
+    toast.style.top = `${Math.round(bottom - TOAST_GAP - height)}px`;
+    toast.style.bottom = 'auto';
+  }
+  if (form.hidden) return;
+  const pill = toast.getBoundingClientRect();
+  const field = form.getBoundingClientRect();
+  const top = toast.style.top ? parseFloat(toast.style.top) : pill.top;
+  const overlaps = field.height > 0 && top < field.top + field.height && top + (pill.height || 56) > field.top;
+  if (overlaps) pendingDelete.flush();
 }
 
 toastUndo.addEventListener('click', undoDelete);
@@ -2102,6 +2231,8 @@ function clearView() {
   viewEpoch += 1;
   // A delete still waiting for its Undo belongs to this session: dropped, never sent for the next.
   pendingDelete.drop();
+  sliding = null;
+  heldAlert = null;
   hideToast();
   afterPress.length = 0;
   sync.reset();

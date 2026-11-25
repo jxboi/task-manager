@@ -24,7 +24,8 @@ test('swipe left to delete, with Undo', async (t) => {
   const undoTimers = new Map();
   let nextTimer = 1;
   globalThis.setTimeout = (fn, ms, ...rest) => {
-    if (ms !== UNDO_MS) return realSetTimeout(fn, ms, ...rest);
+    // UNDO_MS, or what is left of it after a pause.
+    if (!(ms > UNDO_MS - 1000 && ms <= UNDO_MS)) return realSetTimeout(fn, ms, ...rest);
     undoTimers.set(nextTimer, fn);
     return nextTimer++;
   };
@@ -76,6 +77,15 @@ test('swipe left to delete, with Undo', async (t) => {
     });
     Object.defineProperty(event, 'target', { value: target });
     Object.defineProperty(event, 'timeStamp', { value: clock });
+    // The press starts on the list. Later events bubble from a row up to the document; one
+    // outside the list (extra.outside) reaches only the document.
+    if (type !== 'pointerdown') {
+      const bubbled = Object.assign(new Event(type, { cancelable: true }), event);
+      Object.defineProperty(bubbled, 'target', { value: target });
+      Object.defineProperty(bubbled, 'timeStamp', { value: clock });
+      document.dispatchEvent(bubbled);
+      if (extra.outside) return bubbled;
+    }
     list.dispatchEvent(event);
     return event;
   };
@@ -324,5 +334,257 @@ test('swipe left to delete, with Undo', async (t) => {
     assert.deepEqual(shown().sort(), ['Echo', 'Foxtrot']);
     assert.equal(deletes().length, sent);
     assert.equal(servers.a.rows.some((item) => item.text === 'Echo'), true);
+  });
+
+  // --- Review fixes ------------------------------------------------------------------------
+  const more = ['Golf', 'Hotel', 'India', 'Juliet', 'Kilo', 'Lima'];
+  const fresh = async () => {
+    servers.a.rows = more.map((text, i) => ({ ...base, id: ID(i + 21), text, createdAt: 100 + i }));
+    signIn({ ...servers.a.session });
+    await settle();
+  };
+  const idFor = (text) => ID(more.indexOf(text) + 21);
+  const deleted = () => servers.a.requests.filter((request) => request.method === 'DELETE')
+    .map((request) => more.find((text) => request.path.includes(idFor(text)))).filter(Boolean);
+  const keydown = (target, key, extra = {}) => {
+    const event = Object.assign(new Event('keydown', { cancelable: true }), { key, ...extra });
+    Object.defineProperty(event, 'target', { value: target });
+    document.dispatchEvent(event);
+    return event;
+  };
+
+  await t.test('a held Delete key deletes one task, not the next ones too', async () => {
+    await fresh();
+    assert.deepEqual(shown(), more);
+    press(row('Golf').querySelector('.todo-checkbox'), 'Delete');
+    await settle();
+    // Auto-repeat follows focus to the next row.
+    for (let i = 0; i < 3; i++) {
+      const event = press(document.activeElement, 'Delete', { repeat: true });
+      assert.equal(event.defaultPrevented, true);
+      await settle();
+    }
+    assert.deepEqual(shown(), more.slice(1));
+    assert.deepEqual(deleted(), []);
+    runUndoTimer();
+    await settle();
+    assert.deepEqual(deleted(), ['Golf']);
+  });
+
+  await t.test('a mouse press released outside the list never arms a later delete', async () => {
+    layout();
+    const hotel = row('Hotel').querySelector('.todo-open');
+    const x = WIDTH - 6; // near the right edge
+    const y = row('Hotel').rect.top + 30;
+    const mouse = { pointerType: 'mouse', pointerId: 1, buttons: 1 };
+    pointer(hotel, 'pointerdown', x, y, mouse);
+    clock += 16;
+    pointer(hotel, 'pointermove', x + 4, y + 2, mouse); // not locked yet
+    clock += 16;
+    pointer(document, 'pointerup', x + 30, y, { ...mouse, buttons: 0, outside: true });
+    // Back over the list with no button held, moving left; then an ordinary click.
+    for (const dx of [40, 120, 240]) {
+      clock += 30;
+      pointer(hotel, 'pointermove', x - dx, y, { ...mouse, buttons: 0 });
+    }
+    assert.equal(row('Hotel').style.transform ?? '', '');
+    pointer(hotel, 'pointerup', x - 240, y, { ...mouse, buttons: 0 });
+    hotel.click();
+    await settle();
+    assert.equal(toast.hidden, true);
+    assert.deepEqual(shown(), more.slice(1));
+    assert.equal(layer.hidden, false); // the click opened the sheet, as a click does
+    byId('reminder-cancel').click();
+    await settle();
+    // A release whose pointerup was missed, then moves with no button: springs back, no delete.
+    pointer(hotel, 'pointerdown', 300, y, mouse);
+    for (const dx of [-20, -200]) {
+      clock += 16;
+      pointer(hotel, 'pointermove', 300 + dx, y, dx === -20 ? mouse : { ...mouse, buttons: 0 });
+    }
+    await slid();
+    await settle();
+    assert.deepEqual(shown(), more.slice(1));
+    assert.equal(toast.hidden, true);
+  });
+
+  await t.test('a touch whose implicit capture moves to the row still swipes', async () => {
+    layout();
+    const kilo = row('Kilo');
+    const body = kilo.querySelector('.todo-open');
+    const y = kilo.rect.top + 30;
+    pointer(body, 'pointerdown', 300, y);
+    clock += 16;
+    pointer(body, 'pointermove', 280, y); // locks: the row takes the capture from the body
+    pointer(body, 'lostpointercapture', 280, y, { outside: true });
+    for (const dx of [-120, -220]) {
+      clock += 40;
+      pointer(body, 'pointermove', 300 + dx, y);
+    }
+    assert.equal(kilo.style.transform, 'translateX(-220px)');
+    // The row itself losing it (no release seen) springs back.
+    pointer(kilo, 'lostpointercapture', 80, y, { outside: true });
+    assert.equal(kilo.style.transform, '');
+    await slid();
+    await settle();
+    assert.equal(shown().includes('Kilo'), true);
+    assert.equal(toast.hidden, true);
+  });
+
+  await t.test('the delete starts at release: an edit arriving mid-slide is not deleted', async () => {
+    const india = idFor('India');
+    swipeLeft('India');
+    // Undo is there at once; the row is still sliding.
+    assert.equal(toast.hidden, false);
+    assert.match(row('India').className, /is-leaving/);
+    // Another device edits it; a refresh lands during the slide.
+    servers.a.rows = servers.a.rows.map((item) => (item.id === india ? { ...item, text: 'India (edited)', revision: item.revision + 1 } : item));
+    window.dispatchEvent(new Event('focus'));
+    await settle();
+    await slid();
+    await settle();
+    assert.equal(shown().includes('India'), false);
+    runUndoTimer();
+    await settle(10);
+    // The delete was made against the revision swiped, so the edited task survives.
+    assert.equal(servers.a.rows.some((item) => item.id === india), true);
+    assert.equal(shown().includes('India (edited)'), true);
+    if (!byId('sync-note').hidden) byId('sync-dismiss').click();
+  });
+
+  await t.test('a session re-read (CSRF revalidation) during the slide: nothing is deleted, no toast', async () => {
+    const before = deleted().length;
+    swipeLeft('Juliet');
+    // A new token for the same account: the view is cleared and reloaded before the slide ends.
+    servers.a.session = { ...servers.a.session, csrfToken: 'token-a4' };
+    signIn(servers.a.session);
+    await settle();
+    assert.equal(shown().includes('Juliet'), true);
+    await slid();
+    await settle();
+    assert.equal(toast.hidden, true);
+    assert.equal(shown().includes('Juliet'), true);
+    runUndoTimer();
+    window.dispatchEvent(new Event('pagehide'));
+    await settle();
+    assert.equal(deleted().length, before);
+    assert.equal(servers.a.rows.some((item) => item.text === 'Juliet'), true);
+  });
+
+  await t.test('a reminder claim returning while its task waits behind Undo is not alerted', async () => {
+    const announcer = byId('announcer');
+    let open;
+    let gate = new Promise((resolve) => { open = resolve; });
+    const original = servers.a.fetch;
+    servers.a.fetch = async (url, init = {}) => {
+      const response = await original(url, init);
+      if (init.method === 'PATCH' && JSON.parse(init.body).action === 'markNotified') await gate;
+      return response;
+    };
+    t.after(() => { servers.a.fetch = original; });
+    const due = (texts) => {
+      servers.a.rows = servers.a.rows.map((item) => (texts.includes(item.text)
+        ? { ...item, due: Date.now() - 1000, notified: null, revision: item.revision + 1 } : item));
+    };
+    due(['Kilo']);
+    announcer.textContent = '';
+    signIn({ ...servers.a.session });
+    await settle();
+    // The claim is out; the task is swiped meanwhile.
+    press(row('Kilo').querySelector('.todo-checkbox'), 'Delete');
+    open();
+    await settle(10);
+    assert.doesNotMatch(announcer.textContent, /Kilo/);
+    // Undo: alerted now, as an unalerted due reminder is.
+    undo.click();
+    await settle();
+    assert.equal(announcer.textContent, 'Reminder due: Kilo');
+
+    // Claimed while waiting, then committed: never alerted, and the delete goes through.
+    gate = new Promise((resolve) => { open = resolve; });
+    due(['Lima']);
+    announcer.textContent = '';
+    signIn({ ...servers.a.session });
+    await settle();
+    press(row('Lima').querySelector('.todo-checkbox'), 'Delete');
+    open();
+    await settle(10);
+    runUndoTimer();
+    await settle(10);
+    assert.doesNotMatch(announcer.textContent, /Lima/);
+    assert.equal(servers.a.rows.some((item) => item.text === 'Lima'), false);
+    servers.a.fetch = original;
+  });
+
+  await t.test('with the keyboard up, the toast follows the visual viewport, never under the composer', async () => {
+    const vv = Object.assign(new EventTarget(), { height: 844, offsetTop: 0 });
+    window.visualViewport = vv;
+    document.documentElement.clientHeight = 844;
+    const form = byId('add-form');
+    press(row('Hotel').querySelector('.todo-checkbox'), 'Delete');
+    await settle();
+    assert.equal(toast.style.top ?? '', '');
+    // The keyboard comes up: the visual viewport ends at 450px.
+    vv.height = 450;
+    vv.dispatchEvent(new Event('resize'));
+    assert.equal(toast.style.top, `${450 - 12 - 56}px`);
+    assert.equal(toast.hidden, false);
+    // Safari pans the visual viewport.
+    vv.offsetTop = 40;
+    vv.dispatchEvent(new Event('scroll'));
+    assert.equal(toast.style.top, `${490 - 12 - 56}px`);
+    // Keyboard gone: back to its usual place.
+    vv.offsetTop = 0;
+    vv.height = 844;
+    vv.dispatchEvent(new Event('resize'));
+    assert.equal(toast.style.top, '');
+    // A visual viewport too short for both: the open composer wins, and the delete commits.
+    form.hidden = false;
+    form.rect = { top: 100, height: 60 };
+    vv.height = 150;
+    vv.dispatchEvent(new Event('resize'));
+    await settle();
+    assert.equal(toast.hidden, true);
+    assert.deepEqual(deleted().slice(-1), ['Hotel']);
+    form.hidden = true;
+    form.rect = { top: 0, height: 0 };
+    delete window.visualViewport;
+  });
+
+  await t.test('Ctrl+Z undoes from the list; the clock stops while the toast is hovered or focused', async () => {
+    press(row('India (edited)').querySelector('.todo-checkbox'), 'Delete');
+    await settle();
+    assert.equal(byId('toast-hint').hidden, false);
+    assert.equal(byId('toast-hint').textContent, 'Ctrl+Z to undo');
+    // In a text field, Ctrl+Z is the field's own.
+    assert.equal(keydown(byId('new-todo'), 'z', { ctrlKey: true }).defaultPrevented, false);
+    assert.equal(shown().includes('India (edited)'), false);
+    // Focus is on the next row: Ctrl+Z (or Cmd+Z) brings it back.
+    const event = keydown(document.activeElement, 'z', { ctrlKey: true });
+    assert.equal(event.defaultPrevented, true);
+    await settle();
+    assert.equal(shown().includes('India (edited)'), true);
+    assert.equal(toast.hidden, true);
+    assert.equal(focusKey(), JSON.stringify(['open', idFor('India')]));
+
+    // Hovered, the toast doesn't run out; it runs again once the pointer leaves.
+    swipeLeft('India (edited)');
+    await slid();
+    assert.equal(byId('toast-hint').hidden, true);
+    toast.dispatchEvent(new Event('pointerenter'));
+    assert.equal(undoTimers.size, 0);
+    runUndoTimer();
+    await settle();
+    assert.equal(toast.hidden, false);
+    toast.dispatchEvent(new Event('pointerleave'));
+    assert.equal(undoTimers.size, 1);
+    // Focused (Tab to Undo): the same.
+    toast.dispatchEvent(new Event('focusin'));
+    assert.equal(undoTimers.size, 0);
+    toast.dispatchEvent(Object.assign(new Event('focusout'), { relatedTarget: null }));
+    runUndoTimer();
+    await settle();
+    assert.equal(toast.hidden, true);
+    assert.equal(servers.a.rows.some((item) => item.id === idFor('India')), false);
   });
 });

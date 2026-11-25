@@ -104,3 +104,33 @@ test('a second delete commits the first, undo and drop send nothing', () => {
   pending.flush();
   assert.deepEqual(committed, ['a', 'd']);
 });
+
+test('pause stops the Undo clock; resume runs it for the time that was left', () => {
+  const clock = fakeClock();
+  let time = 0;
+  const committed = [];
+  const pending = createPendingDelete({ commit: (entry) => committed.push(entry.id), ...clock, now: () => time });
+  pending.start({ id: 'a' });
+  time = 3000;
+  pending.pause();
+  assert.equal(pending.paused, true);
+  assert.equal(clock.timers.size, 0);
+  time = 60000; // hovered or focused for a minute: still waiting
+  assert.deepEqual(committed, []);
+  pending.resume();
+  assert.deepEqual([...clock.timers.values()].map(({ ms }) => ms), [UNDO_MS - 3000]);
+  clock.fire();
+  assert.deepEqual(committed, ['a']);
+  // Paused, then undone: nothing is armed again by a late resume.
+  pending.start({ id: 'b' });
+  pending.pause();
+  pending.undo();
+  pending.resume();
+  assert.equal(clock.timers.size, 0);
+  assert.equal(pending.paused, false);
+  // A paused delete still commits when flushed (the next delete, leaving the page).
+  pending.start({ id: 'c' });
+  pending.pause();
+  pending.flush();
+  assert.deepEqual(committed, ['a', 'c']);
+});
