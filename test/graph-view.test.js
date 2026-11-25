@@ -397,6 +397,105 @@ test('pinch zoom anchors on the midpoint: an outer node between the fingers stay
   assert.deepEqual(env.opened, []);
 });
 
+test('an offscreen graph recovers when zooming out to the distance limit', (t) => {
+  const env = setup(t);
+  const fresh = [{ id: 'new0', text: 'Brand new', completed: false, createdAt: NOW, categoryId: null }];
+  env.graph.update({ todos: fresh, categories: [], now: NOW });
+  env.flush();
+  const canvas = env.canvases[0];
+  const ctx = canvas.getContext('2d');
+  const y = RECT.top + RECT.height / 2;
+  for (let i = 0; i < 8; i += 1) {
+    wheelAt(canvas, RECT.left + RECT.width, y, -400);
+    wheelAt(canvas, RECT.left, y, 400);
+  }
+  ctx.arcs.length = 0;
+  env.flush();
+  assert.equal(ctx.arcs.length, 0, 'alternating anchors moved both circles offscreen');
+
+  for (let i = 0; i < 15; i += 1) wheelAt(canvas, RECT.left + RECT.width / 2, y, 400);
+  env.flush();
+  assert.equal(ctx.arcs.length, 2, 'zooming out recovered the hub and the task');
+  for (const [x, y, r] of ctx.arcs) {
+    assert.ok(x - r >= 0 && x + r <= RECT.width && y - r >= 0 && y + r <= RECT.height);
+  }
+});
+
+test('lite restores task labels in one frame after gestures and hub animation', (t) => {
+  const env = setup(t);
+  env.setDrawMs(TIER_BUDGET.full.drawMs + 2);
+  const fresh = [{ id: 'new0', text: 'Brand new', completed: false, createdAt: NOW, categoryId: null }];
+  env.graph.update({ todos: fresh, categories: [], now: NOW });
+  const canvas = env.canvases[0];
+  const ctx = canvas.getContext('2d');
+  const x = RECT.left + RECT.width / 2;
+  const y = RECT.top + RECT.height / 2;
+  for (let i = 0; i < TIER_BUDGET.full.frames; i += 1) {
+    wheelAt(canvas, x, y, i % 2 ? 25 : -25);
+    env.flush(1);
+  }
+  assert.equal(env.root.dataset.mode, 'lite');
+  env.setDrawMs(1);
+
+  const draw = (showTask) => {
+    ctx.texts.length = 0;
+    assert.equal(env.flush(), 1);
+    assert.ok(ctx.texts.length > 0, 'hub label drawn');
+    assert.equal(ctx.texts.includes('BRAND NEW'), showTask);
+  };
+  const idle = () => {
+    const calls = ctx.calls;
+    env.idle();
+    assert.equal(env.flush(), 0);
+    assert.equal(ctx.calls, calls);
+    assert.equal(env.timers, 0);
+    assert.equal(env.root.dataset.mode, 'lite');
+  };
+  draw(false); // wheel burst that caused the transition
+  env.idle();
+  draw(true);
+  idle();
+
+  pointer(canvas, 'pointerdown', 1, x, y, 1000);
+  pointer(canvas, 'pointermove', 1, x + 20, y, 1016);
+  draw(false);
+  idle(); // holding the pointer still leaves the gesture active
+  pointer(canvas, 'pointerup', 1, x + 20, y, 1032);
+  draw(true);
+  idle();
+
+  pointer(canvas, 'pointerdown', 1, x - 30, y, 2000);
+  pointer(canvas, 'pointerdown', 2, x + 30, y, 2000);
+  pointer(canvas, 'pointermove', 2, x + 35, y, 2016);
+  draw(false);
+  pointer(canvas, 'pointercancel', 2, x + 35, y, 2032);
+  draw(true);
+  idle();
+
+  wheelAt(canvas, x, y, 25);
+  draw(false);
+  wheelAt(canvas, x, y, 25);
+  draw(false);
+  env.idle();
+  draw(true);
+  idle();
+
+  // The only hub has the larger circle. Tap its ring to start the re-centering animation.
+  const [hx, hy, hr] = ctx.arcs.slice(-2).sort((a, b) => b[2] - a[2])[0];
+  pointer(canvas, 'pointerdown', 1, RECT.left + hx - hr, RECT.top + hy, 3000);
+  pointer(canvas, 'pointerup', 1, RECT.left + hx - hr, RECT.top + hy, 3016);
+  const taskLabels = [];
+  for (let i = 0; env.pending && i < 30; i += 1) {
+    ctx.texts.length = 0;
+    env.flush(1);
+    taskLabels.push(ctx.texts.includes('BRAND NEW'));
+  }
+  assert.ok(taskLabels.length > 1, 'hub tap animated');
+  assert.deepEqual(taskLabels.slice(0, -1), Array(taskLabels.length - 1).fill(false));
+  assert.equal(taskLabels.at(-1), true, 'the last animation frame restored labels');
+  idle();
+});
+
 test('the static tier labels every task on the canvas and anchors wheel zoom in its top view', (t) => {
   const env = setup(t);
   env.setDrawMs(TIER_BUDGET.full.drawMs + 2);

@@ -6,8 +6,8 @@ import { toGraph } from './graph-data.js';
 import { drawFrame, MONO, PALETTE } from './graph-draw.js';
 import { createGesture, TAP_SLOP } from './graph-gesture.js';
 import {
-  createCamera, depthOrder, drawnRadius, extent, fitCamera, frameCamera, layout, lookAt, orbit, pick, pickNearest, project,
-  projectFlat, spreadOnScreen, zoom,
+  createCamera, depthOrder, DISTANCE, drawnRadius, extent, fitCamera, frameCamera, layout, lookAt, orbit, pick, pickNearest,
+  project, projectFlat, spreadOnScreen, zoom,
 } from './graph-space.js';
 
 export { projectFlat }; // the static tier's projection
@@ -128,10 +128,13 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
   let idleTimer = 0;
   let spin = null; // {vx, vy} px/ms after a flick
   let ease = null; // {from, to, start}
+  let wheeling = false;
+  let needsLabels = false;
   let lastFrame = null; // {t, live}
   let destroyed = false;
   const drawTimes = [];
   const gesture = createGesture();
+  const gesturing = () => gesture.mode === 'orbit' || gesture.mode === 'pinch';
   const still = () => Boolean(reducedMotion?.matches);
 
   // Fits the camera to the current viewport: the first time from the best starting angle, after
@@ -187,15 +190,16 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
     if (flatChanged) refit(tier === 'static');
   }
 
-  function render() {
+  function render(moving) {
     if (!camera || !size.width || !size.height) return;
     const viewport = { width: size.width, height: size.height };
     projected = (tier === 'static' ? projectFlat : project)(positions, nodes, camera, viewport, projected);
     order = depthOrder(projected, order);
     const started = clock();
+    needsLabels = tier === 'lite' && moving;
     drawFrame(ctx, {
       nodes, projected, order, links, dpr: size.dpr, width: size.width, height: size.height, tier, focusIndex,
-      palette, font,
+      moving, palette, font,
     });
     const ms = clock() - started;
     drawTimes.push(ms);
@@ -225,9 +229,9 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
       spin = { vx: spin.vx * decay, vy: spin.vy * decay };
       if (Math.hypot(spin.vx, spin.vy) < INERTIA.minSpeed) spin = null;
     }
-    render();
     // Frames that follow each other in a gesture or animation measure the device's frame rate.
-    const live = gesture.mode === 'orbit' || gesture.mode === 'pinch' || Boolean(spin || ease);
+    const live = gesturing() || Boolean(spin || ease);
+    render(live || wheeling);
     if (live && lastFrame?.live) setTier(meter.interval(t - lastFrame.t));
     lastFrame = { t, live };
     if (spin || ease) schedule();
@@ -238,6 +242,13 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
   // median draw time.
   function idle() {
     if (destroyed) return;
+    wheeling = false;
+    // A wheel burst has no release event. Repaint once after its last frame, or let the
+    // pointer release or animation's last frame restore the labels if one is still active.
+    if (needsLabels && !gesturing() && !frameId) {
+      schedule();
+      return;
+    }
     lastFrame = null;
     root.dataset.frameMs = median(drawTimes).toFixed(2);
     for (const [id, button] of buttons) {
@@ -331,10 +342,25 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
         const id = pick(now, nodes, x, y, 0) ?? pickNearest(now, nodes, x, y, TAP_SLOP.touch);
         if (id !== null) depth = now[index.get(id) * 4 + 3];
       }
-      camera = zoom(camera, intent.factor, {
-        x, y, toX: intent.cx - left, toY: intent.cy - top, depth, viewport: { width: size.width, height: size.height },
-        flat: tier === 'static',
-      });
+      const viewport = { width: size.width, height: size.height };
+      const flat = tier === 'static';
+      camera = zoom(camera, intent.factor, { x, y, toX: intent.cx - left, toY: intent.cy - top, depth, viewport, flat });
+      if (intent.factor > 1 && camera.distance === DISTANCE.max) {
+        // Anchoring can slide the whole graph away. At the zoom-out limit, fit it back into
+        // view if there isn't a visible circle left to zoom around.
+        const check = (flat ? projectFlat : project)(positions, nodes, camera, viewport);
+        const visible = nodes.some((node, i) => {
+          const k = i * 4;
+          const r = drawnRadius(node.radius, check[k + 2]);
+          const px = check[k];
+          const py = check[k + 1];
+          return r > 0 && px + r >= 0 && px - r <= viewport.width && py + r >= 0 && py - r <= viewport.height;
+        });
+        if (!visible) {
+          camera = lookAt(camera, { x: 0, y: 0, z: 0 });
+          refit();
+        }
+      }
       schedule();
     } else if (intent.type === 'release') {
       const speed = Math.hypot(intent.vx, intent.vy);
@@ -380,6 +406,7 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
   const onCancel = (event) => {
     gesture.cancel(event);
     spin = null;
+    if (needsLabels) schedule();
   };
   // A touch tap acts on pointerup; the click the browser synthesizes after it would land on
   // whatever the tap opened (the task sheet's scrim, which closes it). The canvas needs no click.
@@ -388,7 +415,11 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
   };
   const onWheel = (event) => {
     event.preventDefault();
-    act(gesture.wheel(event));
+    const intent = gesture.wheel(event);
+    if (!intent) return;
+    clearTimeout(idleTimer);
+    wheeling = true;
+    act(intent);
   };
   const onMotion = () => {
     if (!still()) return;

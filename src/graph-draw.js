@@ -240,17 +240,16 @@ export function planLabels(projected, nodes, order, {
   return picked;
 }
 
-// Indices of the nodes to label (see planLabels). `hubsOnly` is the lite tier, which redraws every
-// gesture frame; the static tier draws only on demand, so it labels every task like full.
+// Indices of the nodes to label (see planLabels).
 export function pickLabels(projected, nodes, order, options = {}) {
   return planLabels(projected, nodes, order, options).map((entry) => entry.index);
 }
 
 // frame: {nodes, projected (graph-space.js project), order (back to front), links (flat node
-// index pairs), dpr, width, height (CSS px), tier ('full'|'lite'|'static'), focusIndex (-1 for
-// none), palette?, font?}. Returns what was drawn, for diagnostics and tests.
+// index pairs), dpr, width, height (CSS px), tier ('full'|'lite'|'static'), moving?, focusIndex
+// (-1 for none), palette?, font?}. Returns what was drawn, for diagnostics and tests.
 export function drawFrame(ctx, frame) {
-  const { nodes, projected, order, links, dpr = 1, width, height, tier = 'full', focusIndex = -1 } = frame;
+  const { nodes, projected, order, links, dpr = 1, width, height, tier = 'full', moving = false, focusIndex = -1 } = frame;
   const palette = frame.palette ?? PALETTE;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = palette.bg;
@@ -318,7 +317,7 @@ export function drawFrame(ctx, frame) {
     ctx.stroke();
   }
 
-  const labels = planLabels(projected, nodes, order, { width, height, hubsOnly: tier === 'lite' });
+  const labels = planLabels(projected, nodes, order, { width, height, hubsOnly: tier === 'lite' && moving });
   if (labels.length) {
     const family = frame.font ?? MONO;
     if ('letterSpacing' in ctx) ctx.letterSpacing = '0.8px';

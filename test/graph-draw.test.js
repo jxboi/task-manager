@@ -322,16 +322,19 @@ test('long titles are drawn capped at 22 characters with an ellipsis', () => {
   assert.equal([...'WRITE THE QUARTERLY R…'].length, 22);
 });
 
-test('the lite tier labels hubs only; the static tier labels every task like full', () => {
+test('only a moving lite frame omits task labels', () => {
   const { nodes, projected, order } = scene([['hub', 'hub', 50, 50, 1, 50, 8, 'HUB'], ['task', 'open', 50, 300, 1, 10, 5, 'TASK']]);
-  const labelled = (tier) => {
+  const labelled = (tier, moving) => {
     const { ctx, named } = recorder();
-    drawFrame(ctx, { nodes, projected, order, links: [], width: 390, height: 700, tier });
+    drawFrame(ctx, { nodes, projected, order, links: [], width: 390, height: 700, tier, moving });
     return named('fillText').map(([, text]) => text).sort();
   };
-  assert.deepEqual(labelled('lite'), ['HUB']);
-  assert.deepEqual(labelled('static'), ['HUB', 'TASK']);
-  assert.deepEqual(labelled('full'), ['HUB', 'TASK']);
+  assert.deepEqual(labelled('lite', true), ['HUB']);
+  assert.deepEqual(labelled('lite', false), ['HUB', 'TASK']);
+  for (const tier of ['static', 'full']) {
+    assert.deepEqual(labelled(tier, false), ['HUB', 'TASK']);
+    assert.deepEqual(labelled(tier, true), ['HUB', 'TASK']);
+  }
 });
 
 test('the static tier top view labels every task, capped, inside the canvas and clear of circles and labels', () => {
