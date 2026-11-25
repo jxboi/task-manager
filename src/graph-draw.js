@@ -23,7 +23,7 @@ export const LABELS = {
   gap: 4, // px between a circle and its label
   halo: 3, // px of page colour around each label, so it reads over circles and links
 };
-const MIN_DRAWN_RADIUS = 0.35; // CSS px; smaller circles aren't drawn
+const MIN_DRAWN_RADIUS = 1.5; // CSS px; smaller circles aren't drawn
 
 const colourFor = (palette, state) => (state === 'done' ? palette.done : state === 'hub' ? palette.hub : palette.open);
 

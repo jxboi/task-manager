@@ -6,7 +6,7 @@ import { toGraph } from './graph-data.js';
 import { drawFrame, MONO, PALETTE } from './graph-draw.js';
 import { createGesture, TAP_SLOP } from './graph-gesture.js';
 import {
-  createCamera, depthOrder, extent, focalLength, layout, lookAt, orbit, pick, project, zoom,
+  createCamera, depthOrder, extent, fitCamera, focalLength, layout, lookAt, orbit, pick, pickNearest, project, zoom,
 } from './graph-space.js';
 
 // Quality tiers step down within a session, never up. 'list' is chosen at mount (no 2D canvas).
@@ -317,8 +317,9 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
       const slop = TAP_SLOP[intent.pointerType] ?? TAP_SLOP.mouse;
       const x = intent.x - (rect.left || 0);
       const y = intent.y - (rect.top || 0);
-      // A circle under the finger wins over a nearer one that only reaches it with the slop.
-      const id = pick(projected, nodes, x, y, 0) ?? pick(projected, nodes, x, y, slop);
+      // An exact hit on a drawn circle wins (front-most by depth); when the tap lands only
+      // in the expanded touch areas, pick the nearest visible node to the finger.
+      const id = pick(projected, nodes, x, y, 0) ?? pickNearest(projected, nodes, x, y, slop);
       const node = id === null ? null : nodes[index.get(id)];
       if (node?.kind === 'task') onOpenTask?.(node.todoId);
       else if (node?.kind === 'hub') centreOn(node);
@@ -407,7 +408,13 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
       projected = null;
       order = null;
       focusIndex = -1;
-      camera ??= createCamera(extent(positions, nodes));
+      if (!camera) {
+        camera = createCamera(extent(positions, nodes));
+        // Tighten: fit to the actual projected bounds so the graph fills the canvas.
+        if (size.width > 0 && size.height > 0) {
+          camera = fitCamera(camera, positions, nodes, { width: size.width, height: size.height });
+        }
+      }
       renderList(todos);
       schedule();
     },

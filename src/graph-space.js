@@ -168,6 +168,48 @@ export function createCamera(reach = 0) {
   };
 }
 
+// Fit the camera distance so the projected layout fills the viewport with `padding` CSS px
+// of room on each side (for labels). `positions` and `nodes` are from layout(); `viewport`
+// is {width, height}. The camera's yaw/pitch/target stay as given, only distance changes.
+export function fitCamera(camera, positions, nodes, viewport, padding = 40) {
+  const focal = focalLength(viewport);
+  const cosYaw = Math.cos(camera.yaw);
+  const sinYaw = Math.sin(camera.yaw);
+  const cosPitch = Math.cos(camera.pitch);
+  const sinPitch = Math.sin(camera.pitch);
+  const { target } = camera;
+  const cx = viewport.width / 2;
+  const cy = viewport.height / 2;
+
+  // Find the camera distance where every node fits inside (cx ± usable, cy ± usable).
+  // For each node: sx = cx + x1 * focal / (distance + z2), so |x1 * focal / (distance + z2)| <= usable.
+  // Rearranging: distance >= |x1| * focal / usable - z2.
+  let minDist = DISTANCE.min;
+  for (const node of nodes) {
+    const p = positions.get(node.id);
+    if (!p) continue;
+    const x = p.x - target.x;
+    const y = p.y - target.y;
+    const z = p.z - target.z;
+    const x1 = x * cosYaw - z * sinYaw;
+    const z1 = x * sinYaw + z * cosYaw;
+    const y2 = y * cosPitch - z1 * sinPitch;
+    const z2 = y * sinPitch + z1 * cosPitch;
+    // Account for the circle's projected radius: use a worst-case extra screen extent.
+    // At a given distance, the node occupies r * focal / (distance + z2) extra CSS px.
+    // For the fit we need: (|x1| + r) * focal / (distance + z2) <= usable, so:
+    // distance >= (|x1| + r) * focal / usable - z2.
+    const r = node.radius;
+    const usableX = cx - padding;
+    const usableY = cy - padding;
+    if (usableX > 0) minDist = Math.max(minDist, (Math.abs(x1) + r) * focal / usableX - z2);
+    if (usableY > 0) minDist = Math.max(minDist, (Math.abs(y2) + r) * focal / usableY - z2);
+  }
+  // Add a little margin (5%) so it isn't pixel-tight.
+  const distance = clamp(minDist * 1.05, DISTANCE.min, DISTANCE.max);
+  return { ...camera, distance };
+}
+
 // Drag right turns the scene right; pitch stops short of the poles.
 export function orbit(camera, dxPx, dyPx) {
   return {
@@ -257,6 +299,25 @@ export function pick(projected, nodes, x, y, slopPx = 0) {
     if (depth < bestDepth && Math.hypot(projected[k] - x, projected[k + 1] - y) <= reach) {
       best = nodes[i].id;
       bestDepth = depth;
+    }
+  }
+  return best;
+}
+
+// The id of the nearest visible node within `slopPx` of (x, y), by screen distance (not depth).
+// Use when an exact hit missed: picks the circle the finger is closest to, not the front-most.
+export function pickNearest(projected, nodes, x, y, slopPx) {
+  let best = null;
+  let bestDist = Infinity;
+  for (let i = 0; i < nodes.length; i += 1) {
+    const k = i * 4;
+    const scale = projected[k + 2];
+    if (!(scale > 0)) continue;
+    const r = nodes[i].radius * scale;
+    const dist = Math.hypot(projected[k] - x, projected[k + 1] - y) - r;
+    if (dist <= slopPx && dist < bestDist) {
+      best = nodes[i].id;
+      bestDist = dist;
     }
   }
   return best;
