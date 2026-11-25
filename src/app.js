@@ -427,6 +427,7 @@ function renderTodo(todo, now) {
   remove.type = 'button';
   remove.className = 'todo-delete';
   remove.setAttribute('aria-label', `Delete ${todo.text}`);
+  setDeleteReachable(remove, false);
   const pill = document.createElement('span');
   pill.className = 'todo-delete-pill';
   pill.append(icon(trashIcon));
@@ -1816,7 +1817,20 @@ function settleRow(row, offset) {
 
 // While a row is open its card is clipped out of view: its controls leave the tab order (the Delete
 // button stays in it) and come back on close.
+// The Delete button is reachable (tab order, accessibility tree, pointer) only while its row is open.
+function setDeleteReachable(button, reachable) {
+  if (reachable) {
+    button.removeAttribute('inert');
+    button.removeAttribute('tabindex');
+  } else {
+    button.setAttribute('inert', '');
+    button.setAttribute('tabindex', '-1');
+  }
+}
+
 function setCardTabbable(row, tabbable) {
+  const button = row.querySelector('.todo-delete');
+  if (button) setDeleteReachable(button, !tabbable);
   for (const control of row.querySelectorAll('.todo-checkbox, .todo-open, .todo-handle')) {
     if (tabbable) control.removeAttribute('tabindex');
     else control.setAttribute('tabindex', '-1');
@@ -1911,7 +1925,10 @@ document.addEventListener('pointermove', (event) => {
   const phase = gesture.move(event.clientX, event.clientY, event.timeStamp);
   if (phase === 'vertical' || drag || !row.isConnected) {
     swipe = null;
-    if (gesture.open) closeRow(); // the page scrolls
+    if (gesture.open) {
+      closeRow(); // the page scrolls
+      swallowNextClick(false); // and the click of this press's release is not a tap
+    }
     return;
   }
   if (phase !== 'horizontal') return;
@@ -1975,7 +1992,7 @@ function endSwipe(event, cancelled, swallow = true) {
 // with no pointer (detail 0: Enter or Space) is a keyboard delete: the toast says Ctrl+Z.
 list.addEventListener('click', (event) => {
   const row = event.target.closest('.todo-delete')?.closest('.todo');
-  if (!row?.dataset.id || row.classList.contains('is-leaving')) return;
+  if (!row?.dataset.id || row.classList.contains('is-leaving') || reveal.openId !== row.dataset.id) return;
   slideOut(row, row.getBoundingClientRect().width, { keyboard: event.detail === 0 });
 });
 

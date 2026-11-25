@@ -1358,6 +1358,55 @@ test('swipe left to delete, with Undo', async (t) => {
     keydown(deleteButton('Golf'), 'Escape');
   });
 
+  await t.test('fix 6: a short vertical mouse drag on an open row closes it and its click opens nothing', async () => {
+    await freshReveal();
+    reveal('Golf');
+    await released();
+    const card = row('Golf').querySelector('.todo-open');
+    drag(card, [[0, 14, 16]], { pointerType: 'mouse', buttons: 1 });
+    assert.equal(isOpen('Golf'), false);
+    card.click(); // the release click, over the card
+    assert.equal(layer.hidden, true, 'the edit sheet did not open');
+    await released();
+    // From the pill: the row closes, and the click over the pill deletes nothing.
+    reveal('Golf');
+    await released();
+    const button = deleteButton('Golf');
+    drag(button, [[0, 14, 16]], { pointerType: 'mouse', buttons: 1 });
+    button.click();
+    assert.equal(toast.hidden, true);
+    assert.deepEqual(sent(), []);
+    await released();
+    // A plain tap on the open card still only closes it.
+    reveal('Golf');
+    await released();
+    tap(row('Golf').querySelector('.todo-open'));
+    assert.equal(isOpen('Golf'), false);
+    assert.equal(layer.hidden, true);
+    await released();
+  });
+
+  await t.test('fix 6: a closed row\'s Delete is unreachable at once, and activating it does nothing', async () => {
+    for (const reduced of [false, true]) {
+      await freshReveal();
+      matchMedia('(prefers-reduced-motion: reduce)').matches = reduced;
+      reveal('Golf');
+      await released();
+      assert.equal(deleteButton('Golf').getAttribute('tabindex'), null);
+      assert.equal(deleteButton('Golf').getAttribute('inert'), null);
+      const button = deleteButton('Golf');
+      keydown(button, 'Escape'); // within the settle window: no waiting
+      assert.equal(button.getAttribute('tabindex'), '-1');
+      assert.notEqual(button.getAttribute('inert'), null);
+      button.click();
+      assert.equal(toast.hidden, true);
+      assert.deepEqual(sent(), []);
+      await released();
+      assert.notEqual(button.getAttribute('inert'), null, 'closed from the start too');
+      matchMedia('(prefers-reduced-motion: reduce)').matches = false;
+    }
+  });
+
   await t.test('reduced motion: the reveal and the Delete button act at once, with no slide', async () => {
     await freshReveal();
     matchMedia('(prefers-reduced-motion: reduce)').matches = true;
