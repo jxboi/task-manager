@@ -1,7 +1,9 @@
 // The graph view's drawing, over anything shaped like a CanvasRenderingContext2D: a flat page,
 // hairline links, circles back to front (hubs as ink rings) and a small monospace label on every node. Pure apart from the
 // calls on `ctx`; src/graph-view.js owns the canvas and when to draw.
-import { drawnRadius } from './graph-space.js';
+import { drawnRadius, HUB_RING } from './graph-space.js';
+
+export { HUB_RING };
 
 // Defaults matching the styles.css tokens; graph-view.js passes the live tokens when it can.
 export const PALETTE = {
@@ -15,7 +17,6 @@ export const PALETTE = {
   focus: '#111111',
 };
 export const MONO = 'ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace'; // --mono
-export const HUB_RING = 1.5; // px: hubs are an unfilled ink ring
 export const LABELS = {
   max: 250, // a safety cap on task labels per frame; hub labels always show
   size: 10, // px
@@ -161,7 +162,10 @@ export function planLabels(projected, nodes, order, {
 } = {}) {
   const picked = [];
   const circles = grid();
-  for (const c of visibleCircles(projected, nodes, width, height)) circles.add(c, c.x - c.r, c.y - c.r, c.x + c.r, c.y + c.r);
+  for (const c of visibleCircles(projected, nodes, width, height)) {
+    circles.add(c, Math.max(0, c.x - c.r), Math.max(0, c.y - c.r),
+      Math.min(width, c.x + c.r), Math.min(height, c.y + c.r));
+  }
   const placed = grid();
   const pad = LABELS.pad;
   // Counts stop once past `limit`: a spot that can't beat the best so far needn't be counted out.

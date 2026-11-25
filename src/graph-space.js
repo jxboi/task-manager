@@ -7,6 +7,7 @@ export const PITCH_LIMIT = 1.4;
 export const DISTANCE = { initial: 600, min: 40, max: 2400 };
 export const ORBIT_RADIANS_PER_PX = 0.006;
 export const MIN_SCREEN_RADIUS = 3; // CSS px; drawn circles and hit testing clamp to at least this
+export const HUB_RING = 1.5; // CSS px; stroke centred on the hub's drawn radius
 
 // On-screen radius in CSS px for a node with positive projection `scale`.
 export function drawnRadius(radius, scale) {
@@ -507,26 +508,38 @@ export function depthOrder(projected, out = null) {
   return order.sort((a, b) => projected[b * 4 + 3] - projected[a * 4 + 3] || a - b);
 }
 
-// The id of the front-most node whose drawn radius plus `slopPx` covers (x, y), or null.
+function hitDistance(node, scale, dx, dy) {
+  const fromEdge = Math.hypot(dx, dy) - drawnRadius(node.radius, scale);
+  return node.kind === 'hub' ? Math.abs(fromEdge) - HUB_RING / 2 : fromEdge;
+}
+
+// The front-most exact task hit takes priority. Other hits use depth order.
 export function pick(projected, nodes, x, y, slopPx = 0) {
   let best = null;
   let bestDepth = Infinity;
+  let exactTask = null;
+  let exactTaskDepth = Infinity;
   for (let i = 0; i < nodes.length; i += 1) {
     const k = i * 4;
     const scale = projected[k + 2];
     if (!(scale > 0)) continue;
-    const reach = drawnRadius(nodes[i].radius, scale) + slopPx;
+    const node = nodes[i];
+    const dist = hitDistance(node, scale, projected[k] - x, projected[k + 1] - y);
     const depth = projected[k + 3];
-    if (depth < bestDepth && Math.hypot(projected[k] - x, projected[k + 1] - y) <= reach) {
-      best = nodes[i].id;
+    if (node.kind !== 'hub' && dist <= 0) {
+      if (depth < exactTaskDepth) {
+        exactTask = node.id;
+        exactTaskDepth = depth;
+      }
+    } else if (dist <= slopPx && depth < bestDepth) {
+      best = node.id;
       bestDepth = depth;
     }
   }
-  return best;
+  return exactTask ?? best;
 }
 
-// The id of the nearest visible node within `slopPx` of (x, y), by screen distance (not depth).
-// Use when an exact hit missed: picks the circle the finger is closest to, not the front-most.
+// After an exact miss, pick the nearest visible circle or ring within `slopPx`.
 export function pickNearest(projected, nodes, x, y, slopPx) {
   let best = null;
   let bestDist = Infinity;
@@ -534,8 +547,7 @@ export function pickNearest(projected, nodes, x, y, slopPx) {
     const k = i * 4;
     const scale = projected[k + 2];
     if (!(scale > 0)) continue;
-    const r = drawnRadius(nodes[i].radius, scale);
-    const dist = Math.hypot(projected[k] - x, projected[k + 1] - y) - r;
+    const dist = hitDistance(nodes[i], scale, projected[k] - x, projected[k + 1] - y);
     if (dist <= slopPx && dist < bestDist) {
       best = nodes[i].id;
       bestDist = dist;

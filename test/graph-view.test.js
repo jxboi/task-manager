@@ -256,7 +256,7 @@ test('reduced motion: no inertia after a flick, read live from the media query',
   assert.ok(env.flush() > 5, 'with motion allowed again, the flick spins');
 });
 
-test('a hub tap re-centres on it: eased over frames, or at once under reduced motion', async (t) => {
+test('a hub stroke tap re-centres on it: eased over frames, or at once under reduced motion', async (t) => {
   // One subtest each: setup's globals are put back when its own test ends.
   for (const reduced of [false, true]) await t.test(reduced ? 'reduced motion' : 'eased', (t) => {
     const env = setup(t, { reduced });
@@ -266,9 +266,13 @@ test('a hub tap re-centres on it: eased over frames, or at once under reduced mo
     const ctx = env.canvases[0].getContext('2d');
     const atCentre = ([x, y]) => Math.abs(x - RECT.width / 2) < 1 && Math.abs(y - RECT.height / 2) < 1;
     assert.equal(ctx.arcs.filter(atCentre).length, 0, 'neither hub starts at the centre');
-    const [[hx, hy]] = ctx.arcs.map(([x, y]) => [x, y]).sort((p, q) => p[0] - q[0]); // tap the left one
-    pointer(env.canvases[0], 'pointerdown', 1, hx + RECT.left, hy + RECT.top, 100, 'mouse');
-    pointer(env.canvases[0], 'pointerup', 1, hx + RECT.left, hy + RECT.top, 150, 'mouse');
+    const [[hx, hy, r]] = [...ctx.arcs].sort((p, q) => p[0] - q[0]);
+    const [canvas] = env.canvases;
+    pointer(canvas, 'pointerdown', 1, hx + RECT.left, hy + RECT.top, 0, 'mouse');
+    pointer(canvas, 'pointerup', 1, hx + RECT.left, hy + RECT.top, 50, 'mouse');
+    assert.equal(env.flush(), 0, 'a tap on the hollow centre leaves the camera in place');
+    pointer(canvas, 'pointerdown', 1, hx + r + RECT.left, hy + RECT.top, 100, 'mouse');
+    pointer(canvas, 'pointerup', 1, hx + r + RECT.left, hy + RECT.top, 150, 'mouse');
     ctx.arcs.length = 0;
     const frames = env.flush();
     assert.equal(env.opened.length, 0);

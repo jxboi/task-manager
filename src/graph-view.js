@@ -329,8 +329,7 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
       const slop = TAP_SLOP[intent.pointerType] ?? TAP_SLOP.mouse;
       const x = intent.x - (rect.left || 0);
       const y = intent.y - (rect.top || 0);
-      // An exact hit on a drawn circle wins (front-most by depth); when the tap lands only
-      // in the expanded touch areas, pick the nearest visible node to the finger.
+      // Try task circles, then hub strokes, then the nearest visible node within the touch slop.
       const id = pick(projected, nodes, x, y, 0) ?? pickNearest(projected, nodes, x, y, slop);
       const node = id === null ? null : nodes[index.get(id)];
       if (node?.kind === 'task') onOpenTask?.(node.todoId);

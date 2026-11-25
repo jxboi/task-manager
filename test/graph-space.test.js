@@ -457,6 +457,28 @@ test('pickNearest: returns the nearest visible node by screen distance, not dept
   assert.equal(pickNearest(projected, nodes, 100, 100, 0), 'back'); // dist = 0-10 = -10
 });
 
+test('tapping a task inside a foreground hub ring picks the task', () => {
+  const nodes = [{ id: 'hub', kind: 'hub', radius: 20 }, { id: 'task', kind: 'task', radius: 5 }];
+  const projected = Float32Array.from([100, 100, 2, 100, 135, 100, 1, 200]);
+  assert.equal(pick(projected, nodes, 135, 100), 'task', 'exact task inside the ring');
+  assert.equal(pick(projected, nodes, 135, 100, 8), 'task', 'task beats hub touch tolerance');
+  assert.equal(pick(projected, nodes, 140, 100), 'task', 'task takes priority at the stroke');
+  assert.equal(pick(projected, nodes, 100, 100), null, 'hollow centre');
+  assert.equal(pickNearest(projected, nodes, 100, 100, 8), null, 'hollow centre with touch tolerance');
+});
+
+test('tapping a hub ring hits its stroke and the slop on either side', () => {
+  const nodes = [{ id: 'hub', kind: 'hub', radius: 20 }, { id: 'task', kind: 'task', radius: 3 }];
+  const projected = Float32Array.from([100, 100, 2, 100, 100, 132, 1, 200]);
+  assert.equal(pick(projected, nodes, 140.7, 100), 'hub', 'on the outer half of the stroke');
+  assert.equal(pick(projected, nodes, 139.3, 100), 'hub', 'on the inner half of the stroke');
+  assert.equal(pick(projected, nodes, 139, 100), null, 'past the inner edge of the stroke');
+  assert.equal(pick(projected, nodes, 141, 100), null, 'past the outer edge of the stroke');
+  assert.equal(pickNearest(projected, nodes, 132, 100, 8), 'hub');
+  assert.equal(pickNearest(projected, nodes, 148, 100, 8), 'hub');
+  assert.equal(pickNearest(projected, nodes, 100, 136, 8), 'task', 'nearest edge wins over the foreground hub');
+});
+
 test('drawnRadius, pick, and pickNearest clamp small on-screen nodes to MIN_SCREEN_RADIUS consistently', () => {
   assert.equal(drawnRadius(3, 0), 0);
   assert.equal(drawnRadius(3, 0.16), MIN_SCREEN_RADIUS);

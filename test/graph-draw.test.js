@@ -33,6 +33,25 @@ function scene(rows) {
   return { nodes, projected, order };
 }
 
+test('a huge near-camera circle only occupies label grid cells on the canvas', (t) => {
+  const { nodes, projected, order } = scene([['hub', 'hub', -20000, 350, 1000, 1.01, 21]]);
+  const width = 390;
+  const height = 700;
+  const canvasCells = (Math.floor(width / 40) + 1) * (Math.floor(height / 40) + 1);
+  const set = Map.prototype.set;
+  let inserted = 0;
+  t.mock.method(Map.prototype, 'set', function (key, value) {
+    if (typeof key === 'number') {
+      inserted += 1;
+      assert.ok(inserted <= canvasCells, 'grid exceeds the canvas cell count');
+    }
+    return set.call(this, key, value);
+  });
+
+  assert.deepEqual(planLabels(projected, nodes, order, { width, height }), []);
+  assert.equal(inserted, canvasCells, 'the visible bounds cover the canvas');
+});
+
 test('paints the page, then links, then circles back to front: tasks filled by state, hubs an unfilled ink ring', () => {
   const { nodes, projected, order } = scene([
     ['hub', 'hub', 100, 100, 1, 50, 11],
