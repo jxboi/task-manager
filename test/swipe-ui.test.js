@@ -538,10 +538,20 @@ test('swipe left to delete, with Undo', async (t) => {
     vv.height = 844;
     vv.dispatchEvent(new Event('resize'));
     assert.equal(toast.style.top, '');
-    // A visual viewport too short for both: the open composer wins, and the delete commits.
+    const deletedBefore = deleted().length;
+    // The composer is open and the toast would cover it (landscape with the keyboard up): the
+    // toast stacks above the field, and Undo stays available.
     form.hidden = false;
     form.rect = { top: 100, height: 60 };
     vv.height = 150;
+    vv.dispatchEvent(new Event('resize'));
+    await settle();
+    assert.equal(toast.hidden, false);
+    assert.equal(toast.style.top, `${100 - 12 - 56}px`);
+    assert.equal(deleted().length, deletedBefore);
+    // No room anywhere: only then does the delete commit.
+    form.rect = { top: 10, height: 60 };
+    vv.height = 100;
     vv.dispatchEvent(new Event('resize'));
     await settle();
     assert.equal(toast.hidden, true);
@@ -586,5 +596,94 @@ test('swipe left to delete, with Undo', async (t) => {
     await settle();
     assert.equal(toast.hidden, true);
     assert.equal(servers.a.rows.some((item) => item.id === idFor('India')), false);
+  });
+
+  // --- Review fixes 2 ----------------------------------------------------------------------
+  await t.test('the slide ending does not steal focus from the composer or rebuild a pressed row', async () => {
+    await fresh();
+    const form = byId('add-form');
+    // Swipe, then tap New task before the slide ends: the field keeps focus.
+    swipeLeft('Golf');
+    byId('add-toggle').click();
+    assert.equal(document.activeElement, byId('new-todo'));
+    await slid();
+    await settle();
+    assert.equal(shown().includes('Golf'), false);
+    assert.equal(document.activeElement, byId('new-todo'));
+    undo.click();
+    await settle();
+    form.hidden = true;
+    byId('add-toggle').setAttribute('aria-expanded', 'false');
+    document.activeElement = document.body;
+
+    // Swipe, then press the next row before the slide ends: that row is still the one pressed.
+    swipeLeft('Golf');
+    const hotel = row('Hotel');
+    const down = Object.assign(new Event('pointerdown'), { pointerId: 9, button: 0, isPrimary: true, clientX: 200, clientY: 300 });
+    document.dispatchEvent(down);
+    await slid();
+    assert.equal(shown().includes('Golf'), false);
+    assert.equal(row('Hotel'), hotel);
+    document.dispatchEvent(Object.assign(new Event('pointercancel'), { pointerId: 9 }));
+    await settle();
+    runUndoTimer();
+    await settle(10);
+    await fresh();
+  });
+
+  await t.test('a held reminder is dropped when the task was deleted elsewhere before Undo', async () => {
+    await fresh();
+    const announcer = byId('announcer');
+    let open;
+    const gate = new Promise((resolve) => { open = resolve; });
+    const original = servers.a.fetch;
+    servers.a.fetch = async (url, init = {}) => {
+      const response = await original(url, init);
+      if (init.method === 'PATCH' && JSON.parse(init.body).action === 'markNotified') await gate;
+      return response;
+    };
+    t.after(() => { servers.a.fetch = original; });
+    servers.a.rows = servers.a.rows.map((item) => (item.text === 'Kilo'
+      ? { ...item, due: Date.now() - 1000, notified: null, revision: item.revision + 1 } : item));
+    announcer.textContent = '';
+    signIn({ ...servers.a.session });
+    await settle();
+    press(row('Kilo').querySelector('.todo-checkbox'), 'Delete');
+    open();
+    await settle(10);
+    // Another device deletes it; the list refreshes.
+    servers.a.rows = servers.a.rows.filter((item) => item.text !== 'Kilo');
+    signIn({ ...servers.a.session });
+    await settle();
+    undo.click();
+    await settle();
+    assert.doesNotMatch(announcer.textContent, /Kilo/);
+    servers.a.fetch = original;
+    await fresh();
+  });
+
+  await t.test('the Ctrl+Z hint is only shown when the shortcut works from the focused element', async () => {
+    await fresh();
+    const form = byId('add-form');
+    const hint = byId('toast-hint');
+    // Composer open, a single row left: focus falls back to the text field.
+    servers.a.rows = servers.a.rows.slice(0, 1);
+    signIn({ ...servers.a.session });
+    await settle();
+    byId('add-toggle').click();
+    press(rows()[0].querySelector('.todo-checkbox'), 'Delete');
+    await settle();
+    assert.equal(document.activeElement, byId('new-todo'));
+    assert.equal(hint.hidden, true);
+    undo.click();
+    await settle();
+    form.hidden = true;
+    byId('add-toggle').setAttribute('aria-expanded', 'false');
+    document.activeElement = document.body;
+    press(rows()[0].querySelector('.todo-checkbox'), 'Delete');
+    await settle();
+    assert.equal(hint.hidden, false);
+    undo.click();
+    await settle();
   });
 });

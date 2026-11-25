@@ -1861,14 +1861,16 @@ list.addEventListener('keydown', (event) => {
   deleteLater(row.dataset.id, { keyboard: true });
 });
 
+const undoKeyReaches = (target) =>
+  list.contains(target) || toast.contains(target) || target === addToggle || target === document.body;
+
 // Ctrl+Z (Cmd+Z) undoes the waiting delete from the list, the toast or the + button: after a
 // keyboard delete focus is on the next row, and Undo is far behind it in the tab order. Text
 // fields keep their own undo.
 document.addEventListener('keydown', (event) => {
   if (!pendingDelete.entry || event.defaultPrevented || event.isComposing || event.repeat || app.inert ||
       event.key?.toLowerCase() !== 'z' || !(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey) return;
-  const target = event.target;
-  if (!(list.contains(target) || toast.contains(target) || target === addToggle || target === document.body)) return;
+  if (!undoKeyReaches(event.target)) return;
   event.preventDefault();
   undoDelete();
 });
@@ -1896,8 +1898,18 @@ function deleteLater(id, { slide = false, keyboard = false } = {}) {
 function endSlide(entry, keys) {
   if (sliding !== entry) return;
   sliding = null;
-  if (pendingDelete.entry === entry) render(keys);
-  else flushRender();
+  if (pendingDelete.entry !== entry) return flushRender();
+  // A new press, a reorder drag or a field being typed in must not lose its element or focus to
+  // the rebuild: drop just the swiped row, and let the next render do the rest.
+  const active = document.activeElement;
+  if (pressing || drag || active === input || form.contains(active) || active?.matches?.('input, textarea, select')) {
+    Array.from(list.children).find((item) => item.dataset?.id === entry.id)?.remove();
+    renderPending = true;
+    pendingFocus = undefined;
+    if (!drag) flushRender();
+    return;
+  }
+  render(keys);
 }
 
 // Undo: the task never left the sync model, so it comes back with its place, category and fields.
@@ -1909,7 +1921,8 @@ function undoDelete() {
   syncChanged();
   render([key('open', entry.id), key('checkbox', entry.id)]);
   // Its reminder was claimed while it waited: alert it now, as for any due reminder.
-  const held = heldAlert?.id === entry.id ? findTodo(entry.id) ?? heldAlert : null;
+  // Only if it still exists: a task deleted elsewhere meanwhile is gone from state.
+  const held = heldAlert?.id === entry.id ? findTodo(entry.id) : null;
   heldAlert = null;
   if (held) {
     notify([held]);
@@ -1936,6 +1949,7 @@ const APPLE = /Mac|iPhone|iPad/.test(globalThis.navigator?.platform ?? '');
 function showToast(keyboard = false) {
   toastText.textContent = 'Task deleted';
   // After a keyboard delete, say how to undo without tabbing to the button.
+  keyboard &&= undoKeyReaches(document.activeElement);
   toastHint.textContent = keyboard ? (APPLE ? '⌘Z to undo' : 'Ctrl+Z to undo') : '';
   toastHint.hidden = !keyboard;
   toast.hidden = false;
@@ -1958,7 +1972,7 @@ function hideToast() {
 // iOS Safari keeps a fixed element on the layout viewport, so the keyboard can cover it. While
 // the toast is up it follows the visual viewport: when that ends above the layout viewport's
 // bottom (the keyboard is up), the toast sits just above it. If it would still cover the open
-// composer (a very short visual viewport), the delete is committed rather than hidden or covering.
+// composer, it moves above the field. Only with no room anywhere does the delete commit.
 let followed = null;
 function followViewport(on) {
   const vv = on ? window.visualViewport ?? null : null;
@@ -1986,9 +2000,18 @@ function placeToast() {
   if (form.hidden) return;
   const pill = toast.getBoundingClientRect();
   const field = form.getBoundingClientRect();
+  const height = pill.height || 56;
   const top = toast.style.top ? parseFloat(toast.style.top) : pill.top;
-  const overlaps = field.height > 0 && top < field.top + field.height && top + (pill.height || 56) > field.top;
-  if (overlaps) pendingDelete.flush();
+  if (!(field.height > 0 && top < field.top + field.height && top + height > field.top)) return;
+  // It would cover the composer: stack it just above the field. Only with no room for it
+  // there (a very short visual viewport) does the delete go through.
+  const above = field.top - TOAST_GAP - height;
+  if (above >= (box?.top ?? 0)) {
+    toast.style.top = `${Math.round(above)}px`;
+    toast.style.bottom = 'auto';
+  } else {
+    pendingDelete.flush();
+  }
 }
 
 toastUndo.addEventListener('click', undoDelete);
