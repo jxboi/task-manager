@@ -549,6 +549,14 @@ test('swipe left to delete, with Undo', async (t) => {
     assert.equal(toast.hidden, false);
     assert.equal(toast.style.top, `${100 - 12 - 56}px`);
     assert.equal(deleted().length, deletedBefore);
+    // No room above but room below: it goes below the field, Undo stays.
+    form.rect = { top: 24, height: 56 };
+    vv.height = 160;
+    vv.dispatchEvent(new Event('resize'));
+    await settle();
+    assert.equal(toast.hidden, false);
+    assert.equal(toast.style.top, `${80 + 12}px`);
+    assert.equal(deleted().length, deletedBefore);
     // No room anywhere: only then does the delete commit.
     form.rect = { top: 10, height: 60 };
     vv.height = 100;
@@ -622,10 +630,12 @@ test('swipe left to delete, with Undo', async (t) => {
     const down = Object.assign(new Event('pointerdown'), { pointerId: 9, button: 0, isPrimary: true, clientX: 200, clientY: 300 });
     document.dispatchEvent(down);
     await slid();
-    assert.equal(shown().includes('Golf'), false);
     assert.equal(row('Hotel'), hotel);
+    // The swiped row stays in place (no layout shift) until the press ends.
+    assert.ok(row('Golf'), 'swiped row still in the list while pressed');
     document.dispatchEvent(Object.assign(new Event('pointercancel'), { pointerId: 9 }));
     await settle();
+    assert.equal(shown().includes('Golf'), false);
     runUndoTimer();
     await settle(10);
     await fresh();
@@ -659,6 +669,54 @@ test('swipe left to delete, with Undo', async (t) => {
     await settle();
     assert.doesNotMatch(announcer.textContent, /Kilo/);
     servers.a.fetch = original;
+    await fresh();
+  });
+
+  await t.test('a held reminder is dropped when the task was rescheduled before Undo', async () => {
+    await fresh();
+    const announcer = byId('announcer');
+    let open;
+    const gate = new Promise((resolve) => { open = resolve; });
+    const original = servers.a.fetch;
+    servers.a.fetch = async (url, init = {}) => {
+      const response = await original(url, init);
+      if (init.method === 'PATCH' && JSON.parse(init.body).action === 'markNotified') await gate;
+      return response;
+    };
+    t.after(() => { servers.a.fetch = original; });
+    servers.a.rows = servers.a.rows.map((item) => (item.text === 'Kilo'
+      ? { ...item, due: Date.now() - 1000, notified: null, revision: item.revision + 1 } : item));
+    announcer.textContent = '';
+    signIn({ ...servers.a.session });
+    await settle();
+    press(row('Kilo').querySelector('.todo-checkbox'), 'Delete');
+    open();
+    await settle(10);
+    // Another device deletes it; the list refreshes.
+    servers.a.rows = servers.a.rows.map((item) => (item.text === 'Kilo'
+      ? { ...item, due: Date.now() + 86400000, notified: null, revision: item.revision + 1 } : item));
+    signIn({ ...servers.a.session });
+    await settle();
+    undo.click();
+    await settle();
+    assert.doesNotMatch(announcer.textContent, /Kilo/);
+    servers.a.fetch = original;
+    await fresh();
+  });
+
+  await t.test('slide end after a mouse swipe from a focused checkbox still moves focus on', async () => {
+    await fresh();
+    const box = row('Golf').querySelector('.todo-checkbox');
+    box.focus();
+    swipeLeft('Golf');
+    await slid();
+    await settle();
+    assert.equal(shown().includes('Golf'), false);
+    assert.ok(document.activeElement?.closest?.('.todo'), 'focus is on a remaining row');
+    undo.click();
+    await settle();
+    runUndoTimer();
+    await settle(10);
     await fresh();
   });
 

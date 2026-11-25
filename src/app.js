@@ -1899,14 +1899,22 @@ function endSlide(entry, keys) {
   if (sliding !== entry) return;
   sliding = null;
   if (pendingDelete.entry !== entry) return flushRender();
-  // A new press, a reorder drag or a field being typed in must not lose its element or focus to
-  // the rebuild: drop just the swiped row, and let the next render do the rest.
-  const active = document.activeElement;
-  if (pressing || drag || active === input || form.contains(active) || active?.matches?.('input, textarea, select')) {
-    Array.from(list.children).find((item) => item.dataset?.id === entry.id)?.remove();
+  // A press or reorder drag in progress: the rows must not shift under the pointer, so the
+  // (already invisible) swiped row stays until the gesture ends; the held render drops it.
+  if (pressing || drag) {
     renderPending = true;
     pendingFocus = undefined;
-    if (!drag) flushRender();
+    return;
+  }
+  // A field being typed in must not lose its element or focus to the rebuild: drop just the
+  // swiped row, and let the next render do the rest. The swiped row's own controls don't count.
+  const active = document.activeElement;
+  const swiped = Array.from(list.children).find((item) => item.dataset?.id === entry.id);
+  if (!swiped?.contains(active) && (active === input || form.contains(active) || active?.matches?.('input, textarea, select'))) {
+    swiped?.remove();
+    renderPending = true;
+    pendingFocus = undefined;
+    flushRender();
     return;
   }
   render(keys);
@@ -1922,7 +1930,9 @@ function undoDelete() {
   render([key('open', entry.id), key('checkbox', entry.id)]);
   // Its reminder was claimed while it waited: alert it now, as for any due reminder.
   // Only if it still exists: a task deleted elsewhere meanwhile is gone from state.
-  const held = heldAlert?.id === entry.id ? findTodo(entry.id) : null;
+  // Only if it still exists and is still that occurrence (a refresh may have rescheduled it).
+  const now = findTodo(entry.id);
+  const held = heldAlert?.id === entry.id && now && now.due === heldAlert.due && now.due <= Date.now() ? now : null;
   heldAlert = null;
   if (held) {
     notify([held]);
@@ -1972,7 +1982,8 @@ function hideToast() {
 // iOS Safari keeps a fixed element on the layout viewport, so the keyboard can cover it. While
 // the toast is up it follows the visual viewport: when that ends above the layout viewport's
 // bottom (the keyboard is up), the toast sits just above it. If it would still cover the open
-// composer, it moves above the field. Only with no room anywhere does the delete commit.
+// composer, it moves above the field, or below it. Only with no room on either side does the
+// delete commit.
 let followed = null;
 function followViewport(on) {
   const vv = on ? window.visualViewport ?? null : null;
@@ -2003,11 +2014,15 @@ function placeToast() {
   const height = pill.height || 56;
   const top = toast.style.top ? parseFloat(toast.style.top) : pill.top;
   if (!(field.height > 0 && top < field.top + field.height && top + height > field.top)) return;
-  // It would cover the composer: stack it just above the field. Only with no room for it
-  // there (a very short visual viewport) does the delete go through.
+  // It would cover the composer: stack it just above the field, else just below it. Only with
+  // no room on either side (a very short visual viewport) does the delete go through.
   const above = field.top - TOAST_GAP - height;
+  const below = field.top + field.height + TOAST_GAP;
   if (above >= (box?.top ?? 0)) {
     toast.style.top = `${Math.round(above)}px`;
+    toast.style.bottom = 'auto';
+  } else if (below + height <= bottom) {
+    toast.style.top = `${Math.round(below)}px`;
     toast.style.bottom = 'auto';
   } else {
     pendingDelete.flush();
