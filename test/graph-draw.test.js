@@ -2,7 +2,8 @@
 // state, back-to-front order, one stroke for every link, the label cap and culling.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { drawFrame, LABELS, PALETTE, pickLabels } from '../src/graph-draw.js';
+import { drawFrame, LABELS, PALETTE, pickLabels, placeLabel } from '../src/graph-draw.js';
+import { MIN_SCREEN_RADIUS } from '../src/graph-space.js';
 
 // Records each call and each property set, in order.
 function recorder() {
@@ -63,16 +64,20 @@ test('every link goes into one path with a single hairline stroke', () => {
   assert.ok(calls.some(([call, value]) => call === '=lineWidth' && value === 1));
 });
 
-test('nodes behind the camera, off the canvas or too small are not drawn, nor their links', () => {
+test('nodes behind the camera or off the canvas are not drawn; tiny on-screen nodes clamp to MIN_SCREEN_RADIUS', () => {
   const { nodes, projected, order } = scene([
     ['hub', 'hub', 100, 100, 1, 50],
     ['task', 'open', 0, 0, 0, -5], // behind the camera
     ['task', 'open', -50, 100, 1, 10], // off the left edge
-    ['task', 'open', 100, 100, 0.01, 10], // 0.05 px
+    ['task', 'open', 200, 200, 0.01, 10], // 0.05 px raw -> clamped to MIN_SCREEN_RADIUS
   ]);
   const { ctx, named } = recorder();
-  const drawn = drawFrame(ctx, { nodes, projected, order, links: [1, 0, 2, 0, 3, 0], width: 390, height: 700 });
-  assert.equal(drawn.circles, 1);
+  const drawn = drawFrame(ctx, { nodes, projected, order, links: [1, 0, 2, 0, 3, 0], width: 390, height: 700, focusIndex: 3 });
+  assert.equal(drawn.circles, 2);
+  const arcs = named('arc');
+  assert.deepEqual(arcs[0].slice(1, 4), [100, 100, 5]);
+  assert.deepEqual(arcs[1].slice(1, 4), [200, 200, MIN_SCREEN_RADIUS], 'clamped to visible radius');
+  assert.deepEqual(arcs[2].slice(1, 4), [200, 200, MIN_SCREEN_RADIUS + 3], 'focus ring surrounds clamped radius');
   assert.equal(named('moveTo').length, 2, 'only the link to the node behind the camera is dropped');
 });
 
@@ -124,6 +129,27 @@ test('labels skip tasks too small on screen and those whose grid cell is taken',
   assert.deepEqual(picked, ['HOME', 'SHOWN']);
   assert.deepEqual(pickLabels(projected, nodes, order, { width: 390, height: 700, hubsOnly: true }).map((i) => nodes[i].label),
     ['HOME']);
+});
+
+test('labels near the right edge flip to the left and still collide on the grid', () => {
+  // UNCATEGORIZED (13 chars) at x=290 on a 390 px canvas would overflow the right edge.
+  const rightSide = placeLabel(290, 10, 'UNCATEGORIZED', 390);
+  assert.equal(rightSide.align, 'right');
+  assert.equal(rightSide.x, 290 - 10 - LABELS.gap);
+
+  const { nodes, projected, order } = scene([
+    ['hub', 'hub', 290, 100, 1, 50, 10, 'UNCATEGORIZED'],
+    ['task', 'open', 220, 102, 1, 10, 5, 'LEFT'], // its right-side label overlaps UNCATEGORIZED's flipped box
+    ['task', 'open', 20, 100, 1, 20, 5, 'OK'],
+  ]);
+  const { ctx, calls, named } = recorder();
+  drawFrame(ctx, { nodes, projected, order, links: [], width: 390, height: 700 });
+  const texts = named('fillText').map(([, text]) => text);
+  assert.deepEqual(texts, ['UNCATEGORIZED', 'OK'], 'flipped hub label blocks overlapping left neighbor');
+  const alignCalls = calls.filter(([call]) => call === '=textAlign');
+  assert.deepEqual(alignCalls, [['=textAlign', 'left'], ['=textAlign', 'right'], ['=textAlign', 'left']]);
+  const hubCall = named('fillText').find(([, text]) => text === 'UNCATEGORIZED');
+  assert.equal(hubCall[2], 290 - 10 - LABELS.gap);
 });
 
 test('the lite and static tiers label hubs only', () => {

@@ -6,6 +6,12 @@ export const FOV = 0.9; // vertical field of view, radians
 export const PITCH_LIMIT = 1.4;
 export const DISTANCE = { initial: 600, min: 120, max: 2400 };
 export const ORBIT_RADIANS_PER_PX = 0.006;
+export const MIN_SCREEN_RADIUS = 3; // CSS px; drawn circles and hit testing clamp to at least this
+
+// On-screen radius in CSS px for a node with positive projection `scale`.
+export function drawnRadius(radius, scale) {
+  return scale > 0 ? Math.max(MIN_SCREEN_RADIUS, radius * scale) : 0;
+}
 
 const HUB_SPACING = 60; // hub sphere radius per sqrt(hub count)
 const CLUSTER = { r0: 18, k: 7, gap: 4 };
@@ -171,7 +177,7 @@ export function createCamera(reach = 0) {
 // Fit the camera distance so the projected layout fills the viewport with `padding` CSS px
 // of room on each side (for labels). `positions` and `nodes` are from layout(); `viewport`
 // is {width, height}. The camera's yaw/pitch/target stay as given, only distance changes.
-export function fitCamera(camera, positions, nodes, viewport, padding = 40) {
+export function fitCamera(camera, positions, nodes, viewport, padding = 40, { flat = false } = {}) {
   const focal = focalLength(viewport);
   const cosYaw = Math.cos(camera.yaw);
   const sinYaw = Math.sin(camera.yaw);
@@ -180,6 +186,8 @@ export function fitCamera(camera, positions, nodes, viewport, padding = 40) {
   const { target } = camera;
   const cx = viewport.width / 2;
   const cy = viewport.height / 2;
+  const usableX = cx - padding;
+  const usableY = cy - padding;
 
   // Find the camera distance where every node fits inside (cx ± usable, cy ± usable).
   // For each node: sx = cx + x1 * focal / (distance + z2), so |x1 * focal / (distance + z2)| <= usable.
@@ -191,19 +199,24 @@ export function fitCamera(camera, positions, nodes, viewport, padding = 40) {
     const x = p.x - target.x;
     const y = p.y - target.y;
     const z = p.z - target.z;
-    const x1 = x * cosYaw - z * sinYaw;
-    const z1 = x * sinYaw + z * cosYaw;
-    const y2 = y * cosPitch - z1 * sinPitch;
-    const z2 = y * sinPitch + z1 * cosPitch;
-    // Account for the circle's projected radius: use a worst-case extra screen extent.
-    // At a given distance, the node occupies r * focal / (distance + z2) extra CSS px.
-    // For the fit we need: (|x1| + r) * focal / (distance + z2) <= usable, so:
-    // distance >= (|x1| + r) * focal / usable - z2.
+    let sxExtent;
+    let syExtent;
+    let z2;
+    if (flat) {
+      sxExtent = Math.abs(x);
+      syExtent = Math.abs(z);
+      z2 = 0;
+    } else {
+      const x1 = x * cosYaw - z * sinYaw;
+      const z1 = x * sinYaw + z * cosYaw;
+      const y2 = y * cosPitch - z1 * sinPitch;
+      z2 = y * sinPitch + z1 * cosPitch;
+      sxExtent = Math.abs(x1);
+      syExtent = Math.abs(y2);
+    }
     const r = node.radius;
-    const usableX = cx - padding;
-    const usableY = cy - padding;
-    if (usableX > 0) minDist = Math.max(minDist, (Math.abs(x1) + r) * focal / usableX - z2);
-    if (usableY > 0) minDist = Math.max(minDist, (Math.abs(y2) + r) * focal / usableY - z2);
+    if (usableX > 0) minDist = Math.max(minDist, (sxExtent + r) * focal / usableX - z2);
+    if (usableY > 0) minDist = Math.max(minDist, (syExtent + r) * focal / usableY - z2);
   }
   // Add a little margin (5%) so it isn't pixel-tight.
   const distance = clamp(minDist * 1.05, DISTANCE.min, DISTANCE.max);
@@ -294,7 +307,7 @@ export function pick(projected, nodes, x, y, slopPx = 0) {
     const k = i * 4;
     const scale = projected[k + 2];
     if (!(scale > 0)) continue;
-    const reach = nodes[i].radius * scale + slopPx;
+    const reach = drawnRadius(nodes[i].radius, scale) + slopPx;
     const depth = projected[k + 3];
     if (depth < bestDepth && Math.hypot(projected[k] - x, projected[k + 1] - y) <= reach) {
       best = nodes[i].id;
@@ -313,7 +326,7 @@ export function pickNearest(projected, nodes, x, y, slopPx) {
     const k = i * 4;
     const scale = projected[k + 2];
     if (!(scale > 0)) continue;
-    const r = nodes[i].radius * scale;
+    const r = drawnRadius(nodes[i].radius, scale);
     const dist = Math.hypot(projected[k] - x, projected[k + 1] - y) - r;
     if (dist <= slopPx && dist < bestDist) {
       best = nodes[i].id;

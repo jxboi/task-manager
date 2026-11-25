@@ -1,6 +1,7 @@
 // The graph view's drawing, over anything shaped like a CanvasRenderingContext2D: a flat page,
 // hairline links, circles back to front and a few small monospace labels. Pure apart from the
 // calls on `ctx`; src/graph-view.js owns the canvas and when to draw.
+import { drawnRadius } from './graph-space.js';
 
 // Defaults matching the styles.css tokens; graph-view.js passes the live tokens when it can.
 export const PALETTE = {
@@ -19,17 +20,27 @@ export const LABELS = {
   cell: { width: 48, height: 14 }, // a label claims the grid cells it covers
   minRadius: 3, // CSS px a task has to reach on screen before it gets a label
   size: 10, // px
-  charWidth: 7, // px per character at `size` with the letter spacing, for the grid
+  charWidth: 7.5, // px per character at `size` with the letter spacing, for the grid & edge flip
   gap: 4, // px between a circle and its label
   halo: 3, // px of page colour around each label, so it reads over circles and links
 };
-const MIN_DRAWN_RADIUS = 1.5; // CSS px; smaller circles aren't drawn
 
 const colourFor = (palette, state) => (state === 'done' ? palette.done : state === 'hub' ? palette.hub : palette.open);
 
-// Indices of the nodes to label, hubs first, then tasks from the front. A label goes where its
-// circle is, to the right; it is skipped when it would overlap one already taken (by grid cell)
-// or falls off the canvas. `hubsOnly` is the lite tier.
+// Chooses left vs right of the circle for a label so it avoids clipping at the canvas right edge.
+export function placeLabel(px, r, label, width = Infinity) {
+  const textW = label.length * LABELS.charWidth;
+  const rightX = px + r + LABELS.gap;
+  const leftX = px - r - LABELS.gap;
+  const onLeft = rightX + textW + LABELS.halo > width && (leftX - textW >= 0 || width - rightX < leftX);
+  return onLeft
+    ? { x: leftX, left: leftX - textW, right: leftX, align: 'right' }
+    : { x: rightX, left: rightX, right: rightX + textW, align: 'left' };
+}
+
+// Indices of the nodes to label, hubs first, then tasks from the front. A label goes to the right
+// of its circle (or to the left when it would overflow the right edge); it is skipped when it
+// would overlap one already taken (by grid cell) or falls off the canvas. `hubsOnly` is the lite tier.
 export function pickLabels(projected, nodes, order, {
   width = Infinity, height = Infinity, max = LABELS.max, cell = LABELS.cell, minRadius = LABELS.minRadius,
   hubsOnly = false,
@@ -40,14 +51,16 @@ export function pickLabels(projected, nodes, order, {
     const k = i * 4;
     const scale = projected[k + 2];
     if (!(scale > 0)) return false;
-    const x = projected[k] + nodes[i].radius * scale + LABELS.gap;
-    const y = projected[k + 1];
-    const right = x + nodes[i].label.length * LABELS.charWidth;
-    if (right < 0 || x > width || y < 0 || y > height) return false;
+    const px = projected[k];
+    const py = projected[k + 1];
+    const r = drawnRadius(nodes[i].radius, scale);
+    if (px + r < 0 || px - r > width || py < 0 || py > height) return false;
+    const { left, right } = placeLabel(px, r, nodes[i].label, width);
+    if (right < 0 || left > width) return false;
     // Every cell the text box covers, so labels in neighbouring rows can't overlap either.
     const cells = [];
-    for (let row = Math.floor((y - LABELS.size / 2) / cell.height); row <= Math.floor((y + LABELS.size / 2) / cell.height); row += 1) {
-      for (let col = Math.floor(x / cell.width); col <= Math.floor(right / cell.width); col += 1) {
+    for (let row = Math.floor((py - LABELS.size / 2) / cell.height); row <= Math.floor((py + LABELS.size / 2) / cell.height); row += 1) {
+      for (let col = Math.floor(left / cell.width); col <= Math.floor(right / cell.width); col += 1) {
         const key = `${col},${row}`;
         if (taken.has(key)) return false;
         cells.push(key);
@@ -100,10 +113,10 @@ export function drawFrame(ctx, frame) {
     const k = i * 4;
     const scale = projected[k + 2];
     if (!(scale > 0)) continue;
-    const r = nodes[i].radius * scale;
+    const r = drawnRadius(nodes[i].radius, scale);
     const x = projected[k];
     const y = projected[k + 1];
-    if (r < MIN_DRAWN_RADIUS || x + r < 0 || x - r > width || y + r < 0 || y - r > height) continue;
+    if (x + r < 0 || x - r > width || y + r < 0 || y - r > height) continue;
     const colour = colourFor(palette, nodes[i].state);
     if (colour !== fill) ctx.fillStyle = fill = colour;
     ctx.beginPath();
@@ -114,8 +127,9 @@ export function drawFrame(ctx, frame) {
 
   if (focusIndex >= 0 && projected[focusIndex * 4 + 2] > 0) {
     const k = focusIndex * 4;
+    const r = drawnRadius(nodes[focusIndex].radius, projected[k + 2]);
     ctx.beginPath();
-    ctx.arc(projected[k], projected[k + 1], nodes[focusIndex].radius * projected[k + 2] + 3, 0, Math.PI * 2);
+    ctx.arc(projected[k], projected[k + 1], r + 3, 0, Math.PI * 2);
     ctx.strokeStyle = palette.focus;
     ctx.lineWidth = 1.5;
     ctx.stroke();
@@ -131,10 +145,13 @@ export function drawFrame(ctx, frame) {
     ctx.lineWidth = LABELS.halo;
     ctx.lineJoin = 'round';
     let ink = null;
+    let align = 'left';
     for (const i of labels) {
       const k = i * 4;
-      const x = projected[k] + nodes[i].radius * projected[k + 2] + LABELS.gap;
+      const r = drawnRadius(nodes[i].radius, projected[k + 2]);
+      const { x, align: nextAlign } = placeLabel(projected[k], r, nodes[i].label, width);
       const colour = nodes[i].kind === 'hub' ? palette.hubLabel : palette.label;
+      if (nextAlign !== align) ctx.textAlign = align = nextAlign;
       if (colour !== ink) ctx.fillStyle = ink = colour;
       ctx.strokeText(nodes[i].label, x, projected[k + 1]);
       ctx.fillText(nodes[i].label, x, projected[k + 1]);

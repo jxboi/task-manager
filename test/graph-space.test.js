@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { toGraph } from '../src/graph-data.js';
 import {
-  createCamera, depthOrder, DISTANCE, extent, fitCamera, focalLength, layout, LAYOUT_ITERATIONS, lookAt, orbit, pick, pickNearest,
-  PITCH_LIMIT, project, relax, zoom,
+  createCamera, depthOrder, DISTANCE, drawnRadius, extent, fitCamera, focalLength, layout, LAYOUT_ITERATIONS, lookAt,
+  MIN_SCREEN_RADIUS, orbit, pick, pickNearest, PITCH_LIMIT, project, relax, zoom,
 } from '../src/graph-space.js';
 
 const NOW = Date.UTC(2026, 10, 25, 12);
@@ -236,6 +236,31 @@ test('pickNearest: returns the nearest visible node by screen distance, not dept
   assert.equal(pickNearest(projected, nodes, 300, 300, 10), null);
   // Inside a circle: dist is negative → always wins if it's the closest.
   assert.equal(pickNearest(projected, nodes, 100, 100, 0), 'back'); // dist = 0-10 = -10
+});
+
+test('drawnRadius, pick, and pickNearest clamp small on-screen nodes to MIN_SCREEN_RADIUS consistently', () => {
+  assert.equal(drawnRadius(3, 0), 0);
+  assert.equal(drawnRadius(3, 0.16), MIN_SCREEN_RADIUS);
+  assert.equal(drawnRadius(5, 2), 10);
+
+  // A brand-new task (radius 3) zoomed all the way out to DISTANCE.max on a 390x844 phone.
+  const graph = toGraph([{ id: 't0', text: 'New', completed: false, createdAt: NOW, categoryId: null }], [], NOW);
+  const positions = layout(graph);
+  const zoomedOut = { yaw: 0.6, pitch: -0.35, distance: DISTANCE.max, target: { x: 0, y: 0, z: 0 } };
+  const vp = { width: 390, height: 844 };
+  const projected = project(positions, graph.nodes, zoomedOut, vp);
+  const taskIdx = graph.nodes.findIndex((n) => n.id === 'task:t0');
+  const scale = projected[taskIdx * 4 + 2];
+  assert.ok(graph.nodes[taskIdx].radius * scale < 1, 'raw radius would be sub-pixel');
+  assert.equal(drawnRadius(graph.nodes[taskIdx].radius, scale), MIN_SCREEN_RADIUS);
+
+  // Hit-testing uses the same clamped radius MIN_SCREEN_RADIUS (not the sub-pixel raw radius).
+  const nodes = [{ id: 'tiny', radius: 3 }];
+  const p = Float32Array.from([100, 100, 0.16, 2400]); // raw radius 0.48 -> clamped to MIN_SCREEN_RADIUS
+  assert.equal(pick(p, nodes, 100 + MIN_SCREEN_RADIUS - 0.1, 100, 0), 'tiny');
+  assert.equal(pick(p, nodes, 100 + MIN_SCREEN_RADIUS + 0.5, 100, 0), null);
+  assert.equal(pickNearest(p, nodes, 100 + MIN_SCREEN_RADIUS + 2, 100, 2), 'tiny');
+  assert.equal(pickNearest(p, nodes, 100 + MIN_SCREEN_RADIUS + 2.5, 100, 2), null);
 });
 
 test('a pick at a projected node finds that node in a real layout', () => {

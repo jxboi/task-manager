@@ -8,6 +8,7 @@ import { Element, installDom } from './dom.js';
 import { createFakeApi, settle } from './fake-api.js';
 import { markupAttributes } from './markup.js';
 import { context2d, createTierMeter, DPR_CAP, INERTIA, mountGraph, projectFlat, TIER_BUDGET } from '../src/graph-view.js';
+import { MIN_SCREEN_RADIUS } from '../src/graph-space.js';
 
 const NOW = Date.UTC(2026, 10, 25, 12);
 const categories = [{ id: 'c0', name: 'Work' }, { id: 'c1', name: 'Home' }, { id: 'c2', name: 'Empty' }];
@@ -398,6 +399,72 @@ test('keyboard focus on a task button rings its node; destroy leaves nothing beh
   assert.equal(env.pending, 0, 'a destroyed graph ignores updates');
 });
 
+test('zooming all the way out still draws every on-screen circle at >= MIN_SCREEN_RADIUS', (t) => {
+  const env = setup(t);
+  const fresh = [{ id: 'new0', text: 'Brand new', completed: false, createdAt: NOW, categoryId: null }];
+  env.graph.update({ todos: fresh, categories: [], now: NOW });
+  env.flush();
+  const canvas = env.canvases[0];
+  const ctx = canvas.getContext('2d');
+  for (let i = 0; i < 15; i += 1) {
+    const wheel = Object.assign(new Event('wheel', { cancelable: true }), {});
+    Object.defineProperties(wheel, { deltaY: { value: 800 }, deltaMode: { value: 0 }, clientX: { value: 195 }, clientY: { value: 350 } });
+    canvas.dispatchEvent(wheel);
+  }
+  ctx.arcs.length = 0;
+  env.flush();
+  assert.equal(ctx.arcs.length, 2, 'both hub and task circles are drawn');
+  for (const [, , r] of ctx.arcs) assert.ok(r >= MIN_SCREEN_RADIUS, `radius ${r} >= ${MIN_SCREEN_RADIUS}`);
+});
+
+test('moving a task offscreen refits the camera; edits keeping it visible leave the camera alone', (t) => {
+  const env = setup(t);
+  const oneCat = [{ id: 'c0', name: 'Work' }];
+  const list = [
+    { id: 't0', text: 'Task 0', completed: false, createdAt: NOW, categoryId: 'c0' },
+    { id: 't1', text: 'Task 1', completed: false, createdAt: NOW - 86400000, categoryId: 'c0' },
+  ];
+  env.graph.update({ todos: list, categories: oneCat, now: NOW });
+  env.flush();
+  env.idle();
+
+  // Move t0 from the only category (Work) to Uncategorized: adds UNCATEGORIZED hub and moves t0.
+  const moved = list.map((item) => (item.id === 't0' ? { ...item, categoryId: null } : item));
+  env.graph.update({ todos: moved, categories: oneCat, now: NOW });
+  env.flush();
+  env.idle();
+  const [x0, y0] = nodeAt(env, 't0');
+  const cx0 = x0 - RECT.left;
+  const cy0 = y0 - RECT.top;
+  assert.ok(cx0 > 0 && cx0 < RECT.width && cy0 > 0 && cy0 < RECT.height, `t0 (${cx0},${cy0}) fits inside viewport`);
+  const beforeStay = env.buttons().map((b) => `${b.dataset.x},${b.dataset.y}`);
+
+  // Edit t0's text and completion without changing category: node stays visible, camera does NOT move.
+  const edited = moved.map((item) => (item.id === 't0' ? { ...item, text: 'Task 0 renamed', completed: true } : item));
+  env.graph.update({ todos: edited, categories: oneCat, now: NOW });
+  env.flush();
+  env.idle();
+  assert.deepEqual(env.buttons().map((b) => `${b.dataset.x},${b.dataset.y}`), beforeStay, 'camera did not move');
+
+  // Zoom way in on a hub so the other hub is offscreen, then move a task to that offscreen hub.
+  const canvas = env.canvases[0];
+  for (let i = 0; i < 6; i += 1) {
+    const wheel = Object.assign(new Event('wheel', { cancelable: true }), {});
+    Object.defineProperties(wheel, { deltaY: { value: -500 }, deltaMode: { value: 0 }, clientX: { value: 195 }, clientY: { value: 350 } });
+    canvas.dispatchEvent(wheel);
+  }
+  env.flush();
+  env.idle();
+  const zoomedOutBack = moved.map((item) => (item.id === 't0' ? { ...item, categoryId: 'c0' } : item));
+  env.graph.update({ todos: zoomedOutBack, categories: oneCat, now: NOW });
+  env.flush();
+  env.idle();
+  const [rx, ry] = nodeAt(env, 't0');
+  const cx = rx - RECT.left;
+  const cy = ry - RECT.top;
+  assert.ok(cx > 0 && cx < RECT.width && cy > 0 && cy < RECT.height, `moved t0 (${cx},${cy}) refitted into view`);
+});
+
 test('a touch tap cancels its touchend, so no synthesized click lands on what the tap opened', (t) => {
   const env = setup(t);
   env.graph.update({ todos, categories, now: NOW });
@@ -742,6 +809,33 @@ test('in the app: the graph replaces the list, opens tasks in the edit sheet, an
     await settle();
     assert.equal(root.children.length, 0);
     assert.equal(root.hidden, true);
+  });
+
+  await t.test('moving a task from the only category to Uncategorized refits the camera before restoring focus', async () => {
+    server.categories = [{ id: id(901), name: 'Work', revision: 1 }];
+    server.rows = [row(1, 'Solo task', id(901)), row(2, 'Second task', id(901))];
+    window.dispatchEvent(new CustomEvent('tasks:session', { detail: { active: server.session } }));
+    await settle();
+    canvasContext = fakeContext();
+    await open();
+    await settleGraph();
+
+    buttonFor(1).click();
+    assert.equal(layer.hidden, false);
+    byId('edit-category').value = '';
+    byId('edit-category').dispatchEvent(new Event('change'));
+    byId('reminder-save').click();
+    await settle();
+    await settleGraph();
+    assert.equal(layer.hidden, true);
+    assert.equal(document.activeElement, buttonFor(1), 'focus restored to the moved node');
+    const nx = Number(buttonFor(1).dataset.x);
+    const ny = Number(buttonFor(1).dataset.y);
+    assert.ok(nx > 0 && nx < RECT.width && ny > 0 && ny < RECT.height, `moved node (${nx},${ny}) is inside viewport`);
+
+    viewList.click();
+    await settle();
+    server.categories = appCategories;
   });
 
   await t.test('deleting from a graph sheet focuses a surviving task or the Graph toggle', async () => {

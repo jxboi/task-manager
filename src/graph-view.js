@@ -6,7 +6,8 @@ import { toGraph } from './graph-data.js';
 import { drawFrame, MONO, PALETTE } from './graph-draw.js';
 import { createGesture, TAP_SLOP } from './graph-gesture.js';
 import {
-  createCamera, depthOrder, extent, fitCamera, focalLength, layout, lookAt, orbit, pick, pickNearest, project, zoom,
+  createCamera, depthOrder, drawnRadius, extent, fitCamera, focalLength, layout, lookAt, orbit, pick, pickNearest, project,
+  zoom,
 } from './graph-space.js';
 
 // Quality tiers step down within a session, never up. 'list' is chosen at mount (no 2D canvas).
@@ -396,9 +397,10 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
         }
         return;
       }
+      const previous = positions;
       signature = graph.signature;
       nodes = graph.nodes;
-      positions = layout(graph, positions);
+      positions = layout(graph, previous);
       index = new Map(nodes.map((node, i) => [node.id, i]));
       links = new Uint32Array(graph.links.length * 2);
       graph.links.forEach((link, l) => {
@@ -408,11 +410,38 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
       projected = null;
       order = null;
       focusIndex = -1;
+      const viewport = { width: size.width, height: size.height };
+      const hasViewport = ctx && size.width > 0 && size.height > 0;
       if (!camera) {
         camera = createCamera(extent(positions, nodes));
         // Tighten: fit to the actual projected bounds so the graph fills the canvas.
-        if (size.width > 0 && size.height > 0) {
-          camera = fitCamera(camera, positions, nodes, { width: size.width, height: size.height });
+        if (hasViewport) {
+          camera = fitCamera(camera, positions, nodes, viewport, 40, { flat: tier === 'static' });
+        }
+      } else if (hasViewport) {
+        // Only adjust the camera when a moved or newly added node (e.g. category change or new hub)
+        // falls outside the current viewport; edits that leave nodes visible keep the user's camera.
+        const moved = [];
+        for (let i = 0; i < nodes.length; i += 1) {
+          const cur = positions.get(nodes[i].id);
+          if (!cur) continue;
+          const old = previous?.get(nodes[i].id);
+          if (!old || old.x !== cur.x || old.y !== cur.y || old.z !== cur.z) moved.push(i);
+        }
+        if (moved.length) {
+          const check = (tier === 'static' ? projectFlat : project)(positions, nodes, camera, viewport);
+          const offscreen = moved.some((i) => {
+            const k = i * 4;
+            const scale = check[k + 2];
+            if (!(scale > 0)) return true;
+            const r = drawnRadius(nodes[i].radius, scale);
+            return check[k] - r < 0 || check[k] + r > size.width || check[k + 1] - r < 0 || check[k + 1] + r > size.height;
+          });
+          if (offscreen) {
+            spin = null;
+            ease = null;
+            camera = fitCamera({ ...camera, target: { x: 0, y: 0, z: 0 } }, positions, nodes, viewport, 40, { flat: tier === 'static' });
+          }
         }
       }
       renderList(todos);
