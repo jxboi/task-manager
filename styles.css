@@ -2434,3 +2434,154 @@ body {
     no-repeat right 16px center;
   color: var(--text);
 }
+
+/* --- Graph view ------------------------------------------------------------------------------ */
+
+/* List | Graph: two outlined segments beside Account, the current one filled in ink. */
+.view-switch {
+  display: inline-flex;
+  flex: none;
+  margin-left: auto;
+  padding: 2px;
+  border: 1.5px solid var(--ink);
+  border-radius: 20px;
+}
+
+.view-option {
+  min-width: 52px;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 16px;
+  background: none;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  /* The 32px segment is centred in a 44px tap target. */
+  position: relative;
+}
+
+.view-option::after {
+  content: "";
+  position: absolute;
+  inset: -8px 0;
+}
+
+.view-option[aria-pressed="true"] {
+  background: var(--ink);
+  color: #fff;
+}
+
+.view-option:focus-visible {
+  outline-offset: 3px;
+}
+
+/* In the graph, the list and its controls stay in the DOM (filter, scroll, draft and panel are
+   kept) but out of view. The graph always shows every task, so the header is the plain one. */
+.app.is-graph :is(#category-row, #category-panel, #todo-list, #drag-status, #empty-state, #filter-empty,
+  #add-form, #hint-limit, #add-toggle) {
+  display: none !important;
+}
+
+.graph-view {
+  position: relative;
+  height: calc(100dvh - 104px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  min-height: 320px;
+  margin: 8px calc(-1 * var(--side)) 0;
+  overflow: hidden;
+  background: var(--page);
+}
+
+@media (min-width: 640px) {
+  .graph-view {
+    margin-right: 0;
+    margin-left: 0;
+    border-radius: 20px;
+  }
+}
+
+.graph-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* The tasks as buttons, for keyboards and screen readers (a focused one rings its node on the
+   canvas); shown as the view itself when there is no 2D canvas. */
+.graph-a11y {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.graph-a11y :is(ul, li) {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.graph-node {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: 13px/20px var(--mono);
+  text-align: left;
+}
+
+.graph-node.is-done {
+  color: var(--text-3);
+  text-decoration: line-through;
+}
+
+.graph-view[data-mode="list"] {
+  height: auto;
+  min-height: 0;
+  margin: 16px 0 0;
+  overflow: visible;
+}
+
+.graph-view[data-mode="list"] .graph-a11y {
+  position: static;
+  width: auto;
+  height: auto;
+  margin: 0;
+  overflow: visible;
+  clip-path: none;
+  white-space: normal;
+}
+
+.graph-view[data-mode="list"] .graph-a11y > li {
+  display: block;
+  margin-bottom: 20px;
+}
+
+.graph-view[data-mode="list"] .graph-hub {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--text-2);
+  font: 600 11px/16px var(--mono);
+  letter-spacing: 0.08em;
+}
+
+.graph-view[data-mode="list"] .graph-a11y li li {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.graph-view[data-mode="list"] .graph-node {
+  width: 100%;
+}

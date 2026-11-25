@@ -89,6 +89,10 @@ const syncNote = document.getElementById('sync-note');
 const syncText = document.getElementById('sync-text');
 const syncRetry = document.getElementById('sync-retry');
 const syncDismiss = document.getElementById('sync-dismiss');
+const viewSwitch = document.getElementById('view-switch');
+const viewList = document.getElementById('view-list');
+const viewGraph = document.getElementById('view-graph');
+const graphRoot = document.getElementById('graph-view');
 
 const sheetViewport = createSheetViewport({ layer, body: sheetBody });
 // Static controls that a render may send focus back to.
@@ -146,6 +150,9 @@ const openNotifications = new Set(); // closed when the session ends
 // View state: never saved, never in the URL.
 let filter = ALL; // ALL, UNCATEGORIZED or a category ID
 let reminderId = null; // todo whose task sheet is open
+let view = 'list'; // 'list' | 'graph': the graph replaces the list while it is shown
+let graph = null; // the mounted graph (src/graph-view.js, loaded on first open)
+let listScroll = 0; // the list's scroll position, put back on leaving the graph
 let draft = null; // the sheet's starting values and the user's category choice
 let optionsSignature = null; // the catalog the two category selects were built from
 // The Manage panel: `panelRow` is the row in rename ({id, mode: 'rename', value, revision}) or delete
@@ -440,12 +447,21 @@ function render(focusKeys) {
 
   const ready = phase === 'ready';
   const loading = phase === 'loading';
+  // The graph is only for a loaded list: a sign-out or account switch (clearView) closes it.
+  if (view === 'graph' && !ready) closeGraph();
+  viewSwitch.hidden = !ready;
+  viewList.setAttribute('aria-pressed', String(view === 'list'));
+  viewGraph.setAttribute('aria-pressed', String(view === 'graph'));
+  app.classList.toggle('is-graph', view === 'graph');
+  graphRoot.hidden = view !== 'graph';
+  // Every task, whatever the filter. Before focus is restored, so a node's button can take it.
+  graph?.update({ todos: state, categories: sync.categories, now });
   // The row is only a live region: while loading it says "Loading your tasks" to screen readers.
   summary.textContent = loading ? 'Loading your tasks' : '';
   summary.setAttribute('aria-busy', String(loading));
   syncAddButton();
   // Under the composer: new tasks start uncategorized, so under a category filter say where they go.
-  const shelf = ready ? findCategory(filter) : undefined;
+  const shelf = ready && view === 'list' ? findCategory(filter) : undefined;
   addShelf.hidden = !shelf;
   addShelf.textContent = shelf ? 'New tasks go to Uncategorized.' : '';
   // A load error is a card in the list slot; other sync notes are a line above the list.
@@ -778,9 +794,10 @@ function closeEditor() {
   hideMessage();
 }
 
-// Where focus goes back to when the sheet closes: the row's body button.
+// Where focus goes back to when the sheet closes: the task's node in the graph, else the row's
+// body button.
 function openerKeys(id) {
-  return [key('open', id), key('checkbox', id)];
+  return [key('graph-node', id), key('open', id), key('checkbox', id)];
 }
 
 function cancelEditor() {
@@ -1846,6 +1863,62 @@ syncDismiss.addEventListener('click', () => {
   hideSync();
   focusComposer();
 });
+
+// --- Graph view ----------------------------------------------------------------------------
+
+// The graph replaces the list (which stays in the DOM, so its filter, scroll and drafts are kept).
+// Its code loads on the first open. One history entry, so Back (or the iOS back swipe) leaves it.
+async function openGraph() {
+  if (view === 'graph' || phase !== 'ready') return;
+  view = 'graph';
+  listScroll = window.scrollY ?? 0;
+  const epoch = viewEpoch;
+  window.history?.pushState?.({ graph: true }, '');
+  render();
+  let mountGraph = null;
+  try {
+    ({ mountGraph } = await import('./graph-view.js'));
+  } catch {
+    // Offline, say: back to the list below.
+  }
+  // Left (or the session changed) while loading, or another open got there first.
+  if (view !== 'graph' || epoch !== viewEpoch || graph) return;
+  if (!mountGraph) {
+    leaveGraph(viewGraph);
+    showSync("Couldn't open the graph.");
+    return;
+  }
+  graph = mountGraph(graphRoot, { onOpenTask: openEditor, reducedMotion });
+  render();
+}
+
+// Drops the graph and everything it drew; callers render.
+function closeGraph() {
+  if (view !== 'graph') return;
+  view = 'list';
+  graph?.destroy();
+  graph = null;
+  if (window.history?.state?.graph) window.history.back();
+}
+
+function leaveGraph(focusTarget) {
+  if (view !== 'graph') return;
+  closeGraph();
+  render();
+  window.scrollTo?.(0, listScroll);
+  focusTarget.focus();
+}
+
+viewGraph.addEventListener('click', openGraph);
+viewList.addEventListener('click', () => leaveGraph(viewList));
+// Esc leaves the graph, unless something on top (the task sheet, the account menu) used it.
+document.addEventListener('keydown', (event) => {
+  if (view !== 'graph' || event.key !== 'Escape' || event.defaultPrevented || event.isComposing) return;
+  if (reminderId !== null) return;
+  event.preventDefault();
+  leaveGraph(viewGraph);
+});
+window.addEventListener('popstate', () => leaveGraph(viewGraph));
 
 // --- Saving and the session ----------------------------------------------------------------
 

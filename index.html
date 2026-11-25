@@ -23,6 +23,10 @@
             <span class="add-toggle-label" aria-hidden="true">New task</span>
           </button>
         </div>
+        <div class="view-switch" id="view-switch" role="group" aria-label="View" hidden>
+          <button class="view-option" id="view-list" type="button" aria-pressed="true">List</button>
+          <button class="view-option" id="view-graph" type="button" aria-pressed="false">Graph</button>
+        </div>
         <div class="account" id="account" hidden>
           <button class="icon-button profile-button" id="profile-button" type="button" aria-label="Account"
             aria-haspopup="menu" aria-expanded="false" aria-controls="profile-menu">
@@ -168,6 +172,7 @@
           <p class="empty-hint">Add one with New task.</p>
         </div>
         <p class="filter-empty" id="filter-empty" hidden>No tasks match these filters</p>
+        <section class="graph-view" id="graph-view" aria-label="Task graph" hidden></section>
       </div>
     </main>
 
