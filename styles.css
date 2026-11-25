@@ -18,6 +18,7 @@
   --over-bg: #fbeee8;
   --over-peak: #f6dfd5;
   --warn: #6e4610;
+  --danger: #e84a43; /* the swipe-revealed Delete pill; white on it is 3.6:1 (icon) */
   --warn-bg: #f7eed8;
   --scrim: rgb(17 17 17 / 0.45);
   --shadow-sheet: 0 -8px 24px rgb(17 17 17 / 0.10);
@@ -823,6 +824,121 @@ p {
   .todo-slot,
   .todo-handle {
     transition: none;
+  }
+}
+
+/* Swipe left to delete (src/app.js): pan-y keeps vertical scrolling native; the row follows the
+   finger once the gesture locks sideways, then slides out or springs back. */
+.todo {
+  touch-action: pan-y;
+}
+
+.todo.is-swiping {
+  z-index: 2;
+}
+
+.todo.is-settling {
+  transition: transform 200ms var(--ease);
+}
+
+.todo.is-leaving {
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 180ms var(--ease), opacity 180ms var(--ease);
+}
+
+.is-swiping,
+.is-swiping * {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .todo.is-settling,
+  .todo.is-leaving {
+    transition: none;
+  }
+}
+
+.todo.is-swiping {
+  transition: none;
+}
+
+/* Delete, revealed by a partial swipe left (src/swipe.js REVEAL_PX = 12 gap + 56 + 8 edge): a red
+   pill with a white trash and a small grey "Delete" under it, just right of the card, centred on
+   it. Not displayed while the row is closed, so it is neither focusable nor in the a11y tree. */
+.todo-delete {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(100% + 12px);
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: 56px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 14px;
+  background: none;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 14px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  touch-action: pan-y;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.todo.is-swiping .todo-delete,
+.todo.is-open .todo-delete,
+.todo.is-settling .todo-delete,
+.todo.is-leaving .todo-delete {
+  display: flex;
+}
+
+.todo.is-leaving .todo-delete {
+  transition: transform 180ms var(--ease);
+}
+
+.todo-delete-pill {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 40px;
+  border-radius: 20px;
+  background: var(--danger);
+  color: #fff;
+}
+
+.todo-delete-pill .icon {
+  width: 17px;
+  height: 19px;
+}
+
+.todo-delete:active .todo-delete-pill {
+  filter: brightness(0.9);
+}
+
+.todo-delete:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .todo.is-leaving .todo-delete {
+    transition: none;
+  }
+}
+
+/* While a card is moved sideways the list clips its Delete button (and the card) at its edges, so
+   the page never scrolls sideways. Only then: a lifted reorder row keeps its shadow. */
+@supports (overflow: clip) {
+  .todo-list:has(> .todo.is-swiping, > .todo.is-open, > .todo.is-settling, > .todo.is-leaving) {
+    overflow-x: clip;
   }
 }
 
@@ -2191,6 +2307,79 @@ body {
 
 .is-reordering .add-toggle {
   display: none;
+}
+
+/* After a swipe: "Task deleted" with Undo, an ink pill like the drag status, sitting above the
+   New task button (and the home indicator) so it never covers it. */
+.toast {
+  position: fixed;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: calc(92px + env(safe-area-inset-bottom));
+  left: max(16px, env(safe-area-inset-left));
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 528px;
+  margin: 0 auto;
+  padding: 6px 6px 6px 20px;
+  border-radius: 28px;
+  background: var(--ink);
+  color: #fff;
+  font-size: 15px;
+  line-height: 24px;
+  font-weight: 600;
+  box-shadow: 0 10px 24px rgb(17 17 17 / 0.20);
+  animation: toast-in 180ms var(--ease);
+}
+
+.toast-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.toast-hint {
+  color: rgb(255 255 255 / 0.72);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.toast-undo {
+  min-width: 44px;
+  height: 44px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 22px;
+  background: rgb(255 255 255 / 0.14);
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .toast-undo:hover {
+    background: rgb(255 255 255 / 0.24);
+  }
+}
+
+.toast-undo:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.is-reordering .toast {
+  display: none;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation: none;
+  }
 }
 
 .app-header[data-color] .title::first-letter {

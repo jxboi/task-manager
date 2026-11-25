@@ -97,7 +97,10 @@ test('drag handle reorder', async (t) => {
     assert.equal(grip.type, 'button');
     assert.equal(grip.getAttribute('aria-label'), 'Reorder Alpha');
     assert.equal(grip.getAttribute('aria-describedby'), 'reorder-hint');
-    assert.equal(row('alpha').children.at(-1), grip, 'last in the row: on the right');
+    // Last on the card, so on the right. After it comes only the swipe-revealed Delete button,
+    // which sits outside the card (positioned past its right edge) and is hidden while closed.
+    assert.equal(row('alpha').children.at(-2), grip, 'last on the card: on the right');
+    assert.equal(row('alpha').children.at(-1).className, 'todo-delete');
     assert.equal(grip.dataset.focusKey, JSON.stringify(['handle', ids.alpha]));
   });
 
