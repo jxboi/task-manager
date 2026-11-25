@@ -95,11 +95,16 @@ const toast = document.getElementById('toast');
 const toastText = document.getElementById('toast-text');
 const toastUndo = document.getElementById('toast-undo');
 const toastHint = document.getElementById('toast-hint');
+const viewSwitch = document.getElementById('view-switch');
+const viewList = document.getElementById('view-list');
+const viewGraph = document.getElementById('view-graph');
+const graphRoot = document.getElementById('graph-view');
 
 const sheetViewport = createSheetViewport({ layer, body: sheetBody });
 // Static controls that a render may send focus back to.
 withKey(categoryFilter, 'category-filter');
 withKey(categoryName, 'category-name');
+withKey(viewGraph, 'view-graph');
 
 const MAX_DELAY = 2 ** 31 - 1; // setTimeout's limit (about 24.8 days); check() re-arms when it fires
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -165,6 +170,10 @@ const openNotifications = new Set(); // closed when the session ends
 // View state: never saved, never in the URL.
 let filter = ALL; // ALL, UNCATEGORIZED or a category ID
 let reminderId = null; // todo whose task sheet is open
+let view = 'list'; // 'list' | 'graph': the graph replaces the list while it is shown
+let graph = null; // the mounted graph (src/graph-view.js, loaded on first open)
+let graphHistoryPending = false; // a programmatic Back is waiting for popstate
+let listScroll = 0; // the list's scroll position, put back on leaving the graph
 let draft = null; // the sheet's starting values and the user's category choice
 let optionsSignature = null; // the catalog the two category selects were built from
 // The Manage panel: `panelRow` is the row in rename ({id, mode: 'rename', value, revision}) or delete
@@ -476,12 +485,21 @@ function render(focusKeys) {
 
   const ready = phase === 'ready';
   const loading = phase === 'loading';
+  // The graph is only for a loaded list: a sign-out or account switch (clearView) closes it.
+  if (view === 'graph' && !ready) closeGraph();
+  viewSwitch.hidden = !ready;
+  viewList.setAttribute('aria-pressed', String(view === 'list'));
+  viewGraph.setAttribute('aria-pressed', String(view === 'graph'));
+  app.classList.toggle('is-graph', view === 'graph');
+  graphRoot.hidden = view !== 'graph';
+  // Every task, whatever the filter. Before focus is restored, so a node's button can take it.
+  graph?.update({ todos: state, categories: sync.categories, now });
   // The row is only a live region: while loading it says "Loading your tasks" to screen readers.
   summary.textContent = loading ? 'Loading your tasks' : '';
   summary.setAttribute('aria-busy', String(loading));
   syncAddButton();
   // Under the composer: new tasks start uncategorized, so under a category filter say where they go.
-  const shelf = ready ? findCategory(filter) : undefined;
+  const shelf = ready && view === 'list' ? findCategory(filter) : undefined;
   addShelf.hidden = !shelf;
   addShelf.textContent = shelf ? 'New tasks go to Uncategorized.' : '';
   // A load error is a card in the list slot; other sync notes are a line above the list.
@@ -791,6 +809,7 @@ function openEditor(id) {
   if (!todo) return;
   closeRow();
   reminderId = id;
+  if (view === 'graph') syncGraphHistory();
   reminderTouched = false;
   const categoryId = todo.categoryId ?? null;
   draft = { text: todo.text, shownText: '', categoryId, chosenCategoryId: categoryId, due: todo.due, repeat: todo.repeat };
@@ -819,6 +838,7 @@ function openEditor(id) {
 // Hides the sheet without rendering; callers render (or renderSoon) with their focus.
 function closeEditor() {
   reminderId = null;
+  if (view === 'graph') syncGraphHistory();
   layer.hidden = true;
   sheetViewport.stop();
   app.inert = false;
@@ -827,9 +847,10 @@ function closeEditor() {
   hideMessage();
 }
 
-// Where focus goes back to when the sheet closes: the row's body button.
+// Where focus goes back to when the sheet closes: the task's node in the graph, else the row's
+// body button.
 function openerKeys(id) {
-  return [key('open', id), key('checkbox', id)];
+  return [key('graph-node', id), key('open', id), key('checkbox', id)];
 }
 
 function cancelEditor() {
@@ -996,11 +1017,13 @@ function saveEdit(id, fields, originalCategoryId, rearm, base) {
   return done;
 }
 
-// Delete task: at once, no confirm. Focus goes to the next row's checkbox, or the composer.
+// Delete task: at once, then return focus to a surviving task or the view's fallback control.
 function deleteFromEditor() {
   pendingDelete.flush();
   const id = reminderId;
-  const keys = rowFallbackKeys(id);
+  const keys = view === 'graph'
+    ? [...state.filter((todo) => todo.id !== id).map((todo) => key('graph-node', todo.id)), key('view-graph')]
+    : rowFallbackKeys(id);
   closeEditor();
   removeRow(id);
   render(keys);
@@ -2346,6 +2369,93 @@ syncRetry.addEventListener('click', () => {
 syncDismiss.addEventListener('click', () => {
   hideSync();
   focusComposer();
+});
+
+// --- Graph view ----------------------------------------------------------------------------
+
+function graphHistoryDepth() {
+  const entry = window.history?.state;
+  return entry?.graph ? (entry.editor ? 2 : 1) : 0;
+}
+
+// One entry for Graph and one more while its sheet is open. Reopening after a close replaces
+// the forward entry. Wait for popstate before changing history again if the UI changes meanwhile.
+function syncGraphHistory() {
+  if (graphHistoryPending || !window.history?.pushState) return;
+  const depth = graphHistoryDepth();
+  const target = view === 'list' ? 0 : reminderId === null ? 1 : 2;
+  if (depth > target) {
+    graphHistoryPending = true;
+    window.history.go(target - depth);
+  } else if (depth < target) {
+    if (depth === 0) window.history.pushState({ graph: true }, '');
+    if (target === 2) window.history.pushState({ graph: true, editor: true }, '');
+  }
+}
+
+// The graph replaces the list (which stays in the DOM, so its filter, scroll and drafts are kept).
+// Its code loads on the first open.
+async function openGraph() {
+  if (view === 'graph' || phase !== 'ready') return;
+  view = 'graph';
+  listScroll = window.scrollY ?? 0;
+  const epoch = viewEpoch;
+  syncGraphHistory();
+  render();
+  let mountGraph = null;
+  try {
+    ({ mountGraph } = await import('./graph-view.js'));
+  } catch {
+    // Offline, say: back to the list below.
+  }
+  // Left (or the session changed) while loading, or another open got there first.
+  if (view !== 'graph' || epoch !== viewEpoch || graph) return;
+  if (!mountGraph) {
+    leaveGraph(viewGraph);
+    showSync("Couldn't open the graph.");
+    return;
+  }
+  graph = mountGraph(graphRoot, { onOpenTask: openEditor, reducedMotion });
+  render();
+}
+
+// Drops the graph and everything it drew; callers render.
+function closeGraph() {
+  if (view !== 'graph') return;
+  view = 'list';
+  graph?.destroy();
+  graph = null;
+  syncGraphHistory();
+}
+
+function leaveGraph(focusTarget) {
+  if (view !== 'graph') return;
+  closeGraph();
+  render();
+  window.scrollTo?.(0, listScroll);
+  focusTarget.focus();
+}
+
+viewGraph.addEventListener('click', openGraph);
+viewList.addEventListener('click', () => leaveGraph(viewList));
+// Esc leaves the graph, unless something on top (the task sheet, the account menu) used it.
+document.addEventListener('keydown', (event) => {
+  if (view !== 'graph' || event.key !== 'Escape' || event.defaultPrevented || event.isComposing) return;
+  if (reminderId !== null) return;
+  event.preventDefault();
+  leaveGraph(viewGraph);
+});
+window.addEventListener('popstate', () => {
+  if (graphHistoryPending) {
+    graphHistoryPending = false;
+    syncGraphHistory();
+    return;
+  }
+  if (view !== 'graph') return;
+  const depth = graphHistoryDepth();
+  if (depth < 2 && reminderId !== null) cancelEditor();
+  if (depth === 0) leaveGraph(viewGraph);
+  else if (depth === 2 && reminderId === null) syncGraphHistory();
 });
 
 // --- Saving and the session ----------------------------------------------------------------
