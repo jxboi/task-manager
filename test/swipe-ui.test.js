@@ -516,11 +516,16 @@ test('swipe left to delete, with Undo', async (t) => {
     servers.a.fetch = original;
   });
 
-  await t.test('with the keyboard up, the toast follows the visual viewport, never under the composer', async () => {
+  await t.test('with the keyboard up, the toast follows the visual viewport, never under the composer', async (t) => {
     const vv = Object.assign(new EventTarget(), { height: 844, offsetTop: 0 });
     window.visualViewport = vv;
     document.documentElement.clientHeight = 844;
     const form = byId('add-form');
+    t.after(() => {
+      form.hidden = true;
+      form.rect = { top: 0, height: 0 };
+      delete window.visualViewport;
+    });
     press(row('Hotel').querySelector('.todo-checkbox'), 'Delete');
     await settle();
     assert.equal(toast.style.top ?? '', '');
@@ -557,6 +562,18 @@ test('swipe left to delete, with Undo', async (t) => {
     assert.equal(toast.hidden, false);
     assert.equal(toast.style.top, `${80 + 12}px`);
     assert.equal(deleted().length, deletedBefore);
+    // A tight fit: 65px below the field holds the 56px toast with a 9px gap (less than 12).
+    form.rect = { top: 24, height: 56 };
+    vv.height = 145;
+    vv.dispatchEvent(new Event('resize'));
+    await settle();
+    assert.equal(toast.hidden, false);
+    assert.equal(toast.style.top, `${80 + 9}px`);
+    assert.equal(deleted().length, deletedBefore);
+    vv.height = 136;
+    vv.dispatchEvent(new Event('resize'));
+    assert.equal(toast.hidden, false);
+    assert.equal(toast.style.top, '80px');
     // No room anywhere: only then does the delete commit.
     form.rect = { top: 10, height: 60 };
     vv.height = 100;
@@ -564,9 +581,6 @@ test('swipe left to delete, with Undo', async (t) => {
     await settle();
     assert.equal(toast.hidden, true);
     assert.deepEqual(deleted().slice(-1), ['Hotel']);
-    form.hidden = true;
-    form.rect = { top: 0, height: 0 };
-    delete window.visualViewport;
   });
 
   await t.test('Ctrl+Z undoes from the list; the clock stops while the toast is hovered or focused', async () => {
@@ -720,6 +734,57 @@ test('swipe left to delete, with Undo', async (t) => {
     await fresh();
   });
 
+  await t.test('a swiped focused checkbox with no click: the press fallback does not drop focus', async () => {
+    await fresh();
+    const box = row('Golf').querySelector('.todo-checkbox');
+    box.focus();
+    // A real press: the document sees the pointerdown, so the render waits for the press to end.
+    document.dispatchEvent(Object.assign(new Event('pointerdown'), { pointerId: 3, button: 0, isPrimary: true }));
+    gesture(box, [[-12, 2, 16], [-220, 6, 120]], { pointerType: 'mouse' });
+    await new Promise((resolve) => realSetTimeout(resolve, 450));
+    await settle();
+    assert.equal(shown().includes('Golf'), false);
+    assert.equal(document.activeElement, row('Hotel').querySelector('.todo-checkbox'));
+    undo.click();
+    await settle();
+    runUndoTimer();
+    await settle(10);
+    await fresh();
+  });
+
+  await t.test('a held reminder is dropped when the task was completed elsewhere before Undo', async (t) => {
+    await fresh();
+    const announcer = byId('announcer');
+    let open;
+    const gate = new Promise((resolve) => { open = resolve; });
+    const original = servers.a.fetch;
+    servers.a.fetch = async (url, init = {}) => {
+      const response = await original(url, init);
+      if (init.method === 'PATCH' && JSON.parse(init.body).action === 'markNotified') await gate;
+      return response;
+    };
+    t.after(() => { servers.a.fetch = original; });
+    servers.a.rows = servers.a.rows.map((item) => (item.text === 'Kilo'
+      ? { ...item, due: Date.now() - 1000, notified: null, revision: item.revision + 1 } : item));
+    announcer.textContent = '';
+    signIn({ ...servers.a.session });
+    await settle();
+    press(row('Kilo').querySelector('.todo-checkbox'), 'Delete');
+    open();
+    await settle(10);
+    // Completed on another device; the due time is unchanged.
+    servers.a.rows = servers.a.rows.map((item) => (item.text === 'Kilo'
+      ? { ...item, completed: true, revision: item.revision + 1 } : item));
+    signIn({ ...servers.a.session });
+    await settle();
+    undo.click();
+    await settle();
+    assert.equal(row('Kilo').querySelector('.todo-checkbox').checked, true);
+    assert.doesNotMatch(announcer.textContent, /Kilo/);
+    servers.a.fetch = original;
+    await fresh();
+  });
+
   await t.test('the Ctrl+Z hint is only shown when the shortcut works from the focused element', async () => {
     await fresh();
     const form = byId('add-form');
@@ -742,6 +807,32 @@ test('swipe left to delete, with Undo', async (t) => {
     await settle();
     assert.equal(hint.hidden, false);
     undo.click();
+    await settle();
+  });
+
+  await t.test('page scroll moves the toast away from the composer once per frame until Undo', async () => {
+    await fresh();
+    const form = byId('add-form');
+    form.hidden = false;
+    form.rect = { top: 860, height: 60 };
+    toast.rect = { top: 696, height: 56 };
+    press(row('Hotel').querySelector('.todo-checkbox'), 'Delete');
+    assert.equal(toast.style.top, '');
+
+    form.rect = { top: 680, height: 60 };
+    frames.length = 0;
+    window.dispatchEvent(new Event('scroll'));
+    window.dispatchEvent(new Event('scroll'));
+    assert.equal(frames.length, 1);
+    frames.shift()();
+    assert.equal(toast.style.top, '612px');
+
+    undo.click();
+    window.dispatchEvent(new Event('scroll'));
+    assert.equal(frames.length, 0);
+    form.hidden = true;
+    form.rect = { top: 0, height: 0 };
+    toast.rect = { top: 0, height: 0 };
     await settle();
   });
 });

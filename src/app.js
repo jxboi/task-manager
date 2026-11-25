@@ -1762,7 +1762,7 @@ window.addEventListener('blur', () => endDrag(false));
 // takes over only once it locks horizontal (src/swipe.js). The handle is the reorder drag's.
 const SLIDE_MS = 180; // styles.css .todo.is-leaving
 const SETTLE_MS = 200; // .todo.is-settling
-const TOAST_GAP = 12; // between the toast and the bottom of the visual viewport (the iOS keyboard)
+const TOAST_GAP = 12; // preferred gap at the bottom of the visual viewport or next to the composer
 let swipe = null; // { gesture, row, pointerId }
 let swallowClick = false;
 let swallowTimer = null;
@@ -1901,16 +1901,17 @@ function endSlide(entry, keys) {
   if (pendingDelete.entry !== entry) return flushRender();
   // A press or reorder drag in progress: the rows must not shift under the pointer, so the
   // (already invisible) swiped row stays until the gesture ends; the held render drops it.
+  const active = document.activeElement;
+  const swiped = Array.from(list.children).find((item) => item.dataset?.id === entry.id);
+  const swipedHasFocus = swiped?.contains(active);
   if (pressing || drag) {
     renderPending = true;
-    pendingFocus = undefined;
+    pendingFocus = swipedHasFocus ? keys : undefined;
     return;
   }
   // A field being typed in must not lose its element or focus to the rebuild: drop just the
   // swiped row, and let the next render do the rest. The swiped row's own controls don't count.
-  const active = document.activeElement;
-  const swiped = Array.from(list.children).find((item) => item.dataset?.id === entry.id);
-  if (!swiped?.contains(active) && (active === input || form.contains(active) || active?.matches?.('input, textarea, select'))) {
+  if (!swipedHasFocus && (active === input || form.contains(active) || active?.matches?.('input, textarea, select'))) {
     swiped?.remove();
     renderPending = true;
     pendingFocus = undefined;
@@ -1928,11 +1929,9 @@ function undoDelete() {
   if (sliding === entry) sliding = null;
   syncChanged();
   render([key('open', entry.id), key('checkbox', entry.id)]);
-  // Its reminder was claimed while it waited: alert it now, as for any due reminder.
-  // Only if it still exists: a task deleted elsewhere meanwhile is gone from state.
-  // Only if it still exists and is still that occurrence (a refresh may have rescheduled it).
-  const now = findTodo(entry.id);
-  const held = heldAlert?.id === entry.id && now && now.due === heldAlert.due && now.due <= Date.now() ? now : null;
+  // Alert a held claim only if the restored task still has the same overdue occurrence.
+  const restored = findTodo(entry.id);
+  const held = heldAlert?.id === entry.id && restored?.due === heldAlert.due && isOverdue(restored, Date.now()) ? restored : null;
   heldAlert = null;
   if (held) {
     notify([held]);
@@ -1985,7 +1984,11 @@ function hideToast() {
 // composer, it moves above the field, or below it. Only with no room on either side does the
 // delete commit.
 let followed = null;
+let placeFrame = null;
 function followViewport(on) {
+  // The page scrolling moves the composer under the fixed toast: place again (once per frame).
+  if (on) window.addEventListener('scroll', placeOnScroll, { passive: true });
+  else window.removeEventListener('scroll', placeOnScroll);
   const vv = on ? window.visualViewport ?? null : null;
   if (vv === followed) return;
   followed?.removeEventListener('resize', placeToast);
@@ -1993,6 +1996,14 @@ function followViewport(on) {
   followed = vv;
   vv?.addEventListener('resize', placeToast);
   vv?.addEventListener('scroll', placeToast);
+}
+
+function placeOnScroll() {
+  if (placeFrame !== null) return;
+  placeFrame = requestAnimationFrame(() => {
+    placeFrame = null;
+    placeToast();
+  });
 }
 
 function placeToast() {
@@ -2016,13 +2027,15 @@ function placeToast() {
   if (!(field.height > 0 && top < field.top + field.height && top + height > field.top)) return;
   // It would cover the composer: stack it just above the field, else just below it. Only with
   // no room on either side (a very short visual viewport) does the delete go through.
-  const above = field.top - TOAST_GAP - height;
-  const below = field.top + field.height + TOAST_GAP;
-  if (above >= (box?.top ?? 0)) {
-    toast.style.top = `${Math.round(above)}px`;
+  // The 12px gap is preferred; a smaller one is fine when that is all there is.
+  const fieldBottom = field.top + field.height;
+  const gapAbove = field.top - (box?.top ?? 0) - height;
+  const gapBelow = bottom - fieldBottom - height;
+  if (gapAbove >= 0 && (gapAbove >= TOAST_GAP || gapBelow < TOAST_GAP)) {
+    toast.style.top = `${field.top - height - Math.min(TOAST_GAP, gapAbove)}px`;
     toast.style.bottom = 'auto';
-  } else if (below + height <= bottom) {
-    toast.style.top = `${Math.round(below)}px`;
+  } else if (gapBelow >= 0) {
+    toast.style.top = `${fieldBottom + Math.min(TOAST_GAP, gapBelow)}px`;
     toast.style.bottom = 'auto';
   } else {
     pendingDelete.flush();
