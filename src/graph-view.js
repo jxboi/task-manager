@@ -338,6 +338,7 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
   }
 
   const onDown = (event) => {
+    if (event.pointerType === 'mouse' && event.button != null && event.button !== 0) return;
     spin = null;
     try {
       canvas.setPointerCapture?.(event.pointerId);

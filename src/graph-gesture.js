@@ -40,6 +40,7 @@ export function createGesture() {
     get mode() { return mode; },
 
     down(e) {
+      if (e.pointerType === 'mouse' && e.button != null && e.button !== 0) return null;
       if (pointers.has(e.pointerId) || pointers.size >= 2) return null;
       pointers.set(e.pointerId, {
         x: e.clientX, y: e.clientY, startX: e.clientX, startY: e.clientY, startT: e.timeStamp, type: e.pointerType,

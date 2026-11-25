@@ -139,7 +139,7 @@ test('labels near the right edge flip to the left and still collide on the grid'
 
   const { nodes, projected, order } = scene([
     ['hub', 'hub', 290, 100, 1, 50, 10, 'UNCATEGORIZED'],
-    ['task', 'open', 220, 102, 1, 10, 5, 'LEFT'], // its right-side label overlaps UNCATEGORIZED's flipped box
+    ['task', 'open', 220, 114, 1, 10, 5, 'LEFT'], // its right-side label shares row 7 with UNCATEGORIZED's flipped box
     ['task', 'open', 20, 100, 1, 20, 5, 'OK'],
   ]);
   const { ctx, calls, named } = recorder();
@@ -150,6 +150,50 @@ test('labels near the right edge flip to the left and still collide on the grid'
   assert.deepEqual(alignCalls, [['=textAlign', 'left'], ['=textAlign', 'right'], ['=textAlign', 'left']]);
   const hubCall = named('fillText').find(([, text]) => text === 'UNCATEGORIZED');
   assert.equal(hubCall[2], 290 - 10 - LABELS.gap);
+});
+
+test('labels flip to the opposite side when they hit another visible circle, and omit when both sides collide', () => {
+  const { nodes, projected, order } = scene([
+    ['hub', 'hub', 300, 300, 1, 100, 8, 'HUB'],
+    // CALL GRANDMA at (120, 100): right label spans ~129..219; blocker at (165, 100) sits right in it.
+    ['task', 'open', 120, 100, 1, 10, 5, 'CALL GRANDMA'],
+    ['task', 'open', 165, 100, 1, 20, 5, 'BLOCK'],
+    // Tiny blocker whose raw radius (0.5) misses y=200 (at y=207), but drawnRadius (3) hits [195..205].
+    ['task', 'open', 150, 200, 1, 30, 5, 'CLAMPED'],
+    ['task', 'open', 180, 207, 0.1, 40, 5, 'TINY'],
+    // Surrounded on both sides: must be omitted.
+    ['task', 'open', 200, 400, 1, 50, 5, 'TRAPPED'],
+    ['task', 'open', 230, 400, 1, 60, 5, 'RIGHT'],
+    ['task', 'open', 170, 400, 1, 70, 5, 'LEFT'],
+  ]);
+  const { ctx, named } = recorder();
+  drawFrame(ctx, { nodes, projected, order, links: [], width: 390, height: 700 });
+  const drawn = named('fillText').map(([, text, x]) => [text, x]);
+  assert.deepEqual(drawn, [
+    ['HUB', 300 + 8 + LABELS.gap],
+    ['CALL GRANDMA', 120 - 5 - LABELS.gap],
+    ['BLOCK', 165 + 5 + LABELS.gap],
+    ['CLAMPED', 150 - 5 - LABELS.gap],
+    ['RIGHT', 230 + 5 + LABELS.gap],
+    ['LEFT', 170 - 5 - LABELS.gap], // LEFT's right side hits TRAPPED at 200, so LEFT flips left
+  ]);
+});
+
+test('a label flipped off a colliding circle still avoids already-placed labels and canvas edges', () => {
+  const { nodes, projected, order } = scene([
+    ['hub', 'hub', 290, 100, 1, 50, 10, 'UNCATEGORIZED'], // near right edge -> flips left
+    ['task', 'open', 250, 100, 1, 10, 5, 'INNER'], // sits inside UNCATEGORIZED's left box; right side overflows 390 -> UNCATEGORIZED omitted
+    ['task', 'open', 80, 200, 1, 20, 5, 'TAKEN'], // claims left-ish grid cells around x=89..127
+    ['task', 'open', 160, 200, 1, 30, 5, 'SECOND'], // right side hits BLOCKER; left side overlaps TAKEN's label -> omitted
+    ['task', 'open', 190, 200, 1, 40, 5, 'BLOCKER'],
+    ['task', 'open', 20, 300, 1, 50, 5, 'CLIPPED'], // right side hits EDGEBLOCK; left side falls off x < 0 -> omitted
+    ['task', 'open', 50, 300, 1, 60, 5, 'EDGEBLOCK'],
+  ]);
+  const picked = pickLabels(projected, nodes, order, { width: 390, height: 700 }).map((i) => nodes[i].label);
+  assert.ok(!picked.includes('UNCATEGORIZED'), 'no room on either left (circle) or right (canvas edge)');
+  assert.ok(!picked.includes('SECOND'), 'flipped left side still collides with TAKEN label');
+  assert.ok(!picked.includes('CLIPPED'), 'flipped left side would clip past left edge');
+  assert.ok(picked.includes('TAKEN'));
 });
 
 test('the lite and static tiers label hubs only', () => {

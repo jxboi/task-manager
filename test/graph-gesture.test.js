@@ -114,6 +114,22 @@ test('cancel forgets every pointer', () => {
   assert.equal(g.up(at(1, 60, 0, 30)), null);
 });
 
+test('non-primary mouse buttons are ignored; primary mouse button works', () => {
+  for (const button of [1, 2]) {
+    const g = createGesture();
+    assert.equal(g.down({ pointerId: 1, pointerType: 'mouse', button, clientX: 50, clientY: 50, timeStamp: 0 }), null);
+    assert.equal(g.active, false);
+    assert.equal(g.move({ pointerId: 1, pointerType: 'mouse', clientX: 80, clientY: 50, timeStamp: 20 }), null);
+    assert.equal(g.up({ pointerId: 1, pointerType: 'mouse', button, clientX: 50, clientY: 50, timeStamp: 40 }), null);
+  }
+  const g = createGesture();
+  assert.equal(g.down({ pointerId: 1, pointerType: 'mouse', button: 0, clientX: 50, clientY: 50, timeStamp: 0 }), null);
+  assert.equal(g.active, true);
+  assert.deepEqual(g.up({ pointerId: 1, pointerType: 'mouse', button: 0, clientX: 50, clientY: 50, timeStamp: 40 }), {
+    type: 'tap', x: 50, y: 50, pointerType: 'mouse',
+  });
+});
+
 test('the wheel zooms by exp(px × speed), normalizing lines and pages and capping big jumps', () => {
   const g = createGesture();
   const wheel = (deltaY, deltaMode = 0, ctrlKey = false) => g.wheel({ deltaY, deltaMode, ctrlKey, clientX: 5, clientY: 6 });

@@ -27,26 +27,65 @@ export const LABELS = {
 
 const colourFor = (palette, state) => (state === 'done' ? palette.done : state === 'hub' ? palette.hub : palette.open);
 
+const labelBox = (px, r, label, align) => {
+  const textW = label.length * LABELS.charWidth;
+  if (align === 'right') {
+    const x = px - r - LABELS.gap;
+    return { x, left: x - textW, right: x, align: 'right' };
+  }
+  const x = px + r + LABELS.gap;
+  return { x, left: x, right: x + textW, align: 'left' };
+};
+
 // Chooses left vs right of the circle for a label so it avoids clipping at the canvas right edge.
 export function placeLabel(px, r, label, width = Infinity) {
-  const textW = label.length * LABELS.charWidth;
-  const rightX = px + r + LABELS.gap;
-  const leftX = px - r - LABELS.gap;
-  const onLeft = rightX + textW + LABELS.halo > width && (leftX - textW >= 0 || width - rightX < leftX);
-  return onLeft
-    ? { x: leftX, left: leftX - textW, right: leftX, align: 'right' }
-    : { x: rightX, left: rightX, right: rightX + textW, align: 'left' };
+  const right = labelBox(px, r, label, 'left');
+  const left = labelBox(px, r, label, 'right');
+  const onLeft = right.right + LABELS.halo > width && (left.left >= 0 || width - right.x < left.x);
+  return onLeft ? left : right;
 }
 
-// Indices of the nodes to label, hubs first, then tasks from the front. A label goes to the right
-// of its circle (or to the left when it would overflow the right edge); it is skipped when it
-// would overlap one already taken (by grid cell) or falls off the canvas. `hubsOnly` is the lite tier.
-export function pickLabels(projected, nodes, order, {
+function circleHitsBox(cx, cy, cr, left, top, right, bottom) {
+  const nx = Math.max(left, Math.min(cx, right));
+  const ny = Math.max(top, Math.min(cy, bottom));
+  const dx = cx - nx;
+  const dy = cy - ny;
+  return dx * dx + dy * dy <= cr * cr;
+}
+
+function visibleCircles(projected, nodes, width, height) {
+  const circles = [];
+  for (let i = 0; i < nodes.length; i += 1) {
+    const k = i * 4;
+    const scale = projected[k + 2];
+    if (!(scale > 0)) continue;
+    const x = projected[k];
+    const y = projected[k + 1];
+    const r = drawnRadius(nodes[i].radius, scale);
+    if (x + r < 0 || x - r > width || y + r < 0 || y - r > height) continue;
+    circles.push({ index: i, x, y, r });
+  }
+  return circles;
+}
+
+// Labels to draw, hubs first, then tasks from the front. A label prefers the right of its circle
+// (or left near the right edge), flips to the opposite side if that would overlap another visible
+// circle, and is omitted if both sides collide or if its grid cells are already taken.
+export function planLabels(projected, nodes, order, {
   width = Infinity, height = Infinity, max = LABELS.max, cell = LABELS.cell, minRadius = LABELS.minRadius,
   hubsOnly = false,
 } = {}) {
   const taken = new Set();
   const picked = [];
+  const circles = visibleCircles(projected, nodes, width, height);
+  const hitsCircle = (self, left, py, right) => {
+    const top = py - LABELS.size / 2;
+    const bottom = py + LABELS.size / 2;
+    for (const c of circles) {
+      if (c.index !== self && circleHitsBox(c.x, c.y, c.r, left, top, right, bottom)) return true;
+    }
+    return false;
+  };
   const claim = (i) => {
     const k = i * 4;
     const scale = projected[k + 2];
@@ -55,19 +94,26 @@ export function pickLabels(projected, nodes, order, {
     const py = projected[k + 1];
     const r = drawnRadius(nodes[i].radius, scale);
     if (px + r < 0 || px - r > width || py < 0 || py > height) return false;
-    const { left, right } = placeLabel(px, r, nodes[i].label, width);
-    if (right < 0 || left > width) return false;
+    const preferred = placeLabel(px, r, nodes[i].label, width);
+    const opposite = labelBox(px, r, nodes[i].label, preferred.align === 'left' ? 'right' : 'left');
+    let chosen = null;
+    if (preferred.right >= 0 && preferred.left <= width && !hitsCircle(i, preferred.left, py, preferred.right)) {
+      chosen = preferred;
+    } else if (opposite.left >= 0 && opposite.right <= width && !hitsCircle(i, opposite.left, py, opposite.right)) {
+      chosen = opposite;
+    }
+    if (!chosen) return false;
     // Every cell the text box covers, so labels in neighbouring rows can't overlap either.
     const cells = [];
     for (let row = Math.floor((py - LABELS.size / 2) / cell.height); row <= Math.floor((py + LABELS.size / 2) / cell.height); row += 1) {
-      for (let col = Math.floor(left / cell.width); col <= Math.floor(right / cell.width); col += 1) {
+      for (let col = Math.floor(chosen.left / cell.width); col <= Math.floor(chosen.right / cell.width); col += 1) {
         const key = `${col},${row}`;
         if (taken.has(key)) return false;
         cells.push(key);
       }
     }
     for (const key of cells) taken.add(key);
-    picked.push(i);
+    picked.push({ index: i, ...chosen });
     return true;
   };
   for (let n = order.length - 1; n >= 0; n -= 1) {
@@ -81,6 +127,11 @@ export function pickLabels(projected, nodes, order, {
     if (claim(i)) tasks += 1;
   }
   return picked;
+}
+
+// Indices of the nodes to label (see planLabels). `hubsOnly` is the lite tier.
+export function pickLabels(projected, nodes, order, options = {}) {
+  return planLabels(projected, nodes, order, options).map((entry) => entry.index);
 }
 
 // frame: {nodes, projected (graph-space.js project), order (back to front), links (flat node
@@ -135,7 +186,7 @@ export function drawFrame(ctx, frame) {
     ctx.stroke();
   }
 
-  const labels = pickLabels(projected, nodes, order, { width, height, hubsOnly: tier !== 'full' });
+  const labels = planLabels(projected, nodes, order, { width, height, hubsOnly: tier !== 'full' });
   if (labels.length) {
     ctx.font = `500 ${LABELS.size}px ${frame.font ?? MONO}`;
     if ('letterSpacing' in ctx) ctx.letterSpacing = '0.8px';
@@ -146,10 +197,8 @@ export function drawFrame(ctx, frame) {
     ctx.lineJoin = 'round';
     let ink = null;
     let align = 'left';
-    for (const i of labels) {
+    for (const { index: i, x, align: nextAlign } of labels) {
       const k = i * 4;
-      const r = drawnRadius(nodes[i].radius, projected[k + 2]);
-      const { x, align: nextAlign } = placeLabel(projected[k], r, nodes[i].label, width);
       const colour = nodes[i].kind === 'hub' ? palette.hubLabel : palette.label;
       if (nextAlign !== align) ctx.textAlign = align = nextAlign;
       if (colour !== ink) ctx.fillStyle = ink = colour;

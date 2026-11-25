@@ -97,12 +97,14 @@ function setup(t, { canvas = () => { const ctx = fakeContext(); return { getCont
   };
 }
 
-const pointer = (target, type, pointerId, clientX, clientY, timeStamp, pointerType = 'touch') => {
+const pointer = (target, type, pointerId, clientX, clientY, timeStamp, pointerType = 'touch', button) => {
   const event = new Event(type, { cancelable: true });
-  Object.defineProperties(event, {
+  const props = {
     pointerId: { value: pointerId }, pointerType: { value: pointerType }, clientX: { value: clientX },
     clientY: { value: clientY }, timeStamp: { value: timeStamp },
-  });
+  };
+  if (button !== undefined) props.button = { value: button };
+  Object.defineProperties(event, props);
   target.dispatchEvent(event);
 };
 const drag = (canvas, { from = [100, 100], by = [40, 0], steps = 8, ms = 8, id = 1, type = 'touch', t0 = 1000 } = {}) => {
@@ -200,6 +202,24 @@ test('a tap on a task opens it; a drag from the same spot orbits instead', (t) =
   pointer(canvas, 'pointerdown', 1, RECT.left + 1, RECT.top + 1, 5000);
   pointer(canvas, 'pointerup', 1, RECT.left + 1, RECT.top + 1, 5050);
   assert.deepEqual(env.opened, ['t4']);
+
+  // Non-primary mouse clicks (right/middle) on a node do not open or drag; primary (0) does.
+  const [nx, ny] = nodeAt(env, 't4');
+  for (const button of [1, 2]) {
+    pointer(canvas, 'pointerdown', 2, nx, ny, 6000, 'mouse', button);
+    pointer(canvas, 'pointerup', 2, nx, ny, 6050, 'mouse', button);
+  }
+  assert.deepEqual(env.opened, ['t4']);
+  const beforeRightDrag = env.buttons().map((b) => `${b.dataset.x},${b.dataset.y}`).join(' ');
+  pointer(canvas, 'pointerdown', 3, nx, ny, 6100, 'mouse', 2);
+  pointer(canvas, 'pointermove', 3, nx + 50, ny, 6120, 'mouse', -1);
+  pointer(canvas, 'pointerup', 3, nx + 50, ny, 6140, 'mouse', 2);
+  env.flush();
+  env.idle();
+  assert.equal(env.buttons().map((b) => `${b.dataset.x},${b.dataset.y}`).join(' '), beforeRightDrag);
+  pointer(canvas, 'pointerdown', 4, nx, ny, 6200, 'mouse', 0);
+  pointer(canvas, 'pointerup', 4, nx, ny, 6240, 'mouse', 0);
+  assert.deepEqual(env.opened, ['t4', 't4']);
 });
 
 test('a flick spins on with inertia, then stops by itself', (t) => {
