@@ -2493,6 +2493,18 @@ body {
   background: var(--page);
 }
 
+/* Phones: the graph takes all the height under the header (the header plus the gap above the
+   graph is 76px), and the page loses the room it keeps for the New task pill, so nothing scrolls. */
+@media (max-width: 639px) {
+  body:has(.app.is-graph) {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .graph-view {
+    height: calc(100dvh - 76px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  }
+}
+
 @media (min-width: 640px) {
   .graph-view {
     margin-right: 0;

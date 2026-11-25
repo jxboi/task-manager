@@ -10,9 +10,9 @@ import { isCompleted } from './reminders.js';
 export const UNCATEGORIZED_HUB = 'hub:none';
 export const UNCATEGORIZED_LABEL = 'UNCATEGORIZED';
 // Node radii in world units. Tasks grow with age up to `days`; hubs with their task count up to
-// `hubCount`.
-export const RADIUS = { taskMin: 3, taskMax: 9, hubMin: 7, hubMax: 16, days: 365, hubCount: 100 };
-export const MAX_LABEL_LENGTH = 24;
+// `hubCount`, always a little bigger than the biggest task so the hub ring reads as the parent.
+export const RADIUS = { taskMin: 3, taskMax: 9, hubMin: 10.5, hubMax: 12.5, days: 365, hubCount: 100 };
+export const MAX_LABEL_LENGTH = 22; // characters, the ellipsis included
 
 const DAY = 24 * 60 * 60 * 1000;
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));

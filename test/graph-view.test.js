@@ -8,7 +8,7 @@ import { Element, installDom } from './dom.js';
 import { createFakeApi, settle } from './fake-api.js';
 import { markupAttributes } from './markup.js';
 import { context2d, createTierMeter, DPR_CAP, INERTIA, mountGraph, projectFlat, TIER_BUDGET } from '../src/graph-view.js';
-import { MIN_SCREEN_RADIUS } from '../src/graph-space.js';
+import { FIT_PADDING, MIN_SCREEN_RADIUS } from '../src/graph-space.js';
 
 const NOW = Date.UTC(2026, 10, 25, 12);
 const categories = [{ id: 'c0', name: 'Work' }, { id: 'c1', name: 'Home' }, { id: 'c2', name: 'Empty' }];
@@ -283,30 +283,37 @@ test('a hub tap re-centres on it: eased over frames, or at once under reduced mo
 test('pinch and wheel zoom redraw the scene smaller or larger', (t) => {
   const env = setup(t);
   env.graph.update({ todos, categories, now: NOW });
-  env.flush();
   const ctx = env.canvases[0].getContext('2d');
-  // The biggest circle: zooming in pushes some nodes off the canvas, so a sum would mislead.
-  const largest = () => Math.max(...ctx.arcs.map(([, , r]) => r));
-  const base = largest();
+  // How far the tasks sit from the canvas centre on average, from each button's resting position
+  // (every task, on the canvas or not: the fitted graph's outer nodes leave it when zooming in,
+  // so the drawn circles alone would mislead).
+  const spread = () => {
+    ctx.arcs.length = 0;
+    env.flush();
+    assert.ok(ctx.arcs.length > 0, 'redrawn');
+    env.idle();
+    const at = env.buttons().filter((b) => b.dataset.x !== undefined)
+      .map((b) => Math.hypot(Number(b.dataset.x) - RECT.width / 2, Number(b.dataset.y) - RECT.height / 2));
+    assert.equal(at.length, todos.length);
+    return at.reduce((sum, d) => sum + d, 0) / at.length;
+  };
+  const base = spread();
   const canvas = env.canvases[0];
   pointer(canvas, 'pointerdown', 1, 150, 300, 0);
   pointer(canvas, 'pointerdown', 2, 250, 300, 0);
   pointer(canvas, 'pointermove', 2, 350, 300, 10);
   pointer(canvas, 'pointerup', 2, 350, 300, 20);
   pointer(canvas, 'pointerup', 1, 150, 300, 20);
-  ctx.arcs.length = 0;
-  env.flush();
-  const zoomed = largest();
-  assert.ok(zoomed > base * 1.8, 'spreading two fingers zooms in');
+  const zoomed = spread();
+  assert.ok(zoomed > base * 1.8, `spreading two fingers zooms in (${base} -> ${zoomed})`);
   assert.deepEqual(env.opened, []);
 
   const wheel = Object.assign(new Event('wheel', { cancelable: true }), {});
   Object.defineProperties(wheel, { deltaY: { value: 400 }, deltaMode: { value: 0 }, clientX: { value: 0 }, clientY: { value: 0 } });
   canvas.dispatchEvent(wheel);
   assert.equal(wheel.defaultPrevented, true, 'the page does not scroll');
-  ctx.arcs.length = 0;
-  env.flush();
-  assert.ok(largest() < zoomed * 0.6, 'wheel down zooms out');
+  const out = spread();
+  assert.ok(out < zoomed * 0.6, `wheel down zooms out (${zoomed} -> ${out})`);
 });
 
 test('tier meter: steps full → lite → static on slow draws, and stays once a tier passes', () => {
@@ -483,6 +490,53 @@ test('moving a task offscreen refits the camera; edits keeping it visible leave 
   const cx = rx - RECT.left;
   const cy = ry - RECT.top;
   assert.ok(cx > 0 && cx < RECT.width && cy > 0 && cy < RECT.height, `moved t0 (${cx},${cy}) refitted into view`);
+});
+
+test('on load and on resize the camera fits every node with FIT_PADDING px to spare', (t) => {
+  const observers = [];
+  const hadObserver = Object.getOwnPropertyDescriptor(globalThis, 'ResizeObserver');
+  globalThis.ResizeObserver = class { constructor(callback) { this.callback = callback; observers.push(this); } observe() {} disconnect() {} };
+  const saved = { ...RECT };
+  t.after(() => {
+    Object.assign(RECT, saved);
+    if (hadObserver) Object.defineProperty(globalThis, 'ResizeObserver', hadObserver);
+    else delete globalThis.ResizeObserver;
+  });
+  const env = setup(t);
+  env.graph.update({ todos, categories, now: NOW });
+  const ctx = env.canvases[0].getContext('2d');
+  const check = (where) => {
+    ctx.arcs.length = 0;
+    env.flush();
+    env.idle();
+    // Every drawn circle (hubs included) sits inside the padding.
+    for (const [x, y, r] of ctx.arcs) {
+      assert.ok(x - r >= FIT_PADDING - 0.5 && x + r <= RECT.width - FIT_PADDING + 0.5 && y - r >= FIT_PADDING - 0.5
+        && y + r <= RECT.height - FIT_PADDING + 0.5, `${where}: circle ${x},${y} r ${r} in ${RECT.width}x${RECT.height}`);
+    }
+    const xs = [];
+    const ys = [];
+    for (const b of env.buttons()) {
+      const [x, y] = [Number(b.dataset.x), Number(b.dataset.y)];
+      assert.ok(x >= FIT_PADDING && x <= RECT.width - FIT_PADDING && y >= FIT_PADDING && y <= RECT.height - FIT_PADDING,
+        `${where}: ${b.textContent} at ${x},${y} in ${RECT.width}x${RECT.height}`);
+      xs.push(x);
+      ys.push(y);
+    }
+    const top = Math.min(...ctx.arcs.map(([, y, r]) => y - r));
+    const bottom = Math.max(...ctx.arcs.map(([, y, r]) => y + r));
+    const left = Math.min(...ctx.arcs.map(([x, , r]) => x - r));
+    const right = Math.max(...ctx.arcs.map(([x, , r]) => x + r));
+    return { w: right - left, h: bottom - top };
+  };
+  const phone = check('load');
+  assert.ok(phone.h > RECT.height * 0.55, `the graph uses the phone canvas height (${phone.h} of ${RECT.height})`);
+  Object.assign(RECT, { width: 900, height: 500 });
+  for (const observer of observers) observer.callback([]);
+  const wide = check('resize');
+  // The user's angle is kept, so one axis of the new canvas is filled to the padding.
+  const fills = (used, size) => used >= size - 2 * FIT_PADDING - 3;
+  assert.ok(fills(wide.w, 900) || fills(wide.h, 500), `refitted to the 900x500 canvas (${wide.w}x${wide.h})`);
 });
 
 test('a touch tap cancels its touchend, so no synthesized click lands on what the tap opened', (t) => {

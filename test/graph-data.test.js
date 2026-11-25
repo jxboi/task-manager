@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  ageRadius, hubRadius, nodeLabel, nodeState, RADIUS, toGraph, UNCATEGORIZED_HUB,
+  ageRadius, hubRadius, MAX_LABEL_LENGTH, nodeLabel, nodeState, RADIUS, toGraph, UNCATEGORIZED_HUB,
 } from '../src/graph-data.js';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -106,14 +106,23 @@ test('hubs grow with their task count, clamped', () => {
   assert.equal(hubRadius(10_000), RADIUS.hubMax);
 });
 
-test('labels are uppercase, one line and at most 24 code points', () => {
+test('a hub is always a little bigger than the biggest task, never much bigger', () => {
+  for (const count of [0, 1, 5, 20, RADIUS.hubCount, 10_000]) {
+    assert.ok(hubRadius(count) > RADIUS.taskMax, `${count} tasks: ${hubRadius(count)} > ${RADIUS.taskMax}`);
+    assert.ok(hubRadius(count) <= RADIUS.taskMax * 1.4, `${count} tasks: ${hubRadius(count)} is only slightly larger`);
+  }
+});
+
+test('labels are uppercase, one line and at most 22 code points with the ellipsis', () => {
+  assert.equal(MAX_LABEL_LENGTH, 22);
   assert.equal(nodeLabel('buy milk'), 'BUY MILK');
   assert.equal(nodeLabel('  two\n  lines\t'), 'TWO LINES');
-  assert.equal(nodeLabel('x'.repeat(24)), 'X'.repeat(24));
-  assert.equal(nodeLabel('x'.repeat(25)), `${'X'.repeat(23)}…`);
+  assert.equal(nodeLabel('x'.repeat(22)), 'X'.repeat(22));
+  assert.equal(nodeLabel('x'.repeat(23)), `${'X'.repeat(21)}…`);
+  assert.equal(nodeLabel('Pick up the dry cleaning before Friday'), 'PICK UP THE DRY CLEAN…');
   const emoji = '🙂'.repeat(30); // surrogate pairs count once
-  assert.equal(nodeLabel(emoji), `${'🙂'.repeat(23)}…`);
-  assert.equal([...nodeLabel(emoji)].length, 24);
+  assert.equal(nodeLabel(emoji), `${'🙂'.repeat(21)}…`);
+  assert.equal([...nodeLabel(emoji)].length, 22);
   assert.equal(nodeLabel(undefined), '');
 });
 

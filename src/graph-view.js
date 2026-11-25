@@ -6,9 +6,11 @@ import { toGraph } from './graph-data.js';
 import { drawFrame, MONO, PALETTE } from './graph-draw.js';
 import { createGesture, TAP_SLOP } from './graph-gesture.js';
 import {
-  createCamera, depthOrder, drawnRadius, extent, fitCamera, focalLength, layout, lookAt, orbit, pick, pickNearest, project,
-  zoom,
+  createCamera, depthOrder, drawnRadius, extent, fitCamera, frameCamera, layout, lookAt, orbit, pick, pickNearest, project,
+  projectFlat, spreadOnScreen, zoom,
 } from './graph-space.js';
+
+export { projectFlat }; // the static tier's projection
 
 // Quality tiers step down within a session, never up. 'list' is chosen at mount (no 2D canvas).
 export const TIERS = ['full', 'lite', 'static'];
@@ -80,35 +82,13 @@ export function createTierMeter(tier = 'full', budget = TIER_BUDGET) {
   };
 }
 
-// The static tier: the same layout seen from straight above, without perspective. Same output
-// shape as graph-space.js project(); depth is height, so higher nodes draw on top.
-export function projectFlat(positions, nodes, camera, viewport, out = null) {
-  const result = out && out.length === nodes.length * 4 ? out : new Float32Array(nodes.length * 4);
-  const scale = focalLength(viewport) / camera.distance;
-  const { target } = camera;
-  for (let i = 0; i < nodes.length; i += 1) {
-    const p = positions.get(nodes[i].id);
-    const k = i * 4;
-    if (!p) {
-      result[k] = result[k + 1] = result[k + 2] = 0;
-      result[k + 3] = Infinity;
-      continue;
-    }
-    result[k] = viewport.width / 2 + (p.x - target.x) * scale;
-    result[k + 1] = viewport.height / 2 + (p.z - target.z) * scale;
-    result[k + 2] = scale;
-    result[k + 3] = -p.y;
-  }
-  return result;
-}
-
 function readPalette(root) {
   try {
     const style = getComputedStyle(root);
     const token = (name, fallback) => style.getPropertyValue(name).trim() || fallback;
     return {
       palette: { ...PALETTE, bg: token('--page', PALETTE.bg), open: token('--ink', PALETTE.open),
-        label: token('--text-2', PALETTE.label), hubLabel: token('--text', PALETTE.hubLabel) },
+        label: token('--text-2', PALETTE.label), hubLabel: token('--ink', PALETTE.hubLabel), hub: token('--ink', PALETTE.hub) },
       font: token('--mono', MONO),
     };
   } catch {
@@ -140,6 +120,7 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
   let projected = null;
   let order = null;
   let camera = null;
+  let framed = false; // the camera has been fitted to a real viewport at least once
   let size = { width: 0, height: 0, dpr: 1 };
   let buttons = new Map(); // node id -> button
   let focusIndex = -1;
@@ -153,13 +134,35 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
   const gesture = createGesture();
   const still = () => Boolean(reducedMotion?.matches);
 
+  // Fits the camera to the current viewport: the first time from the best starting angle, after
+  // that (a resize, a moved node off screen, the static tier) keeping the user's angle.
+  const refit = () => {
+    if (!camera || !positions || !(size.width > 0) || !(size.height > 0)) return;
+    const viewport = { width: size.width, height: size.height };
+    const flat = tier === 'static';
+    spin = null;
+    ease = null;
+    if (framed) camera = fitCamera(camera, positions, nodes, viewport, undefined, { flat });
+    else {
+      // The first view: the best angle, overlapping circles pushed apart on screen, then refit.
+      camera = frameCamera(positions, nodes, viewport, undefined, { flat });
+      positions = spreadOnScreen(positions, nodes, camera, viewport, { flat });
+      camera = fitCamera(camera, positions, nodes, viewport, undefined, { flat });
+    }
+    framed = true;
+  };
+
   const measure = () => {
     const rect = (ctx ? canvas : root).getBoundingClientRect();
     const dpr = Math.min(globalThis.devicePixelRatio || 1, DPR_CAP[tier] ?? 1);
-    size = { width: Math.max(0, rect.width || 0), height: Math.max(0, rect.height || 0), dpr };
+    const width = Math.max(0, rect.width || 0);
+    const height = Math.max(0, rect.height || 0);
+    const resized = width !== size.width || height !== size.height;
+    size = { width, height, dpr };
     if (!ctx) return;
     canvas.width = Math.round(size.width * dpr);
     canvas.height = Math.round(size.height * dpr);
+    if (resized || !framed) refit();
     schedule();
   };
 
@@ -170,10 +173,13 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
 
   function setTier(next) {
     if (next === tier) return;
+    const flatChanged = (next === 'static') !== (tier === 'static');
     tier = next;
     root.dataset.mode = tier;
     spin = null;
     measure();
+    // The static tier's top view has other bounds than the perspective one.
+    if (flatChanged) refit();
   }
 
   function render() {
@@ -401,7 +407,7 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
       const previous = positions;
       signature = graph.signature;
       nodes = graph.nodes;
-      positions = layout(graph, previous);
+      positions = layout(graph, previous, { aspect: size.width > 0 && size.height > 0 ? size.height / size.width : 1 });
       index = new Map(nodes.map((node, i) => [node.id, i]));
       links = new Uint32Array(graph.links.length * 2);
       graph.links.forEach((link, l) => {
@@ -415,10 +421,9 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
       const hasViewport = ctx && size.width > 0 && size.height > 0;
       if (!camera) {
         camera = createCamera(extent(positions, nodes));
-        // Tighten: fit to the actual projected bounds so the graph fills the canvas.
-        if (hasViewport) {
-          camera = fitCamera(camera, positions, nodes, viewport, 40, { flat: tier === 'static' });
-        }
+        refit(); // fills the canvas once it has a size (measure() fits it otherwise)
+      } else if (hasViewport && !framed) {
+        refit();
       } else if (hasViewport) {
         // Only adjust the camera when a moved or newly added node (e.g. category change or new hub)
         // falls outside the current viewport; edits that leave nodes visible keep the user's camera.
@@ -438,11 +443,7 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
             const r = drawnRadius(nodes[i].radius, scale);
             return check[k] - r < 0 || check[k] + r > size.width || check[k + 1] - r < 0 || check[k + 1] + r > size.height;
           });
-          if (offscreen) {
-            spin = null;
-            ease = null;
-            camera = fitCamera({ ...camera, target: { x: 0, y: 0, z: 0 } }, positions, nodes, viewport, 40, { flat: tier === 'static' });
-          }
+          if (offscreen) refit();
         }
       }
       renderList(todos);

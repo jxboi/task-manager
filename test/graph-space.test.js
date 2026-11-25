@@ -4,9 +4,10 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { toGraph } from '../src/graph-data.js';
 import {
-  createCamera, depthOrder, DISTANCE, drawnRadius, extent, fitCamera, focalLength, layout, LAYOUT_ITERATIONS, lookAt,
-  MIN_SCREEN_RADIUS, orbit, pick, pickNearest, PITCH_LIMIT, project, relax, zoom,
+  COLLISION_PAD, createCamera, depthOrder, DISTANCE, drawnRadius, EDGE_MARGIN, extent, FIT_PADDING, fitCamera, focalLength,
+  frameCamera, layout, LAYOUT_ITERATIONS, spreadOnScreen, lookAt, MIN_SCREEN_RADIUS, orbit, pick, pickNearest, PITCH_LIMIT, project, relax, zoom,
 } from '../src/graph-space.js';
+import { projectFlat } from '../src/graph-view.js';
 
 const NOW = Date.UTC(2026, 10, 25, 12);
 const DAY = 24 * 60 * 60 * 1000;
@@ -54,6 +55,44 @@ test('hubs are spread apart; a single hub sits at the origin', () => {
   }
   const lone = layout(toGraph([], [{ id: 'c0', name: 'Only' }], NOW));
   assert.deepEqual(lone.get('hub:c0'), { x: 0, y: 0, z: 0, hubId: null });
+});
+
+test('collision spacing: every pair of nodes keeps radius + COLLISION_PAD each, across clusters too', () => {
+  assert.equal(COLLISION_PAD, 6);
+  for (const [n, aspect] of [[14, 1], [14, 844 / 390], [60, 1], [200, 1.9]]) {
+    const graph = toGraph(todos(n), categories, NOW);
+    const positions = layout(graph, null, { aspect });
+    const close = [];
+    for (let i = 0; i < graph.nodes.length; i += 1) {
+      for (let j = i + 1; j < graph.nodes.length; j += 1) {
+        const a = graph.nodes[i];
+        const b = graph.nodes[j];
+        if (a.kind === 'hub' && b.kind === 'hub') continue; // hubs are placed, not relaxed
+        const p = positions.get(a.id);
+        const q = positions.get(b.id);
+        const want = a.radius + b.radius + 2 * COLLISION_PAD;
+        if (Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z) < want - 0.5) close.push(`${a.id}/${b.id}`);
+      }
+    }
+    assert.deepEqual(close, [], `${n} tasks, aspect ${aspect}`);
+  }
+});
+
+test('the layout is deterministic for an aspect, and a tall aspect stretches the hubs upright', () => {
+  const graph = toGraph(todos(30), categories, NOW);
+  assert.equal(plain(layout(graph, null, { aspect: 2 })), plain(layout(graph, null, { aspect: 2 })));
+  assert.equal(plain(layout(graph, null, { aspect: Number.NaN })), plain(layout(graph)));
+  const spread = (positions, axis) => {
+    const values = graph.nodes.filter((n) => n.kind === 'hub').map((n) => positions.get(n.id)[axis]);
+    return Math.max(...values) - Math.min(...values);
+  };
+  const square = layout(graph);
+  const tall = layout(graph, null, { aspect: 2 });
+  assert.ok(spread(tall, 'y') > spread(square, 'y') * 1.4);
+  assert.ok(spread(tall, 'x') < spread(square, 'x'));
+  // With the last layout, kept hubs stay put whatever the aspect.
+  const kept = layout(graph, square, { aspect: 2 });
+  assert.equal(plain(kept), plain(square));
 });
 
 test('siblings are pushed apart so they do not overlap', () => {
@@ -154,6 +193,156 @@ test('fitCamera: projected bounds fit inside the viewport with padding on both i
     }
     assert.ok(maxX - minX > vp.width * 0.25, `spread ${maxX - minX} in ${vp.width}`);
   }
+});
+
+// Screen bounds of the drawn circles (with MIN_SCREEN_RADIUS), and each node's room to the edges.
+function screenFit(positions, nodes, camera, vp, project_ = project) {
+  const projected = project_(positions, nodes, camera, vp);
+  const bounds = { left: Infinity, right: -Infinity, top: Infinity, bottom: -Infinity };
+  const tight = [];
+  for (let i = 0; i < nodes.length; i += 1) {
+    const k = i * 4;
+    const scale = projected[k + 2];
+    assert.ok(scale > 0, `${nodes[i].id} in front of the camera`);
+    const r = drawnRadius(nodes[i].radius, scale);
+    const [x, y] = [projected[k], projected[k + 1]];
+    bounds.left = Math.min(bounds.left, x - r);
+    bounds.right = Math.max(bounds.right, x + r);
+    bounds.top = Math.min(bounds.top, y - r);
+    bounds.bottom = Math.max(bounds.bottom, y + r);
+    const room = Math.min(x, vp.width - x, y, vp.height - y) - r; // from the circle's edge
+    tight.push(room);
+  }
+  return { bounds, minRoom: Math.min(...tight) };
+}
+
+test('fit padding: on load the circles fill the viewport to about FIT_PADDING px, centred, on phone and desktop', () => {
+  assert.equal(FIT_PADDING, 24);
+  for (const vp of [{ width: 390, height: 740 }, { width: 564, height: 616 }, { width: 1280, height: 632 }]) {
+    for (const n of [5, 14, 60]) {
+      const graph = toGraph(todos(n), categories, NOW);
+      const positions = layout(graph, null, { aspect: vp.height / vp.width });
+      const camera = frameCamera(positions, graph.nodes, vp);
+      const { bounds, minRoom } = screenFit(positions, graph.nodes, camera, vp);
+      const where = `${n} tasks in ${vp.width}x${vp.height}`;
+      assert.ok(minRoom >= FIT_PADDING - 0.5, `${where}: every circle at least ${FIT_PADDING} px inside (${minRoom})`);
+      // Tight on at least one axis: the fit touches the padding on both sides of it.
+      const gapX = [bounds.left, vp.width - bounds.right];
+      const gapY = [bounds.top, vp.height - bounds.bottom];
+      const fills = (gaps) => gaps.every((g) => g < FIT_PADDING + 3);
+      assert.ok(fills(gapX) || fills(gapY), `${where}: fills an axis (x gaps ${gapX}, y gaps ${gapY})`);
+      // Centred: the two gaps of each axis match.
+      assert.ok(Math.abs(gapX[0] - gapX[1]) < 3 && Math.abs(gapY[0] - gapY[1]) < 3, `${where}: centred (${gapX} / ${gapY})`);
+    }
+  }
+});
+
+test('fit padding: a 14-task graph on a 390×740 phone canvas uses most of the height too', () => {
+  const vp = { width: 390, height: 740 };
+  const graph = toGraph(todos(14), categories, NOW);
+  const positions = layout(graph, null, { aspect: vp.height / vp.width });
+  const { bounds } = screenFit(positions, graph.nodes, frameCamera(positions, graph.nodes, vp), vp);
+  assert.ok(bounds.bottom - bounds.top > vp.height * 0.6, `height used ${bounds.bottom - bounds.top} of ${vp.height}`);
+});
+
+test('fitCamera keeps the angle, recentres and refits after a resize; the flat static view fits too', () => {
+  const graph = toGraph(todos(14), categories, NOW);
+  const positions = layout(graph);
+  const turned = { ...createCamera(), yaw: 1.3, pitch: -0.9, target: { x: 50, y: -30, z: 20 } };
+  for (const vp of [{ width: 390, height: 740 }, { width: 740, height: 390 }]) {
+    const camera = fitCamera(turned, positions, graph.nodes, vp);
+    assert.deepEqual([camera.yaw, camera.pitch], [1.3, -0.9]);
+    assert.ok(screenFit(positions, graph.nodes, camera, vp).minRoom >= FIT_PADDING - 0.5);
+    const flat = fitCamera(turned, positions, graph.nodes, vp, FIT_PADDING, { flat: true });
+    const { bounds, minRoom } = screenFit(positions, graph.nodes, flat, vp, projectFlat);
+    assert.ok(minRoom >= FIT_PADDING - 0.5, `flat ${minRoom}`);
+    assert.ok(Math.abs(bounds.left - (vp.width - bounds.right)) < 1, 'flat view centred');
+  }
+});
+
+test('edge margin: every fitted node centre is at least its radius + EDGE_MARGIN inside the canvas', () => {
+  assert.equal(EDGE_MARGIN, 8);
+  assert.ok(FIT_PADDING >= EDGE_MARGIN);
+  for (const vp of [{ width: 390, height: 740 }, { width: 1280, height: 632 }, { width: 320, height: 320 }]) {
+    for (const n of [1, 14, 200]) {
+      const graph = toGraph(todos(n), categories, NOW);
+      const positions = layout(graph, null, { aspect: vp.height / vp.width });
+      const camera = frameCamera(positions, graph.nodes, vp);
+      const projected = project(positions, graph.nodes, camera, vp);
+      for (let i = 0; i < graph.nodes.length; i += 1) {
+        const k = i * 4;
+        const r = drawnRadius(graph.nodes[i].radius, projected[k + 2]);
+        const room = Math.min(projected[k], vp.width - projected[k], projected[k + 1], vp.height - projected[k + 1]);
+        assert.ok(room >= r + EDGE_MARGIN, `${graph.nodes[i].id} in ${vp.width}x${vp.height}: ${room} >= ${r} + ${EDGE_MARGIN}`);
+      }
+    }
+  }
+});
+
+test('frameCamera is deterministic and prefers a start angle with no overlapping circles', () => {
+  const vp = { width: 390, height: 740 };
+  const graph = toGraph(todos(14), categories, NOW);
+  const positions = layout(graph, null, { aspect: vp.height / vp.width });
+  const a = frameCamera(positions, graph.nodes, vp);
+  assert.deepEqual(a, frameCamera(positions, graph.nodes, vp));
+  const projected = project(positions, graph.nodes, a, vp);
+  let overlaps = 0;
+  for (let i = 0; i < graph.nodes.length; i += 1) {
+    for (let j = i + 1; j < graph.nodes.length; j += 1) {
+      const d = Math.hypot(projected[i * 4] - projected[j * 4], projected[i * 4 + 1] - projected[j * 4 + 1]);
+      if (d < drawnRadius(graph.nodes[i].radius, projected[i * 4 + 2]) + drawnRadius(graph.nodes[j].radius, projected[j * 4 + 2])) overlaps += 1;
+    }
+  }
+  assert.equal(overlaps, 0, 'no two circles overlap on screen at the start');
+});
+
+test('spreadOnScreen: the first view has no overlapping circles (radius + COLLISION_PAD each), hubs unmoved', () => {
+  const titles = 14;
+  for (const vp of [{ width: 390, height: 768 }, { width: 560, height: 616 }]) {
+    for (const offset of [0, 100, 200, 300, 400]) {
+      const graph = toGraph(todos(titles, offset), categories, NOW);
+      const positions = layout(graph, null, { aspect: vp.height / vp.width });
+      const first = frameCamera(positions, graph.nodes, vp);
+      const spread = spreadOnScreen(positions, graph.nodes, first, vp);
+      assert.equal(plain(spread), plain(spreadOnScreen(positions, graph.nodes, first, vp)), 'deterministic');
+      assert.notEqual(spread, positions, 'a new map; the layout is untouched');
+      for (const node of graph.nodes) {
+        if (node.kind === 'hub') assert.deepEqual(spread.get(node.id), positions.get(node.id), node.id);
+      }
+      const camera = fitCamera(first, spread, graph.nodes, vp);
+      const projected = project(spread, graph.nodes, camera, vp);
+      const close = [];
+      for (let i = 0; i < graph.nodes.length; i += 1) {
+        for (let j = i + 1; j < graph.nodes.length; j += 1) {
+          const d = Math.hypot(projected[i * 4] - projected[j * 4], projected[i * 4 + 1] - projected[j * 4 + 1]);
+          const ri = drawnRadius(graph.nodes[i].radius, projected[i * 4 + 2]);
+          const rj = drawnRadius(graph.nodes[j].radius, projected[j * 4 + 2]);
+          if (d < ri + rj) close.push(`${graph.nodes[i].id}/${graph.nodes[j].id}`);
+        }
+      }
+      assert.deepEqual(close, [], `offset ${offset} in ${vp.width}x${vp.height}`);
+      assert.ok(screenFit(spread, graph.nodes, camera, vp).minRoom >= FIT_PADDING - 0.5, 'still fitted with padding');
+    }
+  }
+});
+
+test('spreadOnScreen pushes two stacked tasks apart by their radii + 2 × COLLISION_PAD, within the pass cap', () => {
+  const nodes = [
+    { id: 'h', kind: 'hub', radius: 11 },
+    { id: 'a', kind: 'task', radius: 5 },
+    { id: 'b', kind: 'task', radius: 5 },
+  ];
+  const positions = new Map([['h', { x: -100, y: 0, z: 0 }], ['a', { x: 50, y: 0, z: 0 }], ['b', { x: 50, y: 0, z: 0.5 }]]);
+  const camera = { yaw: 0, pitch: 0, distance: 400, target: { x: 0, y: 0, z: 0 } };
+  const vp = { width: 400, height: 400 };
+  const spread = spreadOnScreen(positions, nodes, camera, vp);
+  const projected = project(spread, nodes, camera, vp);
+  const d = Math.hypot(projected[4] - projected[8], projected[5] - projected[9]);
+  const want = drawnRadius(5, projected[6]) + drawnRadius(5, projected[10]) + 2 * COLLISION_PAD;
+  assert.ok(d >= want - 0.5, `${d} >= ${want}`);
+  assert.deepEqual(spread.get('h'), positions.get('h'));
+  assert.ok([...spread.values()].every(finite));
+  assert.deepEqual(positions.get('a'), { x: 50, y: 0, z: 0 }, 'the input is untouched');
 });
 
 test('fitCamera: small task nodes stay tappable at the default zoom', () => {
