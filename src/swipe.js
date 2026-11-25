@@ -38,12 +38,12 @@ export function createSwipe(width, startX, startY, startTime, { open = false } =
     end(time) {
       if (phase !== 'horizontal') return 'none';
       const distance = -Math.min(0, start + dx);
-      if (distance >= width * FULL_FRACTION) return 'delete';
       const elapsed = Math.max(1, (time ?? last.time) - previous.time);
       const speed = (previous.x - last.x) / elapsed; // > 0: moving left
+      if (speed <= -FLICK_SPEED) return 'back'; // flicked back right
+      if (speed > 0 && distance >= width * FULL_FRACTION) return 'delete';
       // The flick counts the gesture's own leftward travel, never the offset an open row already has.
       if (speed >= FLICK_SPEED && -dx > FLICK_MIN_PX) return 'delete';
-      if (speed <= -FLICK_SPEED) return 'back'; // flicked back right
       return distance >= REVEAL_PX / 2 ? 'open' : 'back';
     },
   };

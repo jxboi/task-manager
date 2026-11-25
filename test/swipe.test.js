@@ -73,6 +73,20 @@ test('a fast flick left past the button deletes; a shorter one opens; a tiny one
   assert.equal(back.end(110), 'back');
 });
 
+test('a fast rightward release closes even past the full-swipe distance', () => {
+  const swipe = createSwipe(350, 300, 100, 0, { open: true });
+  swipe.move(105, 100, 500);
+  swipe.move(130, 100, 520); // 25px right in 20ms, still 246px left of closed
+  assert.equal(swipe.end(520), 'back');
+});
+
+test('a slow rightward release snaps open even past the full-swipe distance', () => {
+  const swipe = createSwipe(350, 300, 100, 0, { open: true });
+  swipe.move(105, 100, 500);
+  swipe.move(130, 100, 700);
+  assert.equal(swipe.end(700), 'open');
+});
+
 test('a swipe from an open row starts at the open offset: right closes, left goes on', () => {
   const tap = createSwipe(400, 300, 100, 0, { open: true });
   assert.equal(tap.offset, -REVEAL_PX);
