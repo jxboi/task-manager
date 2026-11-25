@@ -380,6 +380,20 @@ test('keyboard focus on a task button rings its node; destroy leaves nothing beh
   assert.equal(env.pending, 0, 'a destroyed graph ignores updates');
 });
 
+test('a touch tap cancels its touchend, so no synthesized click lands on what the tap opened', (t) => {
+  const env = setup(t);
+  env.graph.update({ todos, categories, now: NOW });
+  const [canvas] = env.canvases;
+  const touchEnd = () => {
+    const event = new Event('touchend', { cancelable: true });
+    canvas.dispatchEvent(event);
+    return event.defaultPrevented;
+  };
+  assert.equal(touchEnd(), true);
+  env.graph.destroy();
+  assert.equal(touchEnd(), false, 'the listener goes with the graph');
+});
+
 // --- In the app: the List | Graph switch, the edit sheet, Esc/Back and the session ------------
 
 const id = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;

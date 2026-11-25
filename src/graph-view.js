@@ -346,6 +346,11 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
     gesture.cancel(event);
     spin = null;
   };
+  // A touch tap acts on pointerup; the click the browser synthesizes after it would land on
+  // whatever the tap opened (the task sheet's scrim, which closes it). The canvas needs no click.
+  const onTouchEnd = (event) => {
+    if (event.cancelable) event.preventDefault();
+  };
   const onWheel = (event) => {
     event.preventDefault();
     act(gesture.wheel(event));
@@ -362,7 +367,7 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
 
   const canvasListeners = [
     ['pointerdown', onDown], ['pointermove', onMove], ['pointerup', onUp], ['pointercancel', onCancel],
-    ['wheel', onWheel, { passive: false }],
+    ['wheel', onWheel, { passive: false }], ['touchend', onTouchEnd, { passive: false }],
   ];
   if (ctx) for (const [type, handler, options] of canvasListeners) canvas.addEventListener(type, handler, options);
   list.addEventListener('click', onListClick);
