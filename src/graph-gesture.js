@@ -2,7 +2,8 @@
 // wheel zooms. Pure; inputs are plain {pointerId, pointerType, clientX, clientY, timeStamp}
 // objects (a PointerEvent fits), and each call returns an intent or null:
 //   {type: 'orbit', dx, dy}            drag, CSS px since the last intent
-//   {type: 'zoom', factor, cx, cy}     factor > 1 moves away (graph-space.js zoom)
+//   {type: 'zoom', factor, cx, cy}     factor > 1 moves away (graph-space.js zoom) about client
+//                                      px cx/cy; a pinch adds fromX/fromY, the midpoint before
 //   {type: 'tap', x, y, pointerType}   client px where the pointer came up
 //   {type: 'release', vx, vy}          an orbit ended; px per ms over the last moments
 
@@ -73,7 +74,12 @@ export function createGesture() {
         const factor = spread / now;
         spread = now;
         const [a, b] = pair();
-        return { type: 'zoom', factor, cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 };
+        // The midpoint before this move (`fromX`/`fromY`) and after it (cx/cy): what was under the
+        // fingers follows them.
+        const other = a === p ? b : a;
+        return {
+          type: 'zoom', factor, cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, fromX: (lastX + other.x) / 2, fromY: (lastY + other.y) / 2,
+        };
       }
       if (mode === 'press') {
         if (Math.hypot(p.x - p.startX, p.y - p.startY) <= slopFor(p.type)) return null;

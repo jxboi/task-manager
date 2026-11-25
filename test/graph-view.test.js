@@ -8,7 +8,8 @@ import { Element, installDom } from './dom.js';
 import { createFakeApi, settle } from './fake-api.js';
 import { markupAttributes } from './markup.js';
 import { context2d, createTierMeter, DPR_CAP, INERTIA, mountGraph, projectFlat, TIER_BUDGET } from '../src/graph-view.js';
-import { MIN_SCREEN_RADIUS } from '../src/graph-space.js';
+import { FIT_PADDING, MIN_SCREEN_RADIUS } from '../src/graph-space.js';
+import { boxGap, LABELS, labelWidth } from '../src/graph-draw.js';
 
 const NOW = Date.UTC(2026, 10, 25, 12);
 const categories = [{ id: 'c0', name: 'Work' }, { id: 'c1', name: 'Home' }, { id: 'c2', name: 'Empty' }];
@@ -19,11 +20,12 @@ const RECT = { left: 10, top: 20, width: 390, height: 700 };
 
 // Records calls; counts what drawFrame drew.
 const fakeContext = () => {
-  const ctx = { calls: 0, arcs: [] };
+  const ctx = { calls: 0, arcs: [], texts: [] };
   return new Proxy(ctx, {
     get: (target, name) => (name in target ? target[name] : (...args) => {
       target.calls += 1;
       if (name === 'arc') target.arcs.push(args);
+      if (name === 'fillText') target.texts.push(args[0]);
     }),
     set: (target, name, value) => { target[name] = value; return true; },
   });
@@ -256,7 +258,7 @@ test('reduced motion: no inertia after a flick, read live from the media query',
   assert.ok(env.flush() > 5, 'with motion allowed again, the flick spins');
 });
 
-test('a hub tap re-centres on it: eased over frames, or at once under reduced motion', async (t) => {
+test('a hub stroke tap re-centres on it: eased over frames, or at once under reduced motion', async (t) => {
   // One subtest each: setup's globals are put back when its own test ends.
   for (const reduced of [false, true]) await t.test(reduced ? 'reduced motion' : 'eased', (t) => {
     const env = setup(t, { reduced });
@@ -266,9 +268,13 @@ test('a hub tap re-centres on it: eased over frames, or at once under reduced mo
     const ctx = env.canvases[0].getContext('2d');
     const atCentre = ([x, y]) => Math.abs(x - RECT.width / 2) < 1 && Math.abs(y - RECT.height / 2) < 1;
     assert.equal(ctx.arcs.filter(atCentre).length, 0, 'neither hub starts at the centre');
-    const [[hx, hy]] = ctx.arcs.map(([x, y]) => [x, y]).sort((p, q) => p[0] - q[0]); // tap the left one
-    pointer(env.canvases[0], 'pointerdown', 1, hx + RECT.left, hy + RECT.top, 100, 'mouse');
-    pointer(env.canvases[0], 'pointerup', 1, hx + RECT.left, hy + RECT.top, 150, 'mouse');
+    const [[hx, hy, r]] = [...ctx.arcs].sort((p, q) => p[0] - q[0]);
+    const [canvas] = env.canvases;
+    pointer(canvas, 'pointerdown', 1, hx + RECT.left, hy + RECT.top, 0, 'mouse');
+    pointer(canvas, 'pointerup', 1, hx + RECT.left, hy + RECT.top, 50, 'mouse');
+    assert.equal(env.flush(), 0, 'a tap on the hollow centre leaves the camera in place');
+    pointer(canvas, 'pointerdown', 1, hx + r + RECT.left, hy + RECT.top, 100, 'mouse');
+    pointer(canvas, 'pointerup', 1, hx + r + RECT.left, hy + RECT.top, 150, 'mouse');
     ctx.arcs.length = 0;
     const frames = env.flush();
     assert.equal(env.opened.length, 0);
@@ -283,30 +289,273 @@ test('a hub tap re-centres on it: eased over frames, or at once under reduced mo
 test('pinch and wheel zoom redraw the scene smaller or larger', (t) => {
   const env = setup(t);
   env.graph.update({ todos, categories, now: NOW });
-  env.flush();
   const ctx = env.canvases[0].getContext('2d');
-  // The biggest circle: zooming in pushes some nodes off the canvas, so a sum would mislead.
-  const largest = () => Math.max(...ctx.arcs.map(([, , r]) => r));
-  const base = largest();
+  // How far the tasks sit from their own centroid on average, from each button's resting position
+  // (every task, on the canvas or not: the fitted graph's outer nodes leave it when zooming in,
+  // so the drawn circles alone would mislead). The centroid, not the canvas centre: zoom is
+  // anchored on the fingers or cursor, which also slides the scene.
+  const spread = () => {
+    ctx.arcs.length = 0;
+    env.flush();
+    assert.ok(ctx.arcs.length > 0, 'redrawn');
+    env.idle();
+    const at = env.buttons().filter((b) => b.dataset.x !== undefined).map((b) => [Number(b.dataset.x), Number(b.dataset.y)]);
+    assert.equal(at.length, todos.length);
+    const mx = at.reduce((sum, [x]) => sum + x, 0) / at.length;
+    const my = at.reduce((sum, [, y]) => sum + y, 0) / at.length;
+    return at.reduce((sum, [x, y]) => sum + Math.hypot(x - mx, y - my), 0) / at.length;
+  };
+  const base = spread();
   const canvas = env.canvases[0];
   pointer(canvas, 'pointerdown', 1, 150, 300, 0);
   pointer(canvas, 'pointerdown', 2, 250, 300, 0);
   pointer(canvas, 'pointermove', 2, 350, 300, 10);
   pointer(canvas, 'pointerup', 2, 350, 300, 20);
   pointer(canvas, 'pointerup', 1, 150, 300, 20);
-  ctx.arcs.length = 0;
-  env.flush();
-  const zoomed = largest();
-  assert.ok(zoomed > base * 1.8, 'spreading two fingers zooms in');
+  const zoomed = spread();
+  assert.ok(zoomed > base * 1.8, `spreading two fingers zooms in (${base} -> ${zoomed})`);
   assert.deepEqual(env.opened, []);
 
   const wheel = Object.assign(new Event('wheel', { cancelable: true }), {});
   Object.defineProperties(wheel, { deltaY: { value: 400 }, deltaMode: { value: 0 }, clientX: { value: 0 }, clientY: { value: 0 } });
   canvas.dispatchEvent(wheel);
   assert.equal(wheel.defaultPrevented, true, 'the page does not scroll');
+  const out = spread();
+  assert.ok(out < zoomed * 0.6, `wheel down zooms out (${zoomed} -> ${out})`);
+});
+
+// How far the tasks sit from their own centroid on average (canvas px, from the buttons).
+function spread(env) {
+  env.flush();
+  env.idle();
+  const at = env.buttons().filter((b) => b.dataset.x !== undefined).map((b) => [Number(b.dataset.x), Number(b.dataset.y)]);
+  const mx = at.reduce((sum, [x]) => sum + x, 0) / at.length;
+  const my = at.reduce((sum, [, y]) => sum + y, 0) / at.length;
+  return at.reduce((sum, [x, y]) => sum + Math.hypot(x - mx, y - my), 0) / at.length;
+}
+// The task furthest from the canvas centre, from the buttons' resting positions (canvas px).
+const outermost = (env) => {
+  env.flush();
+  env.idle();
+  let best = null;
+  for (const b of env.buttons()) {
+    const x = Number(b.dataset.x);
+    const y = Number(b.dataset.y);
+    const d = Math.hypot(x - RECT.width / 2, y - RECT.height / 2);
+    if (!best || d > best.d) best = { id: b.dataset.nodeId, x, y, d };
+  }
+  return best;
+};
+const restingAt = (env, id) => {
+  env.flush();
+  env.idle();
+  const b = env.buttons().find((button) => button.dataset.nodeId === id);
+  return [Number(b.dataset.x), Number(b.dataset.y)];
+};
+const wheelAt = (canvas, clientX, clientY, deltaY) => {
+  const wheel = new Event('wheel', { cancelable: true });
+  Object.defineProperties(wheel, { deltaY: { value: deltaY }, deltaMode: { value: 0 }, clientX: { value: clientX }, clientY: { value: clientY } });
+  canvas.dispatchEvent(wheel);
+};
+
+test('wheel zoom anchors on the cursor: an outer node under it stays put, in and out', (t) => {
+  const env = setup(t);
+  env.graph.update({ todos, categories, now: NOW });
+  const canvas = env.canvases[0];
+  const node = outermost(env);
+  let last = spread(env);
+  for (const deltaY of [-300, -300, 200, 400]) {
+    wheelAt(canvas, node.x + RECT.left, node.y + RECT.top, deltaY);
+    const now = spread(env);
+    assert.ok(deltaY < 0 ? now > last * 1.2 : now < last * 0.9, `wheel ${deltaY} zooms (${last} -> ${now})`);
+    last = now;
+    const [x, y] = restingAt(env, node.id);
+    // Within the 1 px rounding of data-x/y (plus one for Float32 projection).
+    assert.ok(Math.hypot(x - node.x, y - node.y) <= 2, `wheel ${deltaY}: (${x}, ${y}) stays at (${node.x}, ${node.y})`);
+  }
+});
+
+test('pinch zoom anchors on the midpoint: an outer node between the fingers stays put', (t) => {
+  const env = setup(t);
+  env.graph.update({ todos, categories, now: NOW });
+  const canvas = env.canvases[0];
+  const node = outermost(env);
+  const cx = node.x + RECT.left;
+  const cy = node.y + RECT.top;
+  const base = spread(env);
+  // Fingers spread symmetrically about the node: the midpoint stays on it.
+  pointer(canvas, 'pointerdown', 1, cx - 20, cy, 0);
+  pointer(canvas, 'pointerdown', 2, cx + 20, cy, 0);
+  for (let s = 1; s <= 4; s += 1) {
+    pointer(canvas, 'pointermove', 1, cx - 20 - 10 * s, cy, s * 10);
+    pointer(canvas, 'pointermove', 2, cx + 20 + 10 * s, cy, s * 10 + 5);
+  }
+  pointer(canvas, 'pointerup', 2, cx + 60, cy, 100);
+  pointer(canvas, 'pointerup', 1, cx - 60, cy, 100);
+  const [x, y] = restingAt(env, node.id);
+  assert.ok(Math.hypot(x - node.x, y - node.y) <= 2, `(${x}, ${y}) stays at (${node.x}, ${node.y})`);
+  assert.ok(spread(env) > base * 1.5, 'zoomed in');
+  assert.deepEqual(env.opened, []);
+});
+
+for (const input of ['wheel', 'pinch']) {
+  test(`a large ${input} zoom keeps the anchored task drawn and tappable`, (t) => {
+    const env = setup(t, { reduced: true });
+    env.graph.update({ todos, categories, now: NOW });
+    const canvas = env.canvases[0];
+    const ctx = canvas.getContext('2d');
+    const node = outermost(env);
+    const arcAt = (x, y) => ctx.arcs.find(([ax, ay]) => Math.hypot(ax - x, ay - y) <= 1);
+    const [startX, startY, startRadius] = arcAt(node.x, node.y);
+    const cx = startX + RECT.left;
+    const cy = startY + RECT.top;
+    assert.ok(startRadius >= MIN_SCREEN_RADIUS);
+    ctx.arcs.length = 0;
+
+    if (input === 'wheel') {
+      for (let i = 0; i < 6; i += 1) wheelAt(canvas, cx, cy, -400);
+    } else {
+      wheelAt(canvas, cx, cy, -400);
+      pointer(canvas, 'pointerdown', 1, cx - 30, cy, 0);
+      pointer(canvas, 'pointerdown', 2, cx + 30, cy, 0);
+      for (let step = 1; step <= 5; step += 1) {
+        pointer(canvas, 'pointermove', 1, cx - 30 - step * 10, cy, step * 10);
+        pointer(canvas, 'pointermove', 2, cx + 30 + step * 10, cy, step * 10 + 5);
+      }
+      pointer(canvas, 'pointerup', 1, cx - 80, cy, 61);
+      pointer(canvas, 'pointerup', 2, cx + 80, cy, 62);
+    }
+    const [x, y] = restingAt(env, node.id);
+    assert.ok(Math.hypot(x - node.x, y - node.y) <= 2, `the task remains at the anchor (${x}, ${y} vs ${node.x}, ${node.y})`);
+    const radius = arcAt(x, y)?.[2];
+    assert.ok(radius > startRadius && radius <= RECT.width / 8 + 0.01, `zoomed radius: ${radius}`);
+    pointer(canvas, 'pointerdown', 3, cx, cy, 100);
+    pointer(canvas, 'pointerup', 3, cx, cy, 105);
+    const button = env.buttons().find((candidate) => candidate.dataset.nodeId === node.id);
+    assert.deepEqual(env.opened, [JSON.parse(button.dataset.focusKey)[1]]);
+  });
+}
+
+test('an offscreen graph recovers when zooming out to the distance limit', (t) => {
+  const env = setup(t);
+  const fresh = [{ id: 'new0', text: 'Brand new', completed: false, createdAt: NOW, categoryId: null }];
+  env.graph.update({ todos: fresh, categories: [], now: NOW });
+  env.flush();
+  const canvas = env.canvases[0];
+  const ctx = canvas.getContext('2d');
+  const y = RECT.top + RECT.height / 2;
+  for (let i = 0; i < 8; i += 1) {
+    wheelAt(canvas, RECT.left + RECT.width, y, -400);
+    wheelAt(canvas, RECT.left, y, 400);
+  }
   ctx.arcs.length = 0;
   env.flush();
-  assert.ok(largest() < zoomed * 0.6, 'wheel down zooms out');
+  assert.equal(ctx.arcs.length, 0, 'alternating anchors moved both circles offscreen');
+
+  for (let i = 0; i < 15; i += 1) wheelAt(canvas, RECT.left + RECT.width / 2, y, 400);
+  env.flush();
+  assert.equal(ctx.arcs.length, 2, 'zooming out recovered the hub and the task');
+  for (const [x, y, r] of ctx.arcs) {
+    assert.ok(x - r >= 0 && x + r <= RECT.width && y - r >= 0 && y + r <= RECT.height);
+  }
+});
+
+test('lite restores task labels in one frame after gestures and hub animation', (t) => {
+  const env = setup(t);
+  env.setDrawMs(TIER_BUDGET.full.drawMs + 2);
+  const fresh = [{ id: 'new0', text: 'Brand new', completed: false, createdAt: NOW, categoryId: null }];
+  env.graph.update({ todos: fresh, categories: [], now: NOW });
+  const canvas = env.canvases[0];
+  const ctx = canvas.getContext('2d');
+  const x = RECT.left + RECT.width / 2;
+  const y = RECT.top + RECT.height / 2;
+  for (let i = 0; i < TIER_BUDGET.full.frames; i += 1) {
+    wheelAt(canvas, x, y, i % 2 ? 25 : -25);
+    env.flush(1);
+  }
+  assert.equal(env.root.dataset.mode, 'lite');
+  env.setDrawMs(1);
+
+  const draw = (showTask) => {
+    ctx.texts.length = 0;
+    assert.equal(env.flush(), 1);
+    assert.ok(ctx.texts.length > 0, 'hub label drawn');
+    assert.equal(ctx.texts.includes('BRAND NEW'), showTask);
+  };
+  const idle = () => {
+    const calls = ctx.calls;
+    env.idle();
+    assert.equal(env.flush(), 0);
+    assert.equal(ctx.calls, calls);
+    assert.equal(env.timers, 0);
+    assert.equal(env.root.dataset.mode, 'lite');
+  };
+  draw(false); // wheel burst that caused the transition
+  env.idle();
+  draw(true);
+  idle();
+
+  pointer(canvas, 'pointerdown', 1, x, y, 1000);
+  pointer(canvas, 'pointermove', 1, x + 20, y, 1016);
+  draw(false);
+  idle(); // holding the pointer still leaves the gesture active
+  pointer(canvas, 'pointerup', 1, x + 20, y, 1032);
+  draw(true);
+  idle();
+
+  pointer(canvas, 'pointerdown', 1, x - 30, y, 2000);
+  pointer(canvas, 'pointerdown', 2, x + 30, y, 2000);
+  pointer(canvas, 'pointermove', 2, x + 35, y, 2016);
+  draw(false);
+  pointer(canvas, 'pointercancel', 2, x + 35, y, 2032);
+  draw(true);
+  idle();
+
+  wheelAt(canvas, x, y, 25);
+  draw(false);
+  wheelAt(canvas, x, y, 25);
+  draw(false);
+  env.idle();
+  draw(true);
+  idle();
+
+  // The only hub has the larger circle. Tap its ring to start the re-centering animation.
+  const [hx, hy, hr] = ctx.arcs.slice(-2).sort((a, b) => b[2] - a[2])[0];
+  pointer(canvas, 'pointerdown', 1, RECT.left + hx - hr, RECT.top + hy, 3000);
+  pointer(canvas, 'pointerup', 1, RECT.left + hx - hr, RECT.top + hy, 3016);
+  const taskLabels = [];
+  for (let i = 0; env.pending && i < 30; i += 1) {
+    ctx.texts.length = 0;
+    env.flush(1);
+    taskLabels.push(ctx.texts.includes('BRAND NEW'));
+  }
+  assert.ok(taskLabels.length > 1, 'hub tap animated');
+  assert.deepEqual(taskLabels.slice(0, -1), Array(taskLabels.length - 1).fill(false));
+  assert.equal(taskLabels.at(-1), true, 'the last animation frame restored labels');
+  idle();
+});
+
+test('the static tier labels every task on the canvas and anchors wheel zoom in its top view', (t) => {
+  const env = setup(t);
+  env.setDrawMs(TIER_BUDGET.full.drawMs + 2);
+  env.graph.update({ todos, categories, now: NOW });
+  const canvas = env.canvases[0];
+  for (let i = 0; env.root.dataset.mode !== 'static' && i < 80; i += 1) {
+    env.setDrawMs(TIER_BUDGET.lite.drawMs + 2);
+    drag(canvas, { by: [30, 0], steps: TIER_BUDGET.full.frames, ms: 16, t0: 1000 + i * 1000 });
+    env.flush();
+  }
+  assert.equal(env.root.dataset.mode, 'static');
+  const ctx = canvas.getContext('2d');
+  const node = outermost(env);
+  wheelAt(canvas, node.x + RECT.left, node.y + RECT.top, -200);
+  env.flush();
+  for (const todo of todos) assert.ok(ctx.texts.includes(todo.text.toUpperCase()), `${todo.text} labelled (${ctx.texts})`);
+  for (const name of ['WORK', 'HOME']) assert.ok(ctx.texts.includes(name), `${name} hub labelled`);
+  const [x, y] = restingAt(env, node.id);
+  assert.ok(Math.hypot(x - node.x, y - node.y) <= 2, `static: (${x}, ${y}) stays at (${node.x}, ${node.y})`);
+  // The grouped list stays available to keyboards and screen readers as before.
+  assert.equal(env.buttons().length, todos.length);
 });
 
 test('tier meter: steps full → lite → static on slow draws, and stays once a tier passes', () => {
@@ -483,6 +732,53 @@ test('moving a task offscreen refits the camera; edits keeping it visible leave 
   const cx = rx - RECT.left;
   const cy = ry - RECT.top;
   assert.ok(cx > 0 && cx < RECT.width && cy > 0 && cy < RECT.height, `moved t0 (${cx},${cy}) refitted into view`);
+});
+
+test('on load and on resize the camera fits every node with FIT_PADDING px to spare', (t) => {
+  const observers = [];
+  const hadObserver = Object.getOwnPropertyDescriptor(globalThis, 'ResizeObserver');
+  globalThis.ResizeObserver = class { constructor(callback) { this.callback = callback; observers.push(this); } observe() {} disconnect() {} };
+  const saved = { ...RECT };
+  t.after(() => {
+    Object.assign(RECT, saved);
+    if (hadObserver) Object.defineProperty(globalThis, 'ResizeObserver', hadObserver);
+    else delete globalThis.ResizeObserver;
+  });
+  const env = setup(t);
+  env.graph.update({ todos, categories, now: NOW });
+  const ctx = env.canvases[0].getContext('2d');
+  const check = (where) => {
+    ctx.arcs.length = 0;
+    env.flush();
+    env.idle();
+    // Every drawn circle (hubs included) sits inside the padding.
+    for (const [x, y, r] of ctx.arcs) {
+      assert.ok(x - r >= FIT_PADDING - 0.5 && x + r <= RECT.width - FIT_PADDING + 0.5 && y - r >= FIT_PADDING - 0.5
+        && y + r <= RECT.height - FIT_PADDING + 0.5, `${where}: circle ${x},${y} r ${r} in ${RECT.width}x${RECT.height}`);
+    }
+    const xs = [];
+    const ys = [];
+    for (const b of env.buttons()) {
+      const [x, y] = [Number(b.dataset.x), Number(b.dataset.y)];
+      assert.ok(x >= FIT_PADDING && x <= RECT.width - FIT_PADDING && y >= FIT_PADDING && y <= RECT.height - FIT_PADDING,
+        `${where}: ${b.textContent} at ${x},${y} in ${RECT.width}x${RECT.height}`);
+      xs.push(x);
+      ys.push(y);
+    }
+    const top = Math.min(...ctx.arcs.map(([, y, r]) => y - r));
+    const bottom = Math.max(...ctx.arcs.map(([, y, r]) => y + r));
+    const left = Math.min(...ctx.arcs.map(([x, , r]) => x - r));
+    const right = Math.max(...ctx.arcs.map(([x, , r]) => x + r));
+    return { w: right - left, h: bottom - top };
+  };
+  const phone = check('load');
+  assert.ok(phone.h > RECT.height * 0.55, `the graph uses the phone canvas height (${phone.h} of ${RECT.height})`);
+  Object.assign(RECT, { width: 900, height: 500 });
+  for (const observer of observers) observer.callback([]);
+  const wide = check('resize');
+  // The user's angle is kept, so one axis of the new canvas is filled to the padding.
+  const fills = (used, size) => used >= size - 2 * FIT_PADDING - 3;
+  assert.ok(fills(wide.w, 900) || fills(wide.h, 500), `refitted to the 900x500 canvas (${wide.w}x${wide.h})`);
 });
 
 test('a touch tap cancels its touchend, so no synthesized click lands on what the tap opened', (t) => {
@@ -888,4 +1184,79 @@ test('in the app: the graph replaces the list, opens tasks in the edit sheet, an
     assert.equal(buttons().length, 0);
     assert.equal(document.activeElement, viewGraph);
   });
+});
+
+test('mounted graph places every task label within 6px of its node, inside FIT_PADDING, and groups categories cleanly', (t) => {
+  const cats = [{ id: 'w', name: 'Work' }, { id: 'h', name: 'Home' }, { id: 'e', name: 'Errands' }];
+  const list = [
+    ['Write quarterly report', 'w'], ['Review pull requests', 'w'], ['Plan team offsite', 'w'], ['Update roadmap', 'w'],
+    ['Water the plants', 'h'], ['Fix leaking tap', 'h'], ['Clean the gutters', 'h'],
+    ['Buy groceries', 'e'], ['Post the parcel', 'e'], ['Pick up dry cleaning', 'e'], ['Renew passport', 'e'],
+    ['Call grandma', null], ['Read a novel', null], ['Learn the ukulele', null],
+  ].map(([text, categoryId], i) => ({
+    id: `t${i}`, text, completed: i % 4 === 1, createdAt: NOW - i * i * 17000000, categoryId,
+  }));
+  const saved = { ...RECT };
+  t.after(() => Object.assign(RECT, saved));
+  for (const vp of [{ left: 0, top: 0, width: 390, height: 768 }, { left: 0, top: 0, width: 1280, height: 644 }]) {
+    Object.assign(RECT, vp);
+    const draws = [];
+    const env = setup(t, {
+      canvas: () => {
+        const ctx = fakeContext();
+        const origFillText = (text, x, y) => {
+          draws.push({ text, x, y, align: ctx.textAlign });
+        };
+        return {
+          getContext: () => new Proxy(ctx, {
+            get: (target, name) => {
+              if (name === 'fillText') return origFillText;
+              return name in target ? target[name] : (...args) => {
+                target.calls += 1;
+                if (name === 'arc') target.arcs.push(args);
+              };
+            },
+            set: (target, name, value) => { target[name] = value; return true; },
+          }),
+        };
+      },
+    });
+    const ctx = env.canvases[0].getContext('2d');
+    env.graph.update({ todos: list, categories: cats, now: NOW });
+    draws.length = 0;
+    ctx.arcs.length = 0;
+    env.flush();
+    env.idle();
+    const hubs = ['WORK', 'HOME', 'ERRANDS', 'UNCATEGORIZED'];
+    const hubCircles = draws.filter((d) => hubs.includes(d.text)).map((d) => {
+      const match = ctx.arcs.find(([ax, ay]) => Math.hypot(ax - d.x, ay - d.y) < 60);
+      return { name: d.text, x: match[0], y: match[1] };
+    });
+    assert.equal(hubCircles.length, 4);
+    for (const d of draws) {
+      const w = labelWidth(d.text);
+      const left = d.align === 'left' ? d.x : d.align === 'right' ? d.x - w : d.x - w / 2;
+      const right = left + w;
+      const top = d.y - (LABELS.size + 2) / 2;
+      const bottom = d.y + (LABELS.size + 2) / 2;
+      assert.ok(left >= FIT_PADDING - 0.5 && right <= vp.width - FIT_PADDING + 0.5
+        && top >= FIT_PADDING - 0.5 && bottom <= vp.height - FIT_PADDING + 0.5,
+        `${vp.width}x${vp.height}: ${d.text} inside ${FIT_PADDING}px padding`);
+    }
+    for (const b of env.buttons()) {
+      const bx = Number(b.dataset.x);
+      const by = Number(b.dataset.y);
+      const arc = ctx.arcs.find(([ax, ay]) => Math.round(ax) === bx && Math.round(ay) === by);
+      assert.ok(arc, `${b.textContent} has a drawn circle`);
+      const sig = b.textContent.toUpperCase();
+      const cap = [...sig].length > 22 ? `${[...sig].slice(0, 21).join('')}…` : sig;
+      const d = draws.find((l) => l.text === cap);
+      assert.ok(d, `${cap} drawn`);
+      const w = labelWidth(d.text);
+      const left = d.align === 'left' ? d.x : d.align === 'right' ? d.x - w : d.x - w / 2;
+      const box = { left, right: left + w, top: d.y - (LABELS.size + 2) / 2, bottom: d.y + (LABELS.size + 2) / 2 };
+      const gap = boxGap(arc[0], arc[1], arc[2], box);
+      assert.ok(gap <= 6.01, `${vp.width}x${vp.height}: ${cap} gap ${gap.toFixed(2)} <= 6`);
+    }
+  }
 });

@@ -3,12 +3,14 @@
 // src/app.js imports, and only on demand (import('./graph-view.js')). Owns all graph state:
 // layout, camera, gestures, the frame loop and the quality tier.
 import { toGraph } from './graph-data.js';
-import { drawFrame, MONO, PALETTE } from './graph-draw.js';
+import { drawFrame, labelWidth as drawLabelWidth, MONO, PALETTE, planLabels, sideExtents } from './graph-draw.js';
 import { createGesture, TAP_SLOP } from './graph-gesture.js';
 import {
-  createCamera, depthOrder, drawnRadius, extent, fitCamera, focalLength, layout, lookAt, orbit, pick, pickNearest, project,
-  zoom,
+  createCamera, depthOrder, DISTANCE, drawnRadius, extent, FIT_PADDING, fitCamera, frameCamera, groupOnScreen, layout, lookAt,
+  nudgeLabels, orbit, pick, pickNearest, project, projectFlat, spreadOnScreen, zoom,
 } from './graph-space.js';
+
+export { projectFlat }; // the static tier's projection
 
 // Quality tiers step down within a session, never up. 'list' is chosen at mount (no 2D canvas).
 export const TIERS = ['full', 'lite', 'static'];
@@ -80,35 +82,13 @@ export function createTierMeter(tier = 'full', budget = TIER_BUDGET) {
   };
 }
 
-// The static tier: the same layout seen from straight above, without perspective. Same output
-// shape as graph-space.js project(); depth is height, so higher nodes draw on top.
-export function projectFlat(positions, nodes, camera, viewport, out = null) {
-  const result = out && out.length === nodes.length * 4 ? out : new Float32Array(nodes.length * 4);
-  const scale = focalLength(viewport) / camera.distance;
-  const { target } = camera;
-  for (let i = 0; i < nodes.length; i += 1) {
-    const p = positions.get(nodes[i].id);
-    const k = i * 4;
-    if (!p) {
-      result[k] = result[k + 1] = result[k + 2] = 0;
-      result[k + 3] = Infinity;
-      continue;
-    }
-    result[k] = viewport.width / 2 + (p.x - target.x) * scale;
-    result[k + 1] = viewport.height / 2 + (p.z - target.z) * scale;
-    result[k + 2] = scale;
-    result[k + 3] = -p.y;
-  }
-  return result;
-}
-
 function readPalette(root) {
   try {
     const style = getComputedStyle(root);
     const token = (name, fallback) => style.getPropertyValue(name).trim() || fallback;
     return {
       palette: { ...PALETTE, bg: token('--page', PALETTE.bg), open: token('--ink', PALETTE.open),
-        label: token('--text-2', PALETTE.label), hubLabel: token('--text', PALETTE.hubLabel) },
+        label: token('--text-2', PALETTE.label), hubLabel: token('--ink', PALETTE.hubLabel), hub: token('--ink', PALETTE.hub) },
       font: token('--mono', MONO),
     };
   } catch {
@@ -140,6 +120,7 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
   let projected = null;
   let order = null;
   let camera = null;
+  let framed = false; // the camera has been fitted to a real viewport at least once
   let size = { width: 0, height: 0, dpr: 1 };
   let buttons = new Map(); // node id -> button
   let focusIndex = -1;
@@ -147,19 +128,92 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
   let idleTimer = 0;
   let spin = null; // {vx, vy} px/ms after a flick
   let ease = null; // {from, to, start}
+  let wheeling = false;
+  let needsLabels = false;
   let lastFrame = null; // {t, live}
   let destroyed = false;
   const drawTimes = [];
   const gesture = createGesture();
+  const gesturing = () => gesture.mode === 'orbit' || gesture.mode === 'pinch';
   const still = () => Boolean(reducedMotion?.matches);
+
+  // Fits the camera including label bounding boxes (two passes so side flips at the new scale are caught).
+  const fitWithLabels = (cam, pos, viewport, flat, reset = false) => {
+    let fitted = reset ? fitCamera(cam, pos, nodes, viewport, undefined, { flat }) : cam;
+    for (let pass = 0; pass < 2; pass += 1) {
+      const proj = (flat ? projectFlat : project)(pos, nodes, fitted, viewport);
+      const plan = planLabels(proj, nodes, depthOrder(proj), {
+        width: viewport.width, height: viewport.height, padding: FIT_PADDING,
+      });
+      const labels = new Map();
+      for (const entry of plan) {
+        const node = nodes[entry.index];
+        labels.set(node.id, sideExtents(entry.side, drawLabelWidth(node.label)));
+      }
+      fitted = fitCamera(fitted, pos, nodes, viewport, undefined, { flat, labels });
+    }
+    return fitted;
+  };
+
+  // Nudges nodes if any label still covers a circle or overlaps another label, keeping labels inside padding.
+  const nudgeAndFit = (cam, pos, viewport, flat) => {
+    const planFn = (proj, ord) => planLabels(proj, nodes, ord, {
+      width: viewport.width, height: viewport.height, padding: FIT_PADDING,
+    });
+    let fitted = fitWithLabels(cam, pos, viewport, flat, true);
+    let next = nudgeLabels(pos, nodes, fitted, viewport, planFn, { flat });
+    fitted = fitWithLabels(fitted, next, viewport, flat, false);
+    next = nudgeLabels(next, nodes, fitted, viewport, planFn, { flat, maxIterations: 6 });
+    const proj = (flat ? projectFlat : project)(next, nodes, fitted, viewport);
+    const out = planFn(proj, depthOrder(proj)).some((e) => (
+      e.left < FIT_PADDING - 0.5 || e.right > viewport.width - FIT_PADDING + 0.5
+      || e.top < FIT_PADDING - 0.5 || e.bottom > viewport.height - FIT_PADDING + 0.5
+    ));
+    if (out) fitted = fitWithLabels(fitted, next, viewport, flat, false);
+    return { camera: fitted, positions: next };
+  };
+
+  // Fits the camera to the current viewport: the first time from the best starting angle, after
+  // that (a resize, a moved node off screen, the static tier) keeping the user's angle.
+  const refit = (spreadFlat = false) => {
+    if (!camera || !positions || !(size.width > 0) || !(size.height > 0)) return;
+    const viewport = { width: size.width, height: size.height };
+    const flat = tier === 'static';
+    const labelWidth = (node) => drawLabelWidth(node.label);
+    spin = null;
+    ease = null;
+    if (framed && !spreadFlat) {
+      // A refit (resize, moved node): fit first so all hubs are in view, group categories, nudge and fit labels.
+      camera = fitCamera(camera, positions, nodes, viewport, undefined, { flat });
+      positions = groupOnScreen(positions, nodes, camera, viewport, { flat, labelWidth, labelGap: 4 });
+      ({ camera, positions } = nudgeAndFit(camera, positions, viewport, flat));
+    } else if (framed) {
+      // Into the static tier: its top view stacks circles the perspective view had apart.
+      camera = fitCamera(camera, positions, nodes, viewport, undefined, { flat });
+      positions = spreadOnScreen(positions, nodes, camera, viewport, { flat });
+      positions = groupOnScreen(positions, nodes, camera, viewport, { flat, labelWidth, labelGap: 4 });
+      ({ camera, positions } = nudgeAndFit(camera, positions, viewport, flat));
+    } else {
+      // The first view: the best angle, overlapping circles pushed apart on screen, grouped, then fitted with labels.
+      camera = frameCamera(positions, nodes, viewport, undefined, { flat });
+      positions = spreadOnScreen(positions, nodes, camera, viewport, { flat });
+      positions = groupOnScreen(positions, nodes, camera, viewport, { flat, labelWidth, labelGap: 4 });
+      ({ camera, positions } = nudgeAndFit(camera, positions, viewport, flat));
+    }
+    framed = true;
+  };
 
   const measure = () => {
     const rect = (ctx ? canvas : root).getBoundingClientRect();
     const dpr = Math.min(globalThis.devicePixelRatio || 1, DPR_CAP[tier] ?? 1);
-    size = { width: Math.max(0, rect.width || 0), height: Math.max(0, rect.height || 0), dpr };
+    const width = Math.max(0, rect.width || 0);
+    const height = Math.max(0, rect.height || 0);
+    const resized = width !== size.width || height !== size.height;
+    size = { width, height, dpr };
     if (!ctx) return;
     canvas.width = Math.round(size.width * dpr);
     canvas.height = Math.round(size.height * dpr);
+    if (resized || !framed) refit();
     schedule();
   };
 
@@ -170,21 +224,25 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
 
   function setTier(next) {
     if (next === tier) return;
+    const flatChanged = (next === 'static') !== (tier === 'static');
     tier = next;
     root.dataset.mode = tier;
     spin = null;
     measure();
+    // The static tier's top view has other bounds than the perspective one.
+    if (flatChanged) refit(tier === 'static');
   }
 
-  function render() {
+  function render(moving) {
     if (!camera || !size.width || !size.height) return;
     const viewport = { width: size.width, height: size.height };
     projected = (tier === 'static' ? projectFlat : project)(positions, nodes, camera, viewport, projected);
     order = depthOrder(projected, order);
     const started = clock();
+    needsLabels = tier === 'lite' && moving;
     drawFrame(ctx, {
       nodes, projected, order, links, dpr: size.dpr, width: size.width, height: size.height, tier, focusIndex,
-      palette, font,
+      moving, palette, font, padding: FIT_PADDING,
     });
     const ms = clock() - started;
     drawTimes.push(ms);
@@ -214,9 +272,9 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
       spin = { vx: spin.vx * decay, vy: spin.vy * decay };
       if (Math.hypot(spin.vx, spin.vy) < INERTIA.minSpeed) spin = null;
     }
-    render();
     // Frames that follow each other in a gesture or animation measure the device's frame rate.
-    const live = gesture.mode === 'orbit' || gesture.mode === 'pinch' || Boolean(spin || ease);
+    const live = gesturing() || Boolean(spin || ease);
+    render(live || wheeling);
     if (live && lastFrame?.live) setTier(meter.interval(t - lastFrame.t));
     lastFrame = { t, live };
     if (spin || ease) schedule();
@@ -227,6 +285,13 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
   // median draw time.
   function idle() {
     if (destroyed) return;
+    wheeling = false;
+    // A wheel burst has no release event. Repaint once after its last frame, or let the
+    // pointer release or animation's last frame restore the labels if one is still active.
+    if (needsLabels && !gesturing() && !frameId) {
+      schedule();
+      return;
+    }
     lastFrame = null;
     root.dataset.frameMs = median(drawTimes).toFixed(2);
     for (const [id, button] of buttons) {
@@ -305,7 +370,45 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
       camera = orbit(camera, intent.dx, intent.dy);
       schedule();
     } else if (intent.type === 'zoom') {
-      camera = zoom(camera, intent.factor);
+      // About the wheel cursor, or the pinch midpoint (client px): what is under it stays under it,
+      // following the fingers when their midpoint moves.
+      const rect = canvas.getBoundingClientRect();
+      const left = rect.left || 0;
+      const top = rect.top || 0;
+      const x = (intent.fromX ?? intent.cx) - left;
+      const y = (intent.fromY ?? intent.cy) - top;
+      const viewport = { width: size.width, height: size.height };
+      const flat = tier === 'static';
+      const pinch = intent.fromX !== undefined;
+      let depth;
+      let taskRadius;
+      if (positions && !flat && (pinch || intent.factor < 1)) {
+        // Use the current camera because multiple input events can land before the next draw.
+        const now = project(positions, nodes, camera, viewport);
+        const id = pick(now, nodes, x, y) ?? (pinch ? pickNearest(now, nodes, x, y, TAP_SLOP.touch) : null);
+        if (id !== null) {
+          const i = index.get(id);
+          depth = now[i * 4 + 3];
+          if (nodes[i].kind === 'task') taskRadius = nodes[i].radius;
+        }
+      }
+      camera = zoom(camera, intent.factor, { x, y, toX: intent.cx - left, toY: intent.cy - top, depth, taskRadius, viewport, flat });
+      if (intent.factor > 1 && camera.distance === DISTANCE.max) {
+        // Anchoring can slide the whole graph away. At the zoom-out limit, fit it back into
+        // view if there isn't a visible circle left to zoom around.
+        const check = (flat ? projectFlat : project)(positions, nodes, camera, viewport);
+        const visible = nodes.some((node, i) => {
+          const k = i * 4;
+          const r = drawnRadius(node.radius, check[k + 2]);
+          const px = check[k];
+          const py = check[k + 1];
+          return r > 0 && px + r >= 0 && px - r <= viewport.width && py + r >= 0 && py - r <= viewport.height;
+        });
+        if (!visible) {
+          camera = lookAt(camera, { x: 0, y: 0, z: 0 });
+          refit();
+        }
+      }
       schedule();
     } else if (intent.type === 'release') {
       const speed = Math.hypot(intent.vx, intent.vy);
@@ -318,8 +421,7 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
       const slop = TAP_SLOP[intent.pointerType] ?? TAP_SLOP.mouse;
       const x = intent.x - (rect.left || 0);
       const y = intent.y - (rect.top || 0);
-      // An exact hit on a drawn circle wins (front-most by depth); when the tap lands only
-      // in the expanded touch areas, pick the nearest visible node to the finger.
+      // Try task circles, then hub strokes, then the nearest visible node within the touch slop.
       const id = pick(projected, nodes, x, y, 0) ?? pickNearest(projected, nodes, x, y, slop);
       const node = id === null ? null : nodes[index.get(id)];
       if (node?.kind === 'task') onOpenTask?.(node.todoId);
@@ -352,6 +454,7 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
   const onCancel = (event) => {
     gesture.cancel(event);
     spin = null;
+    if (needsLabels) schedule();
   };
   // A touch tap acts on pointerup; the click the browser synthesizes after it would land on
   // whatever the tap opened (the task sheet's scrim, which closes it). The canvas needs no click.
@@ -360,7 +463,11 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
   };
   const onWheel = (event) => {
     event.preventDefault();
-    act(gesture.wheel(event));
+    const intent = gesture.wheel(event);
+    if (!intent) return;
+    clearTimeout(idleTimer);
+    wheeling = true;
+    act(intent);
   };
   const onMotion = () => {
     if (!still()) return;
@@ -401,7 +508,7 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
       const previous = positions;
       signature = graph.signature;
       nodes = graph.nodes;
-      positions = layout(graph, previous);
+      positions = layout(graph, previous, { aspect: size.width > 0 && size.height > 0 ? size.height / size.width : 1 });
       index = new Map(nodes.map((node, i) => [node.id, i]));
       links = new Uint32Array(graph.links.length * 2);
       graph.links.forEach((link, l) => {
@@ -415,10 +522,9 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
       const hasViewport = ctx && size.width > 0 && size.height > 0;
       if (!camera) {
         camera = createCamera(extent(positions, nodes));
-        // Tighten: fit to the actual projected bounds so the graph fills the canvas.
-        if (hasViewport) {
-          camera = fitCamera(camera, positions, nodes, viewport, 40, { flat: tier === 'static' });
-        }
+        refit(); // fills the canvas once it has a size (measure() fits it otherwise)
+      } else if (hasViewport && !framed) {
+        refit();
       } else if (hasViewport) {
         // Only adjust the camera when a moved or newly added node (e.g. category change or new hub)
         // falls outside the current viewport; edits that leave nodes visible keep the user's camera.
@@ -438,11 +544,7 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
             const r = drawnRadius(nodes[i].radius, scale);
             return check[k] - r < 0 || check[k] + r > size.width || check[k + 1] - r < 0 || check[k + 1] + r > size.height;
           });
-          if (offscreen) {
-            spin = null;
-            ease = null;
-            camera = fitCamera({ ...camera, target: { x: 0, y: 0, z: 0 } }, positions, nodes, viewport, 40, { flat: tier === 'static' });
-          }
+          if (offscreen) refit();
         }
       }
       renderList(todos);

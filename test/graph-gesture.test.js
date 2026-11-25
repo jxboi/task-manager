@@ -76,6 +76,19 @@ test('two fingers pinch: spreading zooms in, closing zooms out, about their midp
   close(together.factor, 2);
 });
 
+test('a pinch move reports the midpoint before and after it, so the zoom can follow the fingers', () => {
+  const g = createGesture();
+  g.down(at(1, 100, 100));
+  g.down(at(2, 200, 100));
+  const first = g.move(at(2, 300, 140, 10));
+  assert.deepEqual([first.fromX, first.fromY, first.cx, first.cy], [150, 100, 200, 120]);
+  const second = g.move(at(1, 60, 140, 20));
+  assert.deepEqual([second.fromX, second.fromY, second.cx, second.cy], [200, 120, 180, 140]);
+  // The wheel has a cursor only.
+  const wheel = g.wheel({ deltaY: 10, deltaMode: 0, clientX: 7, clientY: 8 });
+  assert.deepEqual([wheel.cx, wheel.cy, wheel.fromX, wheel.fromY], [7, 8, undefined, undefined]);
+});
+
 test('a pinch never ends as a tap, and the finger left behind orbits without a jump', () => {
   const g = createGesture();
   g.down(at(1, 100, 100, 0));
