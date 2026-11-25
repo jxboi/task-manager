@@ -19,11 +19,12 @@ const RECT = { left: 10, top: 20, width: 390, height: 700 };
 
 // Records calls; counts what drawFrame drew.
 const fakeContext = () => {
-  const ctx = { calls: 0, arcs: [] };
+  const ctx = { calls: 0, arcs: [], texts: [] };
   return new Proxy(ctx, {
     get: (target, name) => (name in target ? target[name] : (...args) => {
       target.calls += 1;
       if (name === 'arc') target.arcs.push(args);
+      if (name === 'fillText') target.texts.push(args[0]);
     }),
     set: (target, name, value) => { target[name] = value; return true; },
   });
@@ -288,18 +289,20 @@ test('pinch and wheel zoom redraw the scene smaller or larger', (t) => {
   const env = setup(t);
   env.graph.update({ todos, categories, now: NOW });
   const ctx = env.canvases[0].getContext('2d');
-  // How far the tasks sit from the canvas centre on average, from each button's resting position
+  // How far the tasks sit from their own centroid on average, from each button's resting position
   // (every task, on the canvas or not: the fitted graph's outer nodes leave it when zooming in,
-  // so the drawn circles alone would mislead).
+  // so the drawn circles alone would mislead). The centroid, not the canvas centre: zoom is
+  // anchored on the fingers or cursor, which also slides the scene.
   const spread = () => {
     ctx.arcs.length = 0;
     env.flush();
     assert.ok(ctx.arcs.length > 0, 'redrawn');
     env.idle();
-    const at = env.buttons().filter((b) => b.dataset.x !== undefined)
-      .map((b) => Math.hypot(Number(b.dataset.x) - RECT.width / 2, Number(b.dataset.y) - RECT.height / 2));
+    const at = env.buttons().filter((b) => b.dataset.x !== undefined).map((b) => [Number(b.dataset.x), Number(b.dataset.y)]);
     assert.equal(at.length, todos.length);
-    return at.reduce((sum, d) => sum + d, 0) / at.length;
+    const mx = at.reduce((sum, [x]) => sum + x, 0) / at.length;
+    const my = at.reduce((sum, [, y]) => sum + y, 0) / at.length;
+    return at.reduce((sum, [x, y]) => sum + Math.hypot(x - mx, y - my), 0) / at.length;
   };
   const base = spread();
   const canvas = env.canvases[0];
@@ -318,6 +321,103 @@ test('pinch and wheel zoom redraw the scene smaller or larger', (t) => {
   assert.equal(wheel.defaultPrevented, true, 'the page does not scroll');
   const out = spread();
   assert.ok(out < zoomed * 0.6, `wheel down zooms out (${zoomed} -> ${out})`);
+});
+
+// How far the tasks sit from their own centroid on average (canvas px, from the buttons).
+function spread(env) {
+  env.flush();
+  env.idle();
+  const at = env.buttons().filter((b) => b.dataset.x !== undefined).map((b) => [Number(b.dataset.x), Number(b.dataset.y)]);
+  const mx = at.reduce((sum, [x]) => sum + x, 0) / at.length;
+  const my = at.reduce((sum, [, y]) => sum + y, 0) / at.length;
+  return at.reduce((sum, [x, y]) => sum + Math.hypot(x - mx, y - my), 0) / at.length;
+}
+// The task furthest from the canvas centre, from the buttons' resting positions (canvas px).
+const outermost = (env) => {
+  env.flush();
+  env.idle();
+  let best = null;
+  for (const b of env.buttons()) {
+    const x = Number(b.dataset.x);
+    const y = Number(b.dataset.y);
+    const d = Math.hypot(x - RECT.width / 2, y - RECT.height / 2);
+    if (!best || d > best.d) best = { id: b.dataset.nodeId, x, y, d };
+  }
+  return best;
+};
+const restingAt = (env, id) => {
+  env.flush();
+  env.idle();
+  const b = env.buttons().find((button) => button.dataset.nodeId === id);
+  return [Number(b.dataset.x), Number(b.dataset.y)];
+};
+const wheelAt = (canvas, clientX, clientY, deltaY) => {
+  const wheel = new Event('wheel', { cancelable: true });
+  Object.defineProperties(wheel, { deltaY: { value: deltaY }, deltaMode: { value: 0 }, clientX: { value: clientX }, clientY: { value: clientY } });
+  canvas.dispatchEvent(wheel);
+};
+
+test('wheel zoom anchors on the cursor: an outer node under it stays put, in and out', (t) => {
+  const env = setup(t);
+  env.graph.update({ todos, categories, now: NOW });
+  const canvas = env.canvases[0];
+  const node = outermost(env);
+  let last = spread(env);
+  for (const deltaY of [-300, -300, 200, 400]) {
+    wheelAt(canvas, node.x + RECT.left, node.y + RECT.top, deltaY);
+    const now = spread(env);
+    assert.ok(deltaY < 0 ? now > last * 1.2 : now < last * 0.9, `wheel ${deltaY} zooms (${last} -> ${now})`);
+    last = now;
+    const [x, y] = restingAt(env, node.id);
+    // Within the 1 px rounding of data-x/y (plus one for Float32 projection).
+    assert.ok(Math.hypot(x - node.x, y - node.y) <= 2, `wheel ${deltaY}: (${x}, ${y}) stays at (${node.x}, ${node.y})`);
+  }
+});
+
+test('pinch zoom anchors on the midpoint: an outer node between the fingers stays put', (t) => {
+  const env = setup(t);
+  env.graph.update({ todos, categories, now: NOW });
+  const canvas = env.canvases[0];
+  const node = outermost(env);
+  const cx = node.x + RECT.left;
+  const cy = node.y + RECT.top;
+  const base = spread(env);
+  // Fingers spread symmetrically about the node: the midpoint stays on it.
+  pointer(canvas, 'pointerdown', 1, cx - 20, cy, 0);
+  pointer(canvas, 'pointerdown', 2, cx + 20, cy, 0);
+  for (let s = 1; s <= 4; s += 1) {
+    pointer(canvas, 'pointermove', 1, cx - 20 - 10 * s, cy, s * 10);
+    pointer(canvas, 'pointermove', 2, cx + 20 + 10 * s, cy, s * 10 + 5);
+  }
+  pointer(canvas, 'pointerup', 2, cx + 60, cy, 100);
+  pointer(canvas, 'pointerup', 1, cx - 60, cy, 100);
+  const [x, y] = restingAt(env, node.id);
+  assert.ok(Math.hypot(x - node.x, y - node.y) <= 2, `(${x}, ${y}) stays at (${node.x}, ${node.y})`);
+  assert.ok(spread(env) > base * 1.5, 'zoomed in');
+  assert.deepEqual(env.opened, []);
+});
+
+test('the static tier labels every task on the canvas and anchors wheel zoom in its top view', (t) => {
+  const env = setup(t);
+  env.setDrawMs(TIER_BUDGET.full.drawMs + 2);
+  env.graph.update({ todos, categories, now: NOW });
+  const canvas = env.canvases[0];
+  for (let i = 0; env.root.dataset.mode !== 'static' && i < 80; i += 1) {
+    env.setDrawMs(TIER_BUDGET.lite.drawMs + 2);
+    drag(canvas, { by: [30, 0], steps: TIER_BUDGET.full.frames, ms: 16, t0: 1000 + i * 1000 });
+    env.flush();
+  }
+  assert.equal(env.root.dataset.mode, 'static');
+  const ctx = canvas.getContext('2d');
+  const node = outermost(env);
+  wheelAt(canvas, node.x + RECT.left, node.y + RECT.top, -200);
+  env.flush();
+  for (const todo of todos) assert.ok(ctx.texts.includes(todo.text.toUpperCase()), `${todo.text} labelled (${ctx.texts})`);
+  for (const name of ['WORK', 'HOME']) assert.ok(ctx.texts.includes(name), `${name} hub labelled`);
+  const [x, y] = restingAt(env, node.id);
+  assert.ok(Math.hypot(x - node.x, y - node.y) <= 2, `static: (${x}, ${y}) stays at (${node.x}, ${node.y})`);
+  // The grouped list stays available to keyboards and screen readers as before.
+  assert.equal(env.buttons().length, todos.length);
 });
 
 test('tier meter: steps full → lite → static on slow draws, and stays once a tier passes', () => {

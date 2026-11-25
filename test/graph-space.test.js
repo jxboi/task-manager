@@ -155,6 +155,94 @@ test('orbit turns and clamps pitch; zoom clamps the distance', () => {
   assert.equal(zoom(camera, Number.NaN), camera);
 });
 
+test('zoom about an anchor keeps every node under it in place, at any depth, flat or not; limits unchanged', () => {
+  const graph = toGraph(todos(40), categories, NOW);
+  const positions = layout(graph);
+  const vp = { width: 390, height: 700 };
+  for (const flat of [false, true]) {
+    const proj = flat ? projectFlat : project;
+    const base = fitCamera({ ...createCamera(), yaw: 1.1, pitch: -0.5 }, positions, graph.nodes, vp, FIT_PADDING, { flat });
+    const before = proj(positions, graph.nodes, base, vp);
+    // The outermost node: the one furthest from the canvas centre.
+    let far = 0;
+    let best = -1;
+    for (let i = 0; i < graph.nodes.length; i += 1) {
+      const d = Math.hypot(before[i * 4] - vp.width / 2, before[i * 4 + 1] - vp.height / 2);
+      if (before[i * 4 + 2] > 0 && d > best) { best = d; far = i; }
+    }
+    const x = before[far * 4];
+    const y = before[far * 4 + 1];
+    for (const factor of [0.25, 0.8, 1.5, 4]) {
+      const zoomed = zoom(base, factor, { x, y, viewport: vp, flat });
+      assert.equal(zoomed.distance, zoom(base, factor).distance, 'the same distance as an unanchored zoom');
+      assert.deepEqual([zoomed.yaw, zoomed.pitch], [base.yaw, base.pitch]);
+      const after = proj(positions, graph.nodes, zoomed, vp);
+      assert.ok(Math.hypot(after[far * 4] - x, after[far * 4 + 1] - y) < 0.01,
+        `${flat ? 'flat' : 'perspective'} ×${factor}: the node under the anchor stays (${after[far * 4]}, ${after[far * 4 + 1]}) vs (${x}, ${y})`);
+      // Any point along the anchor's line of sight stays too: another depth projects to the same pixel.
+      const ray = (d) => {
+        const out = proj(new Map([['p', d]]), [{ id: 'p', radius: 1 }], zoomed, vp);
+        return [out[0], out[1]];
+      };
+      if (!flat) {
+        // A world point that sat on the anchor's line of sight, further back than the node.
+        const cam = base;
+        const back = proj(positions, graph.nodes, cam, vp)[far * 4 + 3];
+        const k = (back + 80) / back;
+        const eye = (() => {
+          const cy = Math.cos(cam.yaw); const sy = Math.sin(cam.yaw); const cp = Math.cos(cam.pitch); const sp = Math.sin(cam.pitch);
+          // The camera sits `distance` behind the target along the view direction (camera z).
+          const fwd = { x: cp * sy, y: sp, z: cp * cy };
+          return { x: cam.target.x - fwd.x * cam.distance, y: cam.target.y - fwd.y * cam.distance, z: cam.target.z - fwd.z * cam.distance };
+        })();
+        const p = positions.get(graph.nodes[far].id);
+        const deeper = { x: eye.x + (p.x - eye.x) * k, y: eye.y + (p.y - eye.y) * k, z: eye.z + (p.z - eye.z) * k };
+        const was = proj(new Map([['p', deeper]]), [{ id: 'p', radius: 1 }], cam, vp);
+        assert.ok(Math.hypot(was[0] - x, was[1] - y) < 0.05, 'the deeper point starts under the anchor');
+        const [dx, dy] = ray(deeper);
+        assert.ok(Math.hypot(dx - x, dy - y) < 0.05, `×${factor}: a deeper point on the same line stays (${dx}, ${dy})`);
+      }
+    }
+    // At a limit the distance cannot change, so neither does the target.
+    const atMax = { ...base, distance: DISTANCE.max };
+    assert.deepEqual(zoom(atMax, 2, { x, y, viewport: vp, flat }).target, atMax.target);
+    assert.equal(zoom(base, 1e-6, { x, y, viewport: vp, flat }).distance, DISTANCE.min);
+    assert.equal(zoom(base, 1e6, { x, y, viewport: vp, flat }).distance, DISTANCE.max);
+    // The centre anchor is the plain zoom.
+    assert.deepEqual(zoom(base, 2, { x: vp.width / 2, y: vp.height / 2, viewport: vp, flat }).target, base.target);
+  }
+});
+
+test('a pinch whose midpoint moves carries the node under it along exactly, at that node\'s depth', () => {
+  const graph = toGraph(todos(40), categories, NOW);
+  const positions = layout(graph);
+  const vp = { width: 390, height: 700 };
+  const base = fitCamera({ ...createCamera(), yaw: 2.2, pitch: -0.8 }, positions, graph.nodes, vp);
+  const before = project(positions, graph.nodes, base, vp);
+  // The nearest and the furthest node: the depths furthest from the target's plane.
+  const byDepth = graph.nodes.map((_, i) => i).filter((i) => before[i * 4 + 2] > 0).sort((a, b) => before[a * 4 + 3] - before[b * 4 + 3]);
+  for (const i of [byDepth[0], byDepth.at(-1)]) {
+    let camera = base;
+    let [x, y] = [before[i * 4], before[i * 4 + 1]];
+    // Alternating wobble of the midpoint while zooming in, like two fingers reported one at a time.
+    for (let step = 0; step < 12; step += 1) {
+      const toX = x + (step % 2 ? -3 : 4);
+      const toY = y + (step % 2 ? 2 : -1);
+      const depth = project(positions, graph.nodes, camera, vp)[i * 4 + 3];
+      camera = zoom(camera, 0.93, { x, y, toX, toY, depth, viewport: vp });
+      [x, y] = [toX, toY];
+      const now = project(positions, graph.nodes, camera, vp);
+      assert.ok(Math.hypot(now[i * 4] - x, now[i * 4 + 1] - y) < 0.01, `node ${i} step ${step}: follows the midpoint`);
+    }
+    // Without its depth, a node off the target's plane drifts: the depth matters.
+    const depth = project(positions, graph.nodes, base, vp)[i * 4 + 3];
+    if (Math.abs(depth - base.distance) > 20) {
+      const plain = project(positions, graph.nodes, zoom(base, 0.5, { x: before[i * 4], y: before[i * 4 + 1], toX: before[i * 4] + 40, toY: before[i * 4 + 1], viewport: vp }), vp);
+      assert.ok(Math.abs(plain[i * 4] - (before[i * 4] + 40)) > 0.5, 'the target-plane fallback is not exact off the plane');
+    }
+  }
+});
+
 test('the default camera fits the layout', () => {
   const graph = toGraph(todos(200), categories, NOW);
   const positions = layout(graph);

@@ -244,6 +244,19 @@ function fitDistance(points, focal, halfW, halfH, padding) {
   return distance;
 }
 
+// World directions of screen right and screen up for the camera's yaw/pitch (or the flat top view).
+function screenAxes(camera, flat) {
+  if (flat) return { right: { x: 1, y: 0, z: 0 }, up: { x: 0, y: 0, z: -1 } };
+  const cosYaw = Math.cos(camera.yaw);
+  const sinYaw = Math.sin(camera.yaw);
+  const cosPitch = Math.cos(camera.pitch);
+  const sinPitch = Math.sin(camera.pitch);
+  return {
+    right: { x: cosYaw, y: 0, z: -sinYaw },
+    up: { x: -sinPitch * sinYaw, y: cosPitch, z: -sinPitch * cosYaw },
+  };
+}
+
 // Fit the camera to the projected layout: the target moves so the circles' screen bounds are
 // centred, and the distance is the closest at which every circle stays `padding` CSS px inside
 // the viewport (so a node's centre is at least its radius + padding from each edge). Yaw and
@@ -253,13 +266,7 @@ export function fitCamera(camera, positions, nodes, viewport, padding = FIT_PADD
   const halfW = viewport.width / 2;
   const halfH = viewport.height / 2;
   if (!(halfW > 0) || !(halfH > 0)) return camera;
-  const cosYaw = Math.cos(camera.yaw);
-  const sinYaw = Math.sin(camera.yaw);
-  const cosPitch = Math.cos(camera.pitch);
-  const sinPitch = Math.sin(camera.pitch);
-  // World directions of screen right and screen up for this yaw/pitch (or the flat top view).
-  const right = flat ? { x: 1, y: 0, z: 0 } : { x: cosYaw, y: 0, z: -sinYaw };
-  const up = flat ? { x: 0, y: 0, z: -1 } : { x: -sinPitch * sinYaw, y: cosPitch, z: -sinPitch * cosYaw };
+  const { right, up } = screenAxes(camera, flat);
   let target = { ...camera.target };
   let distance = camera.distance;
   // Centre the screen bounds (a few passes: perspective makes each shift slightly off), then fit.
@@ -441,10 +448,43 @@ export function orbit(camera, dxPx, dyPx) {
   };
 }
 
-// factor > 1 moves away.
-export function zoom(camera, factor) {
+// factor > 1 moves away. With an `anchor` {x, y, viewport, flat} (CSS px on the canvas), the
+// target slides in the screen plane so whatever is under that point stays under it: a point at
+// screen offset o from the centre is at o × (distance + depth) / focal from the target's line of
+// sight, so shifting the target by o × (old − new distance) / focal keeps it at o, at any depth.
+// `toX`/`toY` (a pinch whose midpoint moved) carry that point there instead: exact at `depth`
+// (project()'s depth of the node under the fingers; the target's own depth without one) and
+// off by the parallax at other depths.
+export function zoom(camera, factor, anchor = null) {
   if (!(factor > 0) || !Number.isFinite(factor)) return camera;
-  return { ...camera, distance: clamp(camera.distance * factor, DISTANCE.min, DISTANCE.max) };
+  const distance = clamp(camera.distance * factor, DISTANCE.min, DISTANCE.max);
+  const viewport = anchor?.viewport;
+  if (!viewport || !(viewport.width > 0) || !(viewport.height > 0)
+    || !Number.isFinite(anchor.x) || !Number.isFinite(anchor.y)) {
+    return { ...camera, distance };
+  }
+  const toX = Number.isFinite(anchor.toX) ? anchor.toX : anchor.x;
+  const toY = Number.isFinite(anchor.toY) ? anchor.toY : anchor.y;
+  if (distance === camera.distance && toX === anchor.x && toY === anchor.y) return { ...camera, distance };
+  const focal = focalLength(viewport);
+  const halfW = viewport.width / 2;
+  const halfH = viewport.height / 2;
+  // Screen y runs down, `up` runs up.
+  // The anchored point's depth beyond the target's plane (0 in the flat view: no perspective).
+  const behind = !anchor.flat && Number.isFinite(anchor.depth) && anchor.depth > NEAR ? anchor.depth - camera.distance : 0;
+  const ox = ((anchor.x - halfW) * (camera.distance + behind) - (toX - halfW) * (distance + behind)) / focal;
+  const oy = ((halfH - anchor.y) * (camera.distance + behind) - (halfH - toY) * (distance + behind)) / focal;
+  const { right, up } = screenAxes(camera, Boolean(anchor.flat));
+  const { target } = camera;
+  return {
+    ...camera,
+    distance,
+    target: {
+      x: target.x + right.x * ox + up.x * oy,
+      y: target.y + right.y * ox + up.y * oy,
+      z: target.z + right.z * ox + up.z * oy,
+    },
+  };
 }
 
 // Re-centres the orbit on a point (a tapped hub).

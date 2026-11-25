@@ -316,7 +316,25 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
       camera = orbit(camera, intent.dx, intent.dy);
       schedule();
     } else if (intent.type === 'zoom') {
-      camera = zoom(camera, intent.factor);
+      // About the wheel cursor, or the pinch midpoint (client px): what is under it stays under it,
+      // following the fingers when their midpoint moves.
+      const rect = canvas.getBoundingClientRect();
+      const left = rect.left || 0;
+      const top = rect.top || 0;
+      const x = (intent.fromX ?? intent.cx) - left;
+      const y = (intent.fromY ?? intent.cy) - top;
+      // A moving midpoint is followed exactly at the depth of the node under it, if any.
+      let depth;
+      if (positions && tier !== 'static' && (intent.fromX !== undefined || intent.fromY !== undefined)) {
+        // The last drawn frame can be a finger behind: project at the camera as it is now.
+        const now = project(positions, nodes, camera, { width: size.width, height: size.height });
+        const id = pick(now, nodes, x, y, 0) ?? pickNearest(now, nodes, x, y, TAP_SLOP.touch);
+        if (id !== null) depth = now[index.get(id) * 4 + 3];
+      }
+      camera = zoom(camera, intent.factor, {
+        x, y, toX: intent.cx - left, toY: intent.cy - top, depth, viewport: { width: size.width, height: size.height },
+        flat: tier === 'static',
+      });
       schedule();
     } else if (intent.type === 'release') {
       const speed = Math.hypot(intent.vx, intent.vy);

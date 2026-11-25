@@ -240,7 +240,8 @@ export function planLabels(projected, nodes, order, {
   return picked;
 }
 
-// Indices of the nodes to label (see planLabels). `hubsOnly` is the lite tier.
+// Indices of the nodes to label (see planLabels). `hubsOnly` is the lite tier, which redraws every
+// gesture frame; the static tier draws only on demand, so it labels every task like full.
 export function pickLabels(projected, nodes, order, options = {}) {
   return planLabels(projected, nodes, order, options).map((entry) => entry.index);
 }
@@ -317,7 +318,7 @@ export function drawFrame(ctx, frame) {
     ctx.stroke();
   }
 
-  const labels = planLabels(projected, nodes, order, { width, height, hubsOnly: tier !== 'full' });
+  const labels = planLabels(projected, nodes, order, { width, height, hubsOnly: tier === 'lite' });
   if (labels.length) {
     const family = frame.font ?? MONO;
     if ('letterSpacing' in ctx) ctx.letterSpacing = '0.8px';

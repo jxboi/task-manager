@@ -4,7 +4,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { toGraph } from '../src/graph-data.js';
 import { drawFrame, HUB_RING, LABELS, labelCandidates, PALETTE, pickLabels, placeLabel, planLabels } from '../src/graph-draw.js';
-import { depthOrder, drawnRadius, frameCamera, layout, MIN_SCREEN_RADIUS, project } from '../src/graph-space.js';
+import {
+  depthOrder, drawnRadius, fitCamera, frameCamera, layout, MIN_SCREEN_RADIUS, project, projectFlat, spreadOnScreen,
+} from '../src/graph-space.js';
 
 // Records each call and each property set, in order.
 function recorder() {
@@ -320,11 +322,44 @@ test('long titles are drawn capped at 22 characters with an ellipsis', () => {
   assert.equal([...'WRITE THE QUARTERLY R…'].length, 22);
 });
 
-test('the lite and static tiers label hubs only', () => {
+test('the lite tier labels hubs only; the static tier labels every task like full', () => {
   const { nodes, projected, order } = scene([['hub', 'hub', 50, 50, 1, 50, 8, 'HUB'], ['task', 'open', 50, 300, 1, 10, 5, 'TASK']]);
-  for (const tier of ['lite', 'static']) {
+  const labelled = (tier) => {
     const { ctx, named } = recorder();
     drawFrame(ctx, { nodes, projected, order, links: [], width: 390, height: 700, tier });
-    assert.deepEqual(named('fillText').map(([, text]) => text), ['HUB'], tier);
+    return named('fillText').map(([, text]) => text).sort();
+  };
+  assert.deepEqual(labelled('lite'), ['HUB']);
+  assert.deepEqual(labelled('static'), ['HUB', 'TASK']);
+  assert.deepEqual(labelled('full'), ['HUB', 'TASK']);
+});
+
+test('the static tier top view labels every task, capped, inside the canvas and clear of circles and labels', () => {
+  const titles = ['Pay the electricity bill before Friday', 'Buy milk', 'Call the dentist about the appointment', 'Fix bike'];
+  for (const n of [14, 40]) {
+    const graph = toGraph(Array.from({ length: n }, (_, i) => ({
+      id: `t${i}`, text: `${titles[i % titles.length]} ${i}`, completed: i % 4 === 0, createdAt: i, categoryId: `c${i % 4}`,
+    })), ['Work', 'Home', 'Errands', 'Uncategorized'].map((name, i) => ({ id: `c${i}`, name })), 100);
+    const vp = { width: 390, height: 640 };
+    const positions = layout(graph, null, { aspect: vp.height / vp.width });
+    let camera = fitCamera(frameCamera(positions, graph.nodes, vp, undefined, { flat: true }), positions, graph.nodes, vp,
+      undefined, { flat: true });
+    const spread = spreadOnScreen(positions, graph.nodes, camera, vp, { flat: true });
+    camera = fitCamera(camera, spread, graph.nodes, vp, undefined, { flat: true });
+    const projected = projectFlat(spread, graph.nodes, camera, vp);
+    const order = depthOrder(projected);
+    const { ctx, named } = recorder();
+    drawFrame(ctx, { nodes: graph.nodes, projected, order, links: [], width: vp.width, height: vp.height, tier: 'static' });
+    const drawn = named('fillText').map(([, text]) => text);
+    for (const node of graph.nodes) assert.ok(drawn.includes(node.label), `${n}: ${node.label} drawn`);
+    for (const text of drawn) assert.ok([...text].length <= 22, `${text} capped`);
+    const { plan, outside, covering, clashing } = checkPlan(projected, graph.nodes, order, vp.width, vp.height);
+    assert.equal(plan.length, graph.nodes.length);
+    assert.deepEqual(outside, [], `${n}: inside the canvas`);
+    // A default-sized phone graph is fully clear; a crowded one may fall back to the least-bad spot.
+    if (n <= 14) {
+      assert.deepEqual(covering, [], `${n}: no label covers a circle`);
+      assert.deepEqual(clashing, [], `${n}: no labels overlap`);
+    }
   }
 });
