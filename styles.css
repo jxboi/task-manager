@@ -908,15 +908,15 @@ p {
   align-items: center;
   justify-content: center;
   width: 56px;
-  height: 34px;
-  border-radius: 17px;
+  height: 40px;
+  border-radius: 20px;
   background: var(--danger);
   color: #fff;
 }
 
 .todo-delete-pill .icon {
-  width: 15px;
-  height: 17px;
+  width: 17px;
+  height: 19px;
 }
 
 .todo-delete:active .todo-delete-pill {
