@@ -726,12 +726,11 @@ export function orbit(camera, dxPx, dyPx) {
 // target slides in the screen plane so whatever is under that point stays under it: a point at
 // screen offset o from the centre is at o × (distance + depth) / focal from the target's line of
 // sight, so shifting the target by o × (old − new distance) / focal keeps it at o, at any depth.
-// `toX`/`toY` (a pinch whose midpoint moved) carry that point there instead: exact at `depth`
-// (project()'s depth of the node under the fingers; the target's own depth without one) and
-// off by the parallax at other depths.
+// `toX`/`toY` carry a moving pinch midpoint exactly at the anchor's `depth`. A perspective
+// task anchor also supplies its world-space `taskRadius` to limit how close the camera can get.
 export function zoom(camera, factor, anchor = null) {
   if (!(factor > 0) || !Number.isFinite(factor)) return camera;
-  const distance = clamp(camera.distance * factor, DISTANCE.min, DISTANCE.max);
+  let distance = clamp(camera.distance * factor, DISTANCE.min, DISTANCE.max);
   const viewport = anchor?.viewport;
   if (!viewport || !(viewport.width > 0) || !(viewport.height > 0)
     || !Number.isFinite(anchor.x) || !Number.isFinite(anchor.y)) {
@@ -739,13 +738,21 @@ export function zoom(camera, factor, anchor = null) {
   }
   const toX = Number.isFinite(anchor.toX) ? anchor.toX : anchor.x;
   const toY = Number.isFinite(anchor.toY) ? anchor.toY : anchor.y;
-  if (distance === camera.distance && toX === anchor.x && toY === anchor.y) return { ...camera, distance };
   const focal = focalLength(viewport);
+  const hasDepth = !anchor.flat && Number.isFinite(anchor.depth) && anchor.depth > NEAR;
+  if (factor < 1 && hasDepth && anchor.taskRadius > 0) {
+    // Keep the circle in front of the near plane and small enough to inspect. Radius grows
+    // as focal * taskRadius / depth. If already closer than this, allow zoom-out immediately.
+    const maxRadius = Math.max(MIN_SCREEN_RADIUS, Math.min(viewport.width, viewport.height) / 8);
+    const minDepth = Math.min(anchor.depth, Math.max(2 * NEAR, focal * anchor.taskRadius / maxRadius));
+    distance = Math.max(distance, camera.distance - (anchor.depth - minDepth));
+  }
+  if (distance === camera.distance && toX === anchor.x && toY === anchor.y) return { ...camera, distance };
   const halfW = viewport.width / 2;
   const halfH = viewport.height / 2;
   // Screen y runs down, `up` runs up.
   // The anchored point's depth beyond the target's plane (0 in the flat view: no perspective).
-  const behind = !anchor.flat && Number.isFinite(anchor.depth) && anchor.depth > NEAR ? anchor.depth - camera.distance : 0;
+  const behind = hasDepth ? anchor.depth - camera.distance : 0;
   const ox = ((anchor.x - halfW) * (camera.distance + behind) - (toX - halfW) * (distance + behind)) / focal;
   const oy = ((halfH - anchor.y) * (camera.distance + behind) - (halfH - toY) * (distance + behind)) / focal;
   const { right, up } = screenAxes(camera, Boolean(anchor.flat));

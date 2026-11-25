@@ -377,17 +377,22 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
       const top = rect.top || 0;
       const x = (intent.fromX ?? intent.cx) - left;
       const y = (intent.fromY ?? intent.cy) - top;
-      // A moving midpoint is followed exactly at the depth of the node under it, if any.
-      let depth;
-      if (positions && tier !== 'static' && (intent.fromX !== undefined || intent.fromY !== undefined)) {
-        // The last drawn frame can be a finger behind: project at the camera as it is now.
-        const now = project(positions, nodes, camera, { width: size.width, height: size.height });
-        const id = pick(now, nodes, x, y, 0) ?? pickNearest(now, nodes, x, y, TAP_SLOP.touch);
-        if (id !== null) depth = now[index.get(id) * 4 + 3];
-      }
       const viewport = { width: size.width, height: size.height };
       const flat = tier === 'static';
-      camera = zoom(camera, intent.factor, { x, y, toX: intent.cx - left, toY: intent.cy - top, depth, viewport, flat });
+      const pinch = intent.fromX !== undefined;
+      let depth;
+      let taskRadius;
+      if (positions && !flat && (pinch || intent.factor < 1)) {
+        // Use the current camera because multiple input events can land before the next draw.
+        const now = project(positions, nodes, camera, viewport);
+        const id = pick(now, nodes, x, y) ?? (pinch ? pickNearest(now, nodes, x, y, TAP_SLOP.touch) : null);
+        if (id !== null) {
+          const i = index.get(id);
+          depth = now[i * 4 + 3];
+          if (nodes[i].kind === 'task') taskRadius = nodes[i].radius;
+        }
+      }
+      camera = zoom(camera, intent.factor, { x, y, toX: intent.cx - left, toY: intent.cy - top, depth, taskRadius, viewport, flat });
       if (intent.factor > 1 && camera.distance === DISTANCE.max) {
         // Anchoring can slide the whole graph away. At the zoom-out limit, fit it back into
         // view if there isn't a visible circle left to zoom around.

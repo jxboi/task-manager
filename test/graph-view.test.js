@@ -398,6 +398,44 @@ test('pinch zoom anchors on the midpoint: an outer node between the fingers stay
   assert.deepEqual(env.opened, []);
 });
 
+for (const input of ['wheel', 'pinch']) {
+  test(`a large ${input} zoom keeps the anchored task drawn and tappable`, (t) => {
+    const env = setup(t, { reduced: true });
+    env.graph.update({ todos, categories, now: NOW });
+    const canvas = env.canvases[0];
+    const ctx = canvas.getContext('2d');
+    const node = outermost(env);
+    const arcAt = (x, y) => ctx.arcs.find(([ax, ay]) => Math.hypot(ax - x, ay - y) <= 1);
+    const [startX, startY, startRadius] = arcAt(node.x, node.y);
+    const cx = startX + RECT.left;
+    const cy = startY + RECT.top;
+    assert.ok(startRadius >= MIN_SCREEN_RADIUS);
+    ctx.arcs.length = 0;
+
+    if (input === 'wheel') {
+      for (let i = 0; i < 6; i += 1) wheelAt(canvas, cx, cy, -400);
+    } else {
+      wheelAt(canvas, cx, cy, -400);
+      pointer(canvas, 'pointerdown', 1, cx - 30, cy, 0);
+      pointer(canvas, 'pointerdown', 2, cx + 30, cy, 0);
+      for (let step = 1; step <= 5; step += 1) {
+        pointer(canvas, 'pointermove', 1, cx - 30 - step * 10, cy, step * 10);
+        pointer(canvas, 'pointermove', 2, cx + 30 + step * 10, cy, step * 10 + 5);
+      }
+      pointer(canvas, 'pointerup', 1, cx - 80, cy, 61);
+      pointer(canvas, 'pointerup', 2, cx + 80, cy, 62);
+    }
+    const [x, y] = restingAt(env, node.id);
+    assert.ok(Math.hypot(x - node.x, y - node.y) <= 2, `the task remains at the anchor (${x}, ${y} vs ${node.x}, ${node.y})`);
+    const radius = arcAt(x, y)?.[2];
+    assert.ok(radius > startRadius && radius <= RECT.width / 8 + 0.01, `zoomed radius: ${radius}`);
+    pointer(canvas, 'pointerdown', 3, cx, cy, 100);
+    pointer(canvas, 'pointerup', 3, cx, cy, 105);
+    const button = env.buttons().find((candidate) => candidate.dataset.nodeId === node.id);
+    assert.deepEqual(env.opened, [JSON.parse(button.dataset.focusKey)[1]]);
+  });
+}
+
 test('an offscreen graph recovers when zooming out to the distance limit', (t) => {
   const env = setup(t);
   const fresh = [{ id: 'new0', text: 'Brand new', completed: false, createdAt: NOW, categoryId: null }];

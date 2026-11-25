@@ -244,6 +244,31 @@ test('a pinch whose midpoint moves carries the node under it along exactly, at t
   }
 });
 
+test('zoom-in stops at a foreground task using its depth and radius', () => {
+  const viewport = { width: 390, height: 700 };
+  const base = { ...createCamera(), yaw: 0, pitch: 0, distance: 300 };
+  const positions = new Map([['task', { x: 10, y: 5, z: -180 }]]);
+  let lastDistance = 0;
+  for (const radius of [3, 6]) {
+    const nodes = [{ id: 'task', kind: 'task', radius }];
+    const [x, y, scale, depth] = project(positions, nodes, base, viewport);
+    const anchor = { x, y, toX: x + 4, toY: y - 2, depth, taskRadius: radius, viewport };
+    const closer = zoom(base, 60 / 160, anchor);
+    const [px, py, nextScale, nextDepth] = project(positions, nodes, closer, viewport);
+    assert.ok(nextDepth > 1 && nextDepth < depth);
+    assert.ok(drawnRadius(radius, nextScale) > drawnRadius(radius, scale));
+    assert.ok(drawnRadius(radius, nextScale) <= viewport.width / 8 + 0.01);
+    assert.ok(Math.hypot(px - anchor.toX, py - anchor.toY) < 0.01);
+    assert.equal(pick(project(positions, nodes, closer, viewport), nodes, anchor.toX, anchor.toY), 'task');
+    assert.ok(closer.distance > lastDistance, 'larger tasks stop farther away');
+    lastDistance = closer.distance;
+
+    const atLimit = { ...anchor, x: px, y: py, toX: px, toY: py, depth: nextDepth };
+    assert.ok(Math.abs(zoom(closer, 0.5, atLimit).distance - closer.distance) < 0.01);
+    assert.equal(zoom(closer, 1e6, atLimit).distance, DISTANCE.max);
+  }
+});
+
 test('the default camera fits the layout', () => {
   const graph = toGraph(todos(200), categories, NOW);
   const positions = layout(graph);
