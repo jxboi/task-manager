@@ -3,11 +3,11 @@
 // src/app.js imports, and only on demand (import('./graph-view.js')). Owns all graph state:
 // layout, camera, gestures, the frame loop and the quality tier.
 import { toGraph } from './graph-data.js';
-import { drawFrame, MONO, PALETTE } from './graph-draw.js';
+import { drawFrame, labelWidth as drawLabelWidth, MONO, PALETTE, planLabels, sideExtents } from './graph-draw.js';
 import { createGesture, TAP_SLOP } from './graph-gesture.js';
 import {
-  createCamera, depthOrder, DISTANCE, drawnRadius, extent, fitCamera, frameCamera, layout, lookAt, orbit, pick, pickNearest,
-  project, projectFlat, spreadOnScreen, zoom,
+  createCamera, depthOrder, DISTANCE, drawnRadius, extent, FIT_PADDING, fitCamera, frameCamera, groupOnScreen, layout, lookAt,
+  nudgeLabels, orbit, pick, pickNearest, project, projectFlat, spreadOnScreen, zoom,
 } from './graph-space.js';
 
 export { projectFlat }; // the static tier's projection
@@ -137,25 +137,68 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
   const gesturing = () => gesture.mode === 'orbit' || gesture.mode === 'pinch';
   const still = () => Boolean(reducedMotion?.matches);
 
+  // Fits the camera including label bounding boxes (two passes so side flips at the new scale are caught).
+  const fitWithLabels = (cam, pos, viewport, flat, reset = false) => {
+    let fitted = reset ? fitCamera(cam, pos, nodes, viewport, undefined, { flat }) : cam;
+    for (let pass = 0; pass < 2; pass += 1) {
+      const proj = (flat ? projectFlat : project)(pos, nodes, fitted, viewport);
+      const plan = planLabels(proj, nodes, depthOrder(proj), {
+        width: viewport.width, height: viewport.height, padding: FIT_PADDING,
+      });
+      const labels = new Map();
+      for (const entry of plan) {
+        const node = nodes[entry.index];
+        labels.set(node.id, sideExtents(entry.side, drawLabelWidth(node.label)));
+      }
+      fitted = fitCamera(fitted, pos, nodes, viewport, undefined, { flat, labels });
+    }
+    return fitted;
+  };
+
+  // Nudges nodes if any label still covers a circle or overlaps another label, keeping labels inside padding.
+  const nudgeAndFit = (cam, pos, viewport, flat) => {
+    const planFn = (proj, ord) => planLabels(proj, nodes, ord, {
+      width: viewport.width, height: viewport.height, padding: FIT_PADDING,
+    });
+    let fitted = fitWithLabels(cam, pos, viewport, flat, true);
+    let next = nudgeLabels(pos, nodes, fitted, viewport, planFn, { flat });
+    fitted = fitWithLabels(fitted, next, viewport, flat, false);
+    next = nudgeLabels(next, nodes, fitted, viewport, planFn, { flat, maxIterations: 6 });
+    const proj = (flat ? projectFlat : project)(next, nodes, fitted, viewport);
+    const out = planFn(proj, depthOrder(proj)).some((e) => (
+      e.left < FIT_PADDING - 0.5 || e.right > viewport.width - FIT_PADDING + 0.5
+      || e.top < FIT_PADDING - 0.5 || e.bottom > viewport.height - FIT_PADDING + 0.5
+    ));
+    if (out) fitted = fitWithLabels(fitted, next, viewport, flat, false);
+    return { camera: fitted, positions: next };
+  };
+
   // Fits the camera to the current viewport: the first time from the best starting angle, after
   // that (a resize, a moved node off screen, the static tier) keeping the user's angle.
   const refit = (spreadFlat = false) => {
     if (!camera || !positions || !(size.width > 0) || !(size.height > 0)) return;
     const viewport = { width: size.width, height: size.height };
     const flat = tier === 'static';
+    const labelWidth = (node) => drawLabelWidth(node.label);
     spin = null;
     ease = null;
-    if (framed && !spreadFlat) camera = fitCamera(camera, positions, nodes, viewport, undefined, { flat });
-    else if (framed) {
+    if (framed && !spreadFlat) {
+      // A refit (resize, moved node): fit first so all hubs are in view, group categories, nudge and fit labels.
+      camera = fitCamera(camera, positions, nodes, viewport, undefined, { flat });
+      positions = groupOnScreen(positions, nodes, camera, viewport, { flat, labelWidth, labelGap: 4 });
+      ({ camera, positions } = nudgeAndFit(camera, positions, viewport, flat));
+    } else if (framed) {
       // Into the static tier: its top view stacks circles the perspective view had apart.
       camera = fitCamera(camera, positions, nodes, viewport, undefined, { flat });
       positions = spreadOnScreen(positions, nodes, camera, viewport, { flat });
-      camera = fitCamera(camera, positions, nodes, viewport, undefined, { flat });
+      positions = groupOnScreen(positions, nodes, camera, viewport, { flat, labelWidth, labelGap: 4 });
+      ({ camera, positions } = nudgeAndFit(camera, positions, viewport, flat));
     } else {
-      // The first view: the best angle, overlapping circles pushed apart on screen, then refit.
+      // The first view: the best angle, overlapping circles pushed apart on screen, grouped, then fitted with labels.
       camera = frameCamera(positions, nodes, viewport, undefined, { flat });
       positions = spreadOnScreen(positions, nodes, camera, viewport, { flat });
-      camera = fitCamera(camera, positions, nodes, viewport, undefined, { flat });
+      positions = groupOnScreen(positions, nodes, camera, viewport, { flat, labelWidth, labelGap: 4 });
+      ({ camera, positions } = nudgeAndFit(camera, positions, viewport, flat));
     }
     framed = true;
   };
@@ -199,7 +242,7 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
     needsLabels = tier === 'lite' && moving;
     drawFrame(ctx, {
       nodes, projected, order, links, dpr: size.dpr, width: size.width, height: size.height, tier, focusIndex,
-      moving, palette, font,
+      moving, palette, font, padding: FIT_PADDING,
     });
     const ms = clock() - started;
     drawTimes.push(ms);

@@ -9,6 +9,7 @@ import { createFakeApi, settle } from './fake-api.js';
 import { markupAttributes } from './markup.js';
 import { context2d, createTierMeter, DPR_CAP, INERTIA, mountGraph, projectFlat, TIER_BUDGET } from '../src/graph-view.js';
 import { FIT_PADDING, MIN_SCREEN_RADIUS } from '../src/graph-space.js';
+import { boxGap, LABELS, labelWidth } from '../src/graph-draw.js';
 
 const NOW = Date.UTC(2026, 10, 25, 12);
 const categories = [{ id: 'c0', name: 'Work' }, { id: 'c1', name: 'Home' }, { id: 'c2', name: 'Empty' }];
@@ -1145,4 +1146,79 @@ test('in the app: the graph replaces the list, opens tasks in the edit sheet, an
     assert.equal(buttons().length, 0);
     assert.equal(document.activeElement, viewGraph);
   });
+});
+
+test('mounted graph places every task label within 6px of its node, inside FIT_PADDING, and groups categories cleanly', (t) => {
+  const cats = [{ id: 'w', name: 'Work' }, { id: 'h', name: 'Home' }, { id: 'e', name: 'Errands' }];
+  const list = [
+    ['Write quarterly report', 'w'], ['Review pull requests', 'w'], ['Plan team offsite', 'w'], ['Update roadmap', 'w'],
+    ['Water the plants', 'h'], ['Fix leaking tap', 'h'], ['Clean the gutters', 'h'],
+    ['Buy groceries', 'e'], ['Post the parcel', 'e'], ['Pick up dry cleaning', 'e'], ['Renew passport', 'e'],
+    ['Call grandma', null], ['Read a novel', null], ['Learn the ukulele', null],
+  ].map(([text, categoryId], i) => ({
+    id: `t${i}`, text, completed: i % 4 === 1, createdAt: NOW - i * i * 17000000, categoryId,
+  }));
+  const saved = { ...RECT };
+  t.after(() => Object.assign(RECT, saved));
+  for (const vp of [{ left: 0, top: 0, width: 390, height: 768 }, { left: 0, top: 0, width: 1280, height: 644 }]) {
+    Object.assign(RECT, vp);
+    const draws = [];
+    const env = setup(t, {
+      canvas: () => {
+        const ctx = fakeContext();
+        const origFillText = (text, x, y) => {
+          draws.push({ text, x, y, align: ctx.textAlign });
+        };
+        return {
+          getContext: () => new Proxy(ctx, {
+            get: (target, name) => {
+              if (name === 'fillText') return origFillText;
+              return name in target ? target[name] : (...args) => {
+                target.calls += 1;
+                if (name === 'arc') target.arcs.push(args);
+              };
+            },
+            set: (target, name, value) => { target[name] = value; return true; },
+          }),
+        };
+      },
+    });
+    const ctx = env.canvases[0].getContext('2d');
+    env.graph.update({ todos: list, categories: cats, now: NOW });
+    draws.length = 0;
+    ctx.arcs.length = 0;
+    env.flush();
+    env.idle();
+    const hubs = ['WORK', 'HOME', 'ERRANDS', 'UNCATEGORIZED'];
+    const hubCircles = draws.filter((d) => hubs.includes(d.text)).map((d) => {
+      const match = ctx.arcs.find(([ax, ay]) => Math.hypot(ax - d.x, ay - d.y) < 60);
+      return { name: d.text, x: match[0], y: match[1] };
+    });
+    assert.equal(hubCircles.length, 4);
+    for (const d of draws) {
+      const w = labelWidth(d.text);
+      const left = d.align === 'left' ? d.x : d.align === 'right' ? d.x - w : d.x - w / 2;
+      const right = left + w;
+      const top = d.y - (LABELS.size + 2) / 2;
+      const bottom = d.y + (LABELS.size + 2) / 2;
+      assert.ok(left >= FIT_PADDING - 0.5 && right <= vp.width - FIT_PADDING + 0.5
+        && top >= FIT_PADDING - 0.5 && bottom <= vp.height - FIT_PADDING + 0.5,
+        `${vp.width}x${vp.height}: ${d.text} inside ${FIT_PADDING}px padding`);
+    }
+    for (const b of env.buttons()) {
+      const bx = Number(b.dataset.x);
+      const by = Number(b.dataset.y);
+      const arc = ctx.arcs.find(([ax, ay]) => Math.round(ax) === bx && Math.round(ay) === by);
+      assert.ok(arc, `${b.textContent} has a drawn circle`);
+      const sig = b.textContent.toUpperCase();
+      const cap = [...sig].length > 22 ? `${[...sig].slice(0, 21).join('')}…` : sig;
+      const d = draws.find((l) => l.text === cap);
+      assert.ok(d, `${cap} drawn`);
+      const w = labelWidth(d.text);
+      const left = d.align === 'left' ? d.x : d.align === 'right' ? d.x - w : d.x - w / 2;
+      const box = { left, right: left + w, top: d.y - (LABELS.size + 2) / 2, bottom: d.y + (LABELS.size + 2) / 2 };
+      const gap = boxGap(arc[0], arc[1], arc[2], box);
+      assert.ok(gap <= 6.01, `${vp.width}x${vp.height}: ${cap} gap ${gap.toFixed(2)} <= 6`);
+    }
+  }
 });

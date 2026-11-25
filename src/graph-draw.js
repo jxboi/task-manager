@@ -26,14 +26,12 @@ export const LABELS = {
   gap: 4, // px between a circle and its label
   halo: 3, // px of page colour around each label, so it reads over circles and links
   pad: 1, // px kept clear around a label box when testing what it covers
-  patience: 24, // in a crowd: spots tried before a label may overlap another label (never a circle)
-  crowd: 60, // nodes: above this a frame is a crowd
 };
 const LINE = LABELS.size + 2; // px: a label box's height
 
 const colourFor = (palette, state) => (state === 'done' ? palette.done : palette.open);
 
-const labelWidth = (label) => [...label].length * LABELS.charWidth;
+export const labelWidth = (label) => [...label].length * LABELS.charWidth;
 
 // A label box: `x` is where the text is drawn with `align`, `y` its middle.
 function box(x, y, w, align) {
@@ -53,42 +51,100 @@ export function placeLabel(px, r, label, width = Infinity) {
   return onLeft ? left : right;
 }
 
-// Places around a circle at (px, py) with drawn radius r, most preferred first: beside it, above
-// and below it, at the diagonals, then a line or more further out. `leftFirst` mirrors left/right.
+// Places around a circle at (px, py) with drawn radius r, most preferred first: right of it,
+// left, above, below, then the four diagonals with the box corner on the 45° line. Every one
+// starts LABELS.gap px from the circle's edge: a label never strays from its own node.
+// `leftFirst` mirrors left/right.
 export function labelCandidates(px, py, r, label, leftFirst = false) {
   return [...spots(px, py, r, labelWidth(label), leftFirst)];
 }
 
-// labelCandidates() one at a time, so a label that fits at the first spot builds no others.
-function* spots(px, py, r, w, leftFirst) {
+export const LABEL_SIDES = [
+  'right', 'left', 'above', 'below',
+  'ne', 'nw', 'se', 'sw',
+  'aboveMidRight', 'aboveMidLeft', 'belowMidRight', 'belowMidLeft',
+  'aboveRight', 'aboveLeft', 'belowRight', 'belowLeft',
+  'rightUp', 'rightDown', 'leftUp', 'leftDown',
+];
+
+const MIRRORED_SIDES = [
+  'left', 'right', 'above', 'below',
+  'nw', 'ne', 'sw', 'se',
+  'aboveMidLeft', 'aboveMidRight', 'belowMidLeft', 'belowMidRight',
+  'aboveLeft', 'aboveRight', 'belowLeft', 'belowRight',
+  'leftUp', 'leftDown', 'rightUp', 'rightDown',
+];
+
+// The box for a label of width `w` on `side` of the circle (px, py, r).
+export function sideBox(px, py, r, w, side) {
   const near = r + LABELS.gap;
-  const step = LINE + 2;
-  const above = py - near - LINE / 2;
-  const below = py + near + LINE / 2;
-  const diag = r * 0.5;
-  const first = leftFirst ? -1 : 1;
-  const beside = (side, y) => box(px + side * near, y, w, side > 0 ? 'left' : 'right');
-  const corner = (side, y) => box(px + side * diag, y, w, side > 0 ? 'left' : 'right');
-  yield beside(first, py);
-  yield beside(-first, py);
-  yield box(px, above, w, 'center');
-  yield box(px, below, w, 'center');
-  for (const side of [first, -first]) {
-    yield corner(side, above);
-    yield corner(side, below);
+  const q = near * Math.SQRT1_2;
+  let b;
+  switch (side) {
+    case 'right': b = box(px + near, py, w, 'left'); break;
+    case 'left': b = box(px - near, py, w, 'right'); break;
+    case 'above': b = box(px, py - near - LINE / 2, w, 'center'); break;
+    case 'below': b = box(px, py + near + LINE / 2, w, 'center'); break;
+    case 'ne': b = box(px + q, py - q - LINE / 2, w, 'left'); break;
+    case 'nw': b = box(px - q, py - q - LINE / 2, w, 'right'); break;
+    case 'se': b = box(px + q, py + q + LINE / 2, w, 'left'); break;
+    case 'sw': b = box(px - q, py + q + LINE / 2, w, 'right'); break;
+    case 'aboveMidRight': b = box(px + 0.25 * w, py - near - LINE / 2, w, 'center'); break;
+    case 'aboveMidLeft': b = box(px - 0.25 * w, py - near - LINE / 2, w, 'center'); break;
+    case 'belowMidRight': b = box(px + 0.25 * w, py + near + LINE / 2, w, 'center'); break;
+    case 'belowMidLeft': b = box(px - 0.25 * w, py + near + LINE / 2, w, 'center'); break;
+    case 'aboveRight': b = box(px, py - near - LINE / 2, w, 'left'); break;
+    case 'aboveLeft': b = box(px, py - near - LINE / 2, w, 'right'); break;
+    case 'belowRight': b = box(px, py + near + LINE / 2, w, 'left'); break;
+    case 'belowLeft': b = box(px, py + near + LINE / 2, w, 'right'); break;
+    case 'rightUp': b = box(px + near, py - 4, w, 'left'); break;
+    case 'rightDown': b = box(px + near, py + 4, w, 'left'); break;
+    case 'leftUp': b = box(px - near, py - 4, w, 'right'); break;
+    default: b = box(px - near, py + 4, w, 'right'); break; // leftDown
   }
-  for (let k = 1; k <= 5; k += 1) {
-    for (const side of [first, -first]) {
-      yield beside(side, py - k * step);
-      yield beside(side, py + k * step);
-    }
-    yield box(px, above - k * step, w, 'center');
-    yield box(px, below + k * step, w, 'center');
-    for (const side of [first, -first]) {
-      yield corner(side, above - k * step);
-      yield corner(side, below + k * step);
-    }
+  b.side = side;
+  return b;
+}
+
+// Box edges relative to the node centre as k × r + c (r: drawn radius, px), for the fit:
+// [left, right, top, bottom], each [k, c]; screen y runs down.
+export function sideExtents(side, w) {
+  const g = LABELS.gap;
+  const s = Math.SQRT1_2;
+  switch (side) {
+    case 'right': return [[1, g], [1, g + w], [0, -LINE / 2], [0, LINE / 2]];
+    case 'left': return [[-1, -g - w], [-1, -g], [0, -LINE / 2], [0, LINE / 2]];
+    case 'above': return [[0, -w / 2], [0, w / 2], [-1, -g - LINE], [-1, -g]];
+    case 'below': return [[0, -w / 2], [0, w / 2], [1, g], [1, g + LINE]];
+    case 'ne': return [[s, s * g], [s, s * g + w], [-s, -s * g - LINE], [-s, -s * g]];
+    case 'nw': return [[-s, -s * g - w], [-s, -s * g], [-s, -s * g - LINE], [-s, -s * g]];
+    case 'se': return [[s, s * g], [s, s * g + w], [s, s * g], [s, s * g + LINE]];
+    case 'sw': return [[-s, -s * g - w], [-s, -s * g], [s, s * g], [s, s * g + LINE]];
+    case 'aboveMidRight': return [[0, -0.25 * w], [0, 0.75 * w], [-1, -g - LINE], [-1, -g]];
+    case 'aboveMidLeft': return [[0, -0.75 * w], [0, 0.25 * w], [-1, -g - LINE], [-1, -g]];
+    case 'belowMidRight': return [[0, -0.25 * w], [0, 0.75 * w], [1, g], [1, g + LINE]];
+    case 'belowMidLeft': return [[0, -0.75 * w], [0, 0.25 * w], [1, g], [1, g + LINE]];
+    case 'aboveRight': return [[0, 0], [0, w], [-1, -g - LINE], [-1, -g]];
+    case 'aboveLeft': return [[0, -w], [0, 0], [-1, -g - LINE], [-1, -g]];
+    case 'belowRight': return [[0, 0], [0, w], [1, g], [1, g + LINE]];
+    case 'belowLeft': return [[0, -w], [0, 0], [1, g], [1, g + LINE]];
+    case 'rightUp': return [[1, g], [1, g + w], [0, -LINE / 2 - 4], [0, LINE / 2 - 4]];
+    case 'rightDown': return [[1, g], [1, g + w], [0, -LINE / 2 + 4], [0, LINE / 2 + 4]];
+    case 'leftUp': return [[-1, -g - w], [-1, -g], [0, -LINE / 2 - 4], [0, LINE / 2 - 4]];
+    default: return [[-1, -g - w], [-1, -g], [0, -LINE / 2 + 4], [0, LINE / 2 + 4]];
   }
+}
+
+function* spots(px, py, r, w, leftFirst) {
+  const order = leftFirst ? MIRRORED_SIDES : LABEL_SIDES;
+  for (const side of order) yield sideBox(px, py, r, w, side);
+}
+
+// Distance in px from a circle's edge to the nearest point of a box (0 when they touch).
+export function boxGap(cx, cy, r, b) {
+  const nx = Math.max(b.left, Math.min(cx, b.right));
+  const ny = Math.max(b.top, Math.min(cy, b.bottom));
+  return Math.max(0, Math.hypot(cx - nx, cy - ny) - r);
 }
 
 function circleHitsBox(cx, cy, cr, left, top, right, bottom) {
@@ -154,11 +210,14 @@ function visibleCircles(projected, nodes, width, height) {
 }
 
 // Labels to draw, hubs first, then tasks from the front: every node whose centre is on the canvas
-// gets one. Each label takes the first of labelCandidates() that stays inside the canvas and
-// covers no circle (its own included) and no label already placed; when none is clear, the one
-// covering the fewest circles, then the fewest labels. Returns [{index, x, y, align, left, …}].
+// gets one, always on one of its own labelCandidates() (LABELS.gap px from its circle). Of those,
+// the cheapest: off the canvas worst, then each circle covered (its own never is), then reaching
+// into the `padding` band at the canvas edges, then each label already placed it overlaps; ties
+// keep the preferred order (right, left, above, below, the diagonals). A label above or below may
+// slide sideways towards the inside, as long as it still spans its node. Returns
+// [{index, x, y, align, left, right, top, bottom, side, covers: [circle node indices]}].
 export function planLabels(projected, nodes, order, {
-  width = Infinity, height = Infinity, max = LABELS.max, hubsOnly = false,
+  width = Infinity, height = Infinity, max = LABELS.max, hubsOnly = false, padding = 0,
 } = {}) {
   const picked = [];
   const circles = grid();
@@ -168,11 +227,17 @@ export function planLabels(projected, nodes, order, {
   }
   const placed = grid();
   const pad = LABELS.pad;
+  const OFF = 1e9;
+  const CIRCLE = 1e6;
+  const BAND = 1e3;
   // Counts stop once past `limit`: a spot that can't beat the best so far needn't be counted out.
-  const countCircles = (b, limit) => {
+  const coveredBy = (b, limit = Infinity, out = null) => {
     let hits = 0;
     circles.some(b.left - pad, b.top - pad, b.right + pad, b.bottom + pad, (c) => {
-      if (circleHitsBox(c.x, c.y, c.r + pad, b.left, b.top, b.right, b.bottom)) hits += 1;
+      if (circleHitsBox(c.x, c.y, c.r + pad, b.left, b.top, b.right, b.bottom)) {
+        hits += 1;
+        out?.push(c.index);
+      }
       return hits > limit;
     });
     return hits;
@@ -185,8 +250,8 @@ export function planLabels(projected, nodes, order, {
     });
     return hits;
   };
-  const patience = nodes.length > LABELS.crowd ? LABELS.patience : Infinity;
-  const inside = (b) => b.left >= 0 && b.right <= width && b.top >= 0 && b.bottom <= height;
+  const inside = (b, m) => b.left >= m && b.right <= width - m && b.top >= m && b.bottom <= height - m;
+  const band = Math.max(0, Math.min(padding, width / 4, height / 4));
   const claim = (i) => {
     const k = i * 4;
     const scale = projected[k + 2];
@@ -195,35 +260,38 @@ export function planLabels(projected, nodes, order, {
     const py = projected[k + 1];
     if (px < 0 || px > width || py < 0 || py > height) return false;
     const r = drawnRadius(nodes[i].radius, scale);
-    const label = nodes[i].label;
-    const leftFirst = placeLabel(px, r, label, width).align === 'right';
+    const w = labelWidth(nodes[i].label);
     let chosen = null;
     let best = Infinity;
-    let tried = 0;
-    for (const spot of spots(px, py, r, labelWidth(label), leftFirst)) {
-      // In a crowd, a spot clear of circles that only overlaps a label is good enough after a while.
-      if (++tried > patience && best < 1000) break;
-      // Past a side edge, the spot slides back in (it may then cover its own circle, which counts).
-      const slide = Math.max(-spot.left, Math.min(0, width - spot.right));
-      const candidate = slide ? box(spot.x + slide, spot.y, spot.right - spot.left, spot.align) : spot;
-      if (!inside(candidate)) continue;
-      const circleHits = countCircles(candidate, Math.floor(best / 1000));
-      if (circleHits * 1000 >= best) continue;
-      const cost = circleHits * 1000 + countLabels(candidate, best - circleHits * 1000 - 1);
+    for (const spot of spots(px, py, r, w, false)) {
+      let candidate = spot;
+      if (spot.align === 'center') {
+        // Slide towards the inside of the padded area, keeping the node under the label's middle 80 %.
+        const lo = band - spot.left;
+        const hi = width - band - spot.right;
+        const want = lo > 0 ? lo : hi < 0 ? hi : 0;
+        const slide = Math.max(-0.4 * w, Math.min(0.4 * w, Number.isFinite(want) ? want : 0));
+        if (slide) {
+          candidate = box(spot.x + slide, spot.y, w, 'center');
+          candidate.side = spot.side;
+        }
+      }
+      let cost = inside(candidate, 0) ? 0 : OFF;
+      if (cost >= best) continue;
+      if (!inside(candidate, band)) cost += BAND;
+      if (cost >= best) continue;
+      cost += coveredBy(candidate, Math.floor((best - cost) / CIRCLE)) * CIRCLE;
+      if (cost >= best) continue;
+      cost += countLabels(candidate, best - cost - 1);
       if (cost < best) {
         chosen = candidate;
         best = cost;
         if (cost === 0) break;
       }
     }
-    if (!chosen) {
-      // Wider than any spot around the node: beside it, slid back inside the canvas.
-      const b = labelCandidates(px, py, r, label, leftFirst)[0];
-      const shift = Math.max(-b.left, Math.min(0, width - b.right));
-      const dy = Math.max(-b.top, Math.min(0, height - b.bottom));
-      chosen = box(b.x + (Number.isFinite(shift) ? shift : 0), b.y + (Number.isFinite(dy) ? dy : 0), b.right - b.left, b.align);
-    }
-    const entry = { index: i, ...chosen };
+    const covers = [];
+    coveredBy(chosen, Infinity, covers);
+    const entry = { index: i, ...chosen, covers: covers.filter((j) => j !== i) };
     placed.add(entry, entry.left, entry.top, entry.right, entry.bottom);
     picked.push(entry);
     return true;
@@ -317,7 +385,9 @@ export function drawFrame(ctx, frame) {
     ctx.stroke();
   }
 
-  const labels = planLabels(projected, nodes, order, { width, height, hubsOnly: tier === 'lite' && moving });
+  const labels = planLabels(projected, nodes, order, {
+    width, height, hubsOnly: tier === 'lite' && moving, padding: frame.padding ?? 0,
+  });
   if (labels.length) {
     const family = frame.font ?? MONO;
     if ('letterSpacing' in ctx) ctx.letterSpacing = '0.8px';
@@ -340,5 +410,5 @@ export function drawFrame(ctx, frame) {
       ctx.fillText(nodes[i].label, x, y);
     }
   }
-  return { circles, labels: labels.length };
+  return { circles, labels: labels.length, placed: labels };
 }

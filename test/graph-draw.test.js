@@ -3,9 +3,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { toGraph } from '../src/graph-data.js';
-import { drawFrame, HUB_RING, LABELS, labelCandidates, PALETTE, pickLabels, placeLabel, planLabels } from '../src/graph-draw.js';
 import {
-  depthOrder, drawnRadius, fitCamera, frameCamera, layout, MIN_SCREEN_RADIUS, project, projectFlat, spreadOnScreen,
+  boxGap, drawFrame, HUB_RING, LABELS, labelCandidates, labelWidth, PALETTE, pickLabels, placeLabel, planLabels, sideExtents,
+} from '../src/graph-draw.js';
+import {
+  depthOrder, drawnRadius, FIT_PADDING, fitCamera, frameCamera, groupOnScreen, layout, MIN_SCREEN_RADIUS, nudgeLabels,
+  project, projectFlat, spreadOnScreen,
 } from '../src/graph-space.js';
 
 // Records each call and each property set, in order.
@@ -142,8 +145,8 @@ test('a focused node gets a ring', () => {
 });
 
 // Every label box from planLabels, with the circles it must keep clear of.
-function checkPlan(projected, nodes, order, width, height) {
-  const plan = planLabels(projected, nodes, order, { width, height });
+function checkPlan(projected, nodes, order, width, height, padding = 0) {
+  const plan = planLabels(projected, nodes, order, { width, height, padding });
   const circles = [];
   for (let i = 0; i < nodes.length; i += 1) {
     const scale = projected[i * 4 + 2];
@@ -281,7 +284,7 @@ test('labelCandidates: beside first (mirrored near the right edge), then above, 
   for (const b of right) assert.ok(b.right - b.left === 3 * LABELS.charWidth);
 });
 
-test('a seeded-size graph at 390×740 and 1280×632: every task labelled, inside the canvas, clear of circles and of each other', () => {
+test('a seeded-size graph at 390×740 and 1280×632: every task labelled, inside padding, within 6px of node, clear of circles and of each other', () => {
   const NOW = Date.UTC(2026, 10, 25, 12);
   const DAY = 86400000;
   const titles = ['Plan team offsite', 'Review pull requests', 'Update roadmap', 'Write the quarterly report for the board',
@@ -289,6 +292,16 @@ test('a seeded-size graph at 390×740 and 1280×632: every task labelled, inside
     'Post the parcel', 'Call grandma', 'Read a novel', 'Learn the ukulele'];
   const cats = [{ id: 'w', name: 'Work' }, { id: 'h', name: 'Home' }, { id: 'e', name: 'Errands' }];
   const hubOf = (i) => (i < 4 ? 'w' : i < 7 ? 'h' : i < 11 ? 'e' : null);
+  const labelFit = (cam, pos, nodes, vp, reset = false) => {
+    let fitted = reset ? fitCamera(cam, pos, nodes, vp) : cam;
+    for (let pass = 0; pass < 2; pass += 1) {
+      const pr = project(pos, nodes, fitted, vp);
+      const pl = planLabels(pr, nodes, depthOrder(pr), { width: vp.width, height: vp.height, padding: FIT_PADDING });
+      const labels = new Map(pl.map((e) => [nodes[e.index].id, sideExtents(e.side, labelWidth(nodes[e.index].label))]));
+      fitted = fitCamera(fitted, pos, nodes, vp, FIT_PADDING, { labels });
+    }
+    return fitted;
+  };
   for (const seed of ['a', 'b', 'c', 'd', 'e', 'f']) {
     const list = titles.map((text, i) => ({
       id: `${seed}${(i * 2654435761 >>> 0).toString(16)}`, text, completed: i % 4 === 1, createdAt: NOW - ((i * 37) % 300) * DAY,
@@ -296,17 +309,37 @@ test('a seeded-size graph at 390×740 and 1280×632: every task labelled, inside
     }));
     const graph = toGraph(list, cats, NOW);
     for (const vp of [{ width: 390, height: 740 }, { width: 1280, height: 632 }]) {
-      const positions = layout(graph, null, { aspect: vp.height / vp.width });
-      const camera = frameCamera(positions, graph.nodes, vp);
+      let positions = layout(graph, null, { aspect: vp.height / vp.width });
+      let camera = frameCamera(positions, graph.nodes, vp);
+      positions = spreadOnScreen(positions, graph.nodes, camera, vp);
+      positions = groupOnScreen(positions, graph.nodes, camera, vp, { labelWidth: (node) => labelWidth(node.label), labelGap: LABELS.gap });
+      const planFn = (pr, ord) => planLabels(pr, graph.nodes, ord, { width: vp.width, height: vp.height, padding: FIT_PADDING });
+      camera = labelFit(camera, positions, graph.nodes, vp, true);
+      positions = nudgeLabels(positions, graph.nodes, camera, vp, planFn);
+      camera = labelFit(camera, positions, graph.nodes, vp, false);
+      positions = nudgeLabels(positions, graph.nodes, camera, vp, planFn, { maxIterations: 6 });
+      const prCheck = project(positions, graph.nodes, camera, vp);
+      if (planFn(prCheck, depthOrder(prCheck)).some((e) => e.left < FIT_PADDING - 0.5 || e.right > vp.width - FIT_PADDING + 0.5 || e.top < FIT_PADDING - 0.5 || e.bottom > vp.height - FIT_PADDING + 0.5)) {
+        camera = labelFit(camera, positions, graph.nodes, vp, false);
+      }
       const projected = project(positions, graph.nodes, camera, vp);
       const order = depthOrder(projected);
-      const { plan, outside, covering, clashing } = checkPlan(projected, graph.nodes, order, vp.width, vp.height);
+      const { plan, outside, covering, clashing } = checkPlan(projected, graph.nodes, order, vp.width, vp.height, FIT_PADDING);
       const where = `seed ${seed} at ${vp.width}x${vp.height}`;
       assert.equal(plan.length, graph.nodes.length, `${where}: every node labelled`);
       assert.deepEqual(outside, [], `${where}: inside the canvas`);
       assert.deepEqual(covering, [], `${where}: no label covers a circle`);
       assert.deepEqual(clashing, [], `${where}: no labels overlap`);
-      for (const b of plan) assert.ok([...graph.nodes[b.index].label].length <= 22, `${where}: ${graph.nodes[b.index].label} capped`);
+      for (const b of plan) {
+        const i = b.index;
+        const r = drawnRadius(graph.nodes[i].radius, projected[i * 4 + 2]);
+        const gap = boxGap(projected[i * 4], projected[i * 4 + 1], r, b);
+        assert.ok(gap <= 6.01, `${where}: ${graph.nodes[i].label} gap ${gap.toFixed(2)} <= 6`);
+        assert.ok(b.left >= FIT_PADDING - 0.5 && b.right <= vp.width - FIT_PADDING + 0.5
+          && b.top >= FIT_PADDING - 0.5 && b.bottom <= vp.height - FIT_PADDING + 0.5,
+          `${where}: ${graph.nodes[i].label} inside ${FIT_PADDING}px padding`);
+        assert.ok([...graph.nodes[i].label].length <= 22, `${where}: ${graph.nodes[i].label} capped`);
+      }
     }
   }
 });
@@ -344,25 +377,59 @@ test('the static tier top view labels every task, capped, inside the canvas and 
       id: `t${i}`, text: `${titles[i % titles.length]} ${i}`, completed: i % 4 === 0, createdAt: i, categoryId: `c${i % 4}`,
     })), ['Work', 'Home', 'Errands', 'Uncategorized'].map((name, i) => ({ id: `c${i}`, name })), 100);
     const vp = { width: 390, height: 640 };
-    const positions = layout(graph, null, { aspect: vp.height / vp.width });
+    let positions = layout(graph, null, { aspect: vp.height / vp.width });
     let camera = fitCamera(frameCamera(positions, graph.nodes, vp, undefined, { flat: true }), positions, graph.nodes, vp,
       undefined, { flat: true });
-    const spread = spreadOnScreen(positions, graph.nodes, camera, vp, { flat: true });
-    camera = fitCamera(camera, spread, graph.nodes, vp, undefined, { flat: true });
-    const projected = projectFlat(spread, graph.nodes, camera, vp);
+    positions = spreadOnScreen(positions, graph.nodes, camera, vp, { flat: true });
+    positions = groupOnScreen(positions, graph.nodes, camera, vp, { flat: true, labelWidth: (node) => labelWidth(node.label), labelGap: LABELS.gap });
+    const flatFit = (cam, pos, reset = false) => {
+      let fitted = reset ? fitCamera(cam, pos, graph.nodes, vp, FIT_PADDING, { flat: true }) : cam;
+      for (let pass = 0; pass < 2; pass += 1) {
+        const pr = projectFlat(pos, graph.nodes, fitted, vp);
+        const pl = planLabels(pr, graph.nodes, depthOrder(pr), { width: vp.width, height: vp.height, padding: FIT_PADDING });
+        const labels = new Map(pl.map((e) => [graph.nodes[e.index].id, sideExtents(e.side, labelWidth(graph.nodes[e.index].label))]));
+        fitted = fitCamera(fitted, pos, graph.nodes, vp, FIT_PADDING, { flat: true, labels });
+      }
+      return fitted;
+    };
+    const planFn = (pr, ord) => planLabels(pr, graph.nodes, ord, { width: vp.width, height: vp.height, padding: FIT_PADDING });
+    camera = flatFit(camera, positions, true);
+    positions = nudgeLabels(positions, graph.nodes, camera, vp, planFn, { flat: true });
+    camera = flatFit(camera, positions, false);
+    positions = nudgeLabels(positions, graph.nodes, camera, vp, planFn, { flat: true });
+    const projected = projectFlat(positions, graph.nodes, camera, vp);
     const order = depthOrder(projected);
     const { ctx, named } = recorder();
-    drawFrame(ctx, { nodes: graph.nodes, projected, order, links: [], width: vp.width, height: vp.height, tier: 'static' });
+    drawFrame(ctx, { nodes: graph.nodes, projected, order, links: [], width: vp.width, height: vp.height, tier: 'static', padding: FIT_PADDING });
     const drawn = named('fillText').map(([, text]) => text);
     for (const node of graph.nodes) assert.ok(drawn.includes(node.label), `${n}: ${node.label} drawn`);
     for (const text of drawn) assert.ok([...text].length <= 22, `${text} capped`);
     const { plan, outside, covering, clashing } = checkPlan(projected, graph.nodes, order, vp.width, vp.height);
     assert.equal(plan.length, graph.nodes.length);
     assert.deepEqual(outside, [], `${n}: inside the canvas`);
-    // A default-sized phone graph is fully clear; a crowded one may fall back to the least-bad spot.
     if (n <= 14) {
       assert.deepEqual(covering, [], `${n}: no label covers a circle`);
       assert.deepEqual(clashing, [], `${n}: no labels overlap`);
     }
+  }
+});
+
+test('every label candidate and placed task label stays within 6px of its own node edge, never stacked away', () => {
+  for (const leftFirst of [false, true]) {
+    for (const b of labelCandidates(150, 200, 8, 'WRITE QUARTERLY REPORT', leftFirst)) {
+      assert.ok(boxGap(150, 200, 8, b) <= 6, `${b.side} stays within 6px of node edge`);
+    }
+  }
+  const { nodes, projected, order } = scene([
+    ['hub', 'hub', 100, 100, 1, 50, 8, 'WORK'],
+    ['task', 'open', 100, 200, 1, 10, 5, 'WRITE QUARTERLY REPORT'],
+    ['task', 'open', 100, 202, 1, 20, 5, 'PLAN TEAM OFFSITE'],
+    ['task', 'open', 100, 204, 1, 30, 5, 'WATER THE PLANTS'],
+  ]);
+  const plan = planLabels(projected, nodes, order, { width: 390, height: 700, padding: FIT_PADDING });
+  for (const entry of plan) {
+    const i = entry.index;
+    const r = drawnRadius(nodes[i].radius, projected[i * 4 + 2]);
+    assert.ok(boxGap(projected[i * 4], projected[i * 4 + 1], r, entry) <= 6, `${nodes[i].label} not detached/stacked`);
   }
 });

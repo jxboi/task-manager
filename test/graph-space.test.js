@@ -5,8 +5,9 @@ import { test } from 'node:test';
 import { toGraph } from '../src/graph-data.js';
 import {
   COLLISION_PAD, createCamera, depthOrder, DISTANCE, drawnRadius, EDGE_MARGIN, extent, FIT_PADDING, fitCamera, focalLength,
-  frameCamera, layout, LAYOUT_ITERATIONS, MAX_FIT_SCALE, spreadOnScreen, lookAt, MIN_SCREEN_RADIUS, orbit, pick, pickNearest, PITCH_LIMIT, project, relax, zoom,
+  frameCamera, groupOnScreen, layout, LAYOUT_ITERATIONS, MAX_FIT_SCALE, nudgeLabels, spreadOnScreen, lookAt, MIN_SCREEN_RADIUS, orbit, pick, pickNearest, PITCH_LIMIT, project, relax, zoom,
 } from '../src/graph-space.js';
+import { labelWidth, planLabels, sideExtents } from '../src/graph-draw.js';
 import { projectFlat } from '../src/graph-view.js';
 
 const NOW = Date.UTC(2026, 10, 25, 12);
@@ -611,4 +612,102 @@ test('layout of 200 tasks and 50 hubs stays fast', () => {
   const ms = performance.now() - start;
   assert.equal(positions.size, 250);
   assert.ok(ms < 100, `${ms} ms`); // budget is 5 ms on a phone; this only guards against blow-ups
+});
+
+test('groupOnScreen forms distinct non-interleaving category groups and spreads hubs evenly across phone and desktop', () => {
+  const cats = [{ id: 'w', name: 'Work' }, { id: 'h', name: 'Home' }, { id: 'e', name: 'Errands' }];
+  const tasks = [
+    ['Write quarterly report', 'w'], ['Review pull requests', 'w'], ['Plan team offsite', 'w'], ['Update roadmap', 'w'],
+    ['Water the plants', 'h'], ['Fix leaking tap', 'h'], ['Clean the gutters', 'h'],
+    ['Buy groceries', 'e'], ['Post the parcel', 'e'], ['Pick up dry cleaning', 'e'], ['Renew passport', 'e'],
+    ['Call grandma', null], ['Read a novel', null], ['Learn the ukulele', null],
+  ].map(([text, categoryId], i) => ({ id: `t${i}`, text, completed: i % 3 === 0, createdAt: NOW - i * DAY, categoryId }));
+  const graph = toGraph(tasks, cats, NOW);
+  for (const vp of [{ width: 390, height: 768 }, { width: 1280, height: 644 }]) {
+    let pos = layout(graph, null, { aspect: vp.height / vp.width });
+    let cam = frameCamera(pos, graph.nodes, vp);
+    pos = spreadOnScreen(pos, graph.nodes, cam, vp);
+    const grouped = groupOnScreen(pos, graph.nodes, cam, vp, { labelWidth: (n) => labelWidth(n.label), labelGap: 4 });
+    assert.equal(plain(grouped), plain(groupOnScreen(pos, graph.nodes, cam, vp, { labelWidth: (n) => labelWidth(n.label), labelGap: 4 })), 'deterministic');
+    cam = fitCamera(cam, grouped, graph.nodes, vp);
+    const proj = project(grouped, graph.nodes, cam, vp);
+    const hubs = graph.nodes.map((n, i) => (n.kind === 'hub' ? { id: n.id, i, x: proj[i * 4], y: proj[i * 4 + 1] } : null)).filter(Boolean);
+    // Every task sits closer on screen to its own hub than to any other category's hub (no interleaving).
+    for (let i = 0; i < graph.nodes.length; i += 1) {
+      const node = graph.nodes[i];
+      if (node.kind !== 'task') continue;
+      const own = hubs.find((h) => h.id === node.hubId);
+      const dOwn = Math.hypot(proj[i * 4] - own.x, proj[i * 4 + 1] - own.y);
+      for (const other of hubs) {
+        if (other.id === own.id) continue;
+        const dOther = Math.hypot(proj[i * 4] - other.x, proj[i * 4 + 1] - other.y);
+        assert.ok(dOwn < dOther, `${vp.width}x${vp.height}: ${node.label} closer to own hub (${dOwn.toFixed(1)}) than ${other.id} (${dOther.toFixed(1)})`);
+      }
+    }
+    // Hubs span most of the viewport's primary area instead of leaving empty bands.
+    const hx = hubs.map((h) => h.x);
+    const hy = hubs.map((h) => h.y);
+    assert.ok(Math.max(...hy) - Math.min(...hy) > vp.height * 0.5, `${vp.width}x${vp.height}: hubs fill height`);
+    if (vp.width > vp.height) {
+      assert.ok(Math.max(...hx) - Math.min(...hx) > vp.width * 0.45, `${vp.width}x${vp.height}: hubs fill width`);
+    }
+  }
+});
+
+test('fitCamera with labels keeps every label bounding box inside FIT_PADDING on phone and desktop', () => {
+  const cats = [{ id: 'w', name: 'Work' }, { id: 'h', name: 'Home' }, { id: 'e', name: 'Errands' }];
+  const tasks = [
+    ['Write quarterly report', 'w'], ['Review pull requests', 'w'], ['Plan team offsite', 'w'], ['Update roadmap', 'w'],
+    ['Water the plants', 'h'], ['Fix leaking tap', 'h'], ['Clean the gutters', 'h'],
+    ['Buy groceries', 'e'], ['Post the parcel', 'e'], ['Pick up dry cleaning', 'e'], ['Renew passport', 'e'],
+    ['Call grandma', null], ['Read a novel', null], ['Learn the ukulele', null],
+  ].map(([text, categoryId], i) => ({ id: `t${i}`, text, completed: i % 3 === 0, createdAt: NOW - i * DAY, categoryId }));
+  const graph = toGraph(tasks, cats, NOW);
+  for (const vp of [{ width: 390, height: 768 }, { width: 1280, height: 644 }]) {
+    let pos = layout(graph, null, { aspect: vp.height / vp.width });
+    let cam = frameCamera(pos, graph.nodes, vp);
+    pos = spreadOnScreen(pos, graph.nodes, cam, vp);
+    pos = groupOnScreen(pos, graph.nodes, cam, vp, { labelWidth: (n) => labelWidth(n.label), labelGap: 4 });
+    cam = fitCamera(cam, pos, graph.nodes, vp);
+    for (let pass = 0; pass < 2; pass += 1) {
+      const pr = project(pos, graph.nodes, cam, vp);
+      const pl = planLabels(pr, graph.nodes, depthOrder(pr), { width: vp.width, height: vp.height, padding: FIT_PADDING });
+      const labels = new Map(pl.map((e) => [graph.nodes[e.index].id, sideExtents(e.side, labelWidth(graph.nodes[e.index].label))]));
+      cam = fitCamera(cam, pos, graph.nodes, vp, FIT_PADDING, { labels });
+    }
+    const pr = project(pos, graph.nodes, cam, vp);
+    const plan = planLabels(pr, graph.nodes, depthOrder(pr), { width: vp.width, height: vp.height, padding: FIT_PADDING });
+    for (const entry of plan) {
+      assert.ok(entry.left >= FIT_PADDING - 0.5 && entry.right <= vp.width - FIT_PADDING + 0.5
+        && entry.top >= FIT_PADDING - 0.5 && entry.bottom <= vp.height - FIT_PADDING + 0.5,
+        `${vp.width}x${vp.height}: ${graph.nodes[entry.index].label} [${entry.left.toFixed(1)}, ${entry.right.toFixed(1)}, ${entry.top.toFixed(1)}, ${entry.bottom.toFixed(1)}] inside ${FIT_PADDING}px`);
+    }
+  }
+});
+
+test('nudgeLabels separates overlapping labels without detaching them from their nodes', () => {
+  const nodes = [
+    { id: 'hub:w', kind: 'hub', radius: 11, label: 'WORK', hubId: null },
+    { id: 'task:a', kind: 'task', radius: 5, label: 'WRITE QUARTERLY REPORT', hubId: 'hub:w' },
+    { id: 'task:b', kind: 'task', radius: 5, label: 'PLAN TEAM OFFSITE', hubId: 'hub:w' },
+  ];
+  const positions = new Map([
+    ['hub:w', { x: -60, y: 0, z: 0 }],
+    ['task:a', { x: 0, y: 0, z: 0 }],
+    ['task:b', { x: 0, y: 0, z: 0.5 }],
+  ]);
+  const camera = { yaw: 0, pitch: 0, distance: 400, target: { x: 0, y: 0, z: 0 } };
+  const vp = { width: 400, height: 400 };
+  const nudged = nudgeLabels(positions, nodes, camera, vp, (pr, ord) => planLabels(pr, nodes, ord, { width: vp.width, height: vp.height, padding: FIT_PADDING }));
+  const pr = project(nudged, nodes, camera, vp);
+  const plan = planLabels(pr, nodes, depthOrder(pr), { width: vp.width, height: vp.height, padding: FIT_PADDING });
+  assert.equal(plan.length, 3);
+  for (const e of plan) assert.deepEqual(e.covers, []);
+  for (let a = 0; a < plan.length; a += 1) {
+    for (let b = a + 1; b < plan.length; b += 1) {
+      const ba = plan[a];
+      const bb = plan[b];
+      assert.ok(!(ba.left < bb.right && bb.left < ba.right && ba.top < bb.bottom && bb.top < ba.bottom), 'no label overlap after nudge');
+    }
+  }
 });
