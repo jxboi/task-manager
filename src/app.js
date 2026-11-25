@@ -435,10 +435,6 @@ function renderTodo(todo, now) {
   label.textContent = 'Delete';
   remove.append(pill, label);
   item.append(remove);
-  if (reveal.openId === todo.id) {
-    item.classList.add('is-open');
-    item.style.transform = `translateX(${-REVEAL_PX}px)`;
-  }
   return item;
 }
 
@@ -506,6 +502,13 @@ function render(focusKeys) {
   // The dragged row is about to be replaced, and its handle (which holds the drag's listeners)
   // may never hear the release: put the row back and drop the drag's listeners now.
   endDrag(false);
+  // A rebuild that isn't the user's own gesture (reminder check, sync refresh) closes the open row,
+  // so Delete is never left exposed. Focus on its Delete button goes to the row's body.
+  const openBefore = reveal.close();
+  if (openBefore !== null) {
+    const deleteKey = JSON.stringify(['delete', openBefore]);
+    for (let i = 0; i < keys.length; i += 1) if (keys[i] === deleteKey) keys[i] = JSON.stringify(['open', openBefore]);
+  }
   if (loading) list.replaceChildren(...Array.from({ length: SKELETON_ROWS }, renderSkeleton));
   else list.replaceChildren(...visible.map((todo) => renderTodo(todo, now)));
   if (!visible.some((todo) => todo.id === reveal.openId)) reveal.close();
@@ -1811,11 +1814,25 @@ function settleRow(row, offset) {
   setTimeout(() => row.classList.remove('is-settling'), SETTLE_MS);
 }
 
+// While a row is open its card is clipped out of view: its controls leave the tab order (the Delete
+// button stays in it) and come back on close.
+function setCardTabbable(row, tabbable) {
+  for (const control of row.querySelectorAll('.todo-checkbox, .todo-open, .todo-handle')) {
+    if (tabbable) control.removeAttribute('tabindex');
+    else control.setAttribute('tabindex', '-1');
+  }
+}
+
 // Holds a row open on its Delete button; the row open before it closes.
 function openRow(row) {
   const other = reveal.open(row.dataset.id);
   if (other) shutRow(rowById(other));
   row.classList.add('is-open');
+  setCardTabbable(row, false);
+  // Focus left on a card control (hidden now, and Space would toggle it) moves to Delete.
+  if (row.contains(document.activeElement) && !document.activeElement.closest('.todo-delete')) {
+    row.querySelector('.todo-delete')?.focus({ preventScroll: true });
+  }
   settleRow(row, -REVEAL_PX);
   openScrollY = window.scrollY;
 }
@@ -1831,6 +1848,7 @@ function shutRow(row, focus = false) {
   if (!row) return;
   const held = row.querySelector('.todo-delete')?.contains(document.activeElement);
   row.classList.remove('is-open');
+  setCardTabbable(row, true);
   settleRow(row, 0);
   if (focus || held) row.querySelector('.todo-open')?.focus({ preventScroll: true });
 }
@@ -1839,6 +1857,7 @@ function shutRow(row, focus = false) {
 function slideOut(row, width, { keyboard = false } = {}) {
   reveal.close(row.dataset.id);
   row.classList.remove('is-open');
+  setCardTabbable(row, true);
   // The delete starts now, for the task and revision on screen; the slide is only the animation.
   const slide = !reducedMotion.matches;
   if (slide) {
@@ -1871,10 +1890,11 @@ list.addEventListener('pointerdown', (event) => {
   // A primary press means any earlier gesture is over, whether or not its release was seen.
   if (swipe) endSwipe({ pointerId: swipe.pointerId }, true);
   const row = event.target.closest('.todo');
-  if (!row?.dataset.id || drag || app.inert || event.target.closest('.todo-handle, .todo-delete')) return;
+  if (!row?.dataset.id || drag || app.inert || event.target.closest('.todo-handle')) return;
+  const onDelete = Boolean(event.target.closest('.todo-delete'));
   const { width } = row.getBoundingClientRect();
   const open = reveal.openId === row.dataset.id;
-  swipe = { row, pointerId: event.pointerId, gesture: createSwipe(width, event.clientX, event.clientY, event.timeStamp, { open }) };
+  swipe = { row, onDelete, pointerId: event.pointerId, gesture: createSwipe(width, event.clientX, event.clientY, event.timeStamp, { open }) };
 });
 
 // On the document, so a mouse that leaves the list (or a pointer the row captured) is still
@@ -1931,12 +1951,12 @@ window.addEventListener('blur', () => {
 // `swallow`: a click will follow this release (a real pointerup or cancel), and belongs to it.
 function endSwipe(event, cancelled, swallow = true) {
   if (!swipe || event.pointerId !== swipe.pointerId) return;
-  const { row, gesture } = swipe;
+  const { row, gesture, onDelete } = swipe;
   swipe = null;
   document.documentElement.classList.remove('is-swiping');
   if (gesture.phase !== 'horizontal') {
     // A tap on the open row's card closes it, and is not a tap on the card.
-    if (gesture.open && gesture.phase === 'tracking') {
+    if (gesture.open && gesture.phase === 'tracking' && !onDelete) {
       closeRow();
       if (swallow) swallowNextClick();
     }

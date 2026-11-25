@@ -41,7 +41,8 @@ export function createSwipe(width, startX, startY, startTime, { open = false } =
       if (distance >= width * FULL_FRACTION) return 'delete';
       const elapsed = Math.max(1, (time ?? last.time) - previous.time);
       const speed = (previous.x - last.x) / elapsed; // > 0: moving left
-      if (speed >= FLICK_SPEED && distance > FLICK_MIN_PX) return 'delete';
+      // The flick counts the gesture's own leftward travel, never the offset an open row already has.
+      if (speed >= FLICK_SPEED && -dx > FLICK_MIN_PX) return 'delete';
       if (speed <= -FLICK_SPEED) return 'back'; // flicked back right
       return distance >= REVEAL_PX / 2 ? 'open' : 'back';
     },

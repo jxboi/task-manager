@@ -203,3 +203,13 @@ test('pause stops the Undo clock; resume runs it for the time that was left', ()
   pending.flush();
   assert.deepEqual(committed, ['a', 'c']);
 });
+
+test('a small quick left slip on an open row stays open; the flick counts only its own travel', () => {
+  const slip = createSwipe(400, 300, 100, 0, { open: true });
+  slip.move(288, 100, 12); // 12px in 12ms: 1px/ms, but total offset 88px
+  assert.equal(slip.end(17), 'open');
+  const flick = createSwipe(400, 300, 100, 0, { open: true });
+  flick.move(285, 100, 10);
+  flick.move(210, 100, 50); // 90px of its own, fast
+  assert.equal(flick.end(50), 'delete');
+});

@@ -1197,15 +1197,18 @@ test('swipe left to delete, with Undo', async (t) => {
     assert.equal(isOpen('Golf'), true);
     assert.equal(golf.style.transform, OPEN);
     assert.equal(document.activeElement, deleteButton('Golf'));
-    // A re-render while open keeps it open, with focus on the rebuilt button.
+    // Intentional (fix round 5): a re-render that isn't the user's own gesture closes the open row,
+    // so Delete is never left exposed; focus on its button goes to the row's body.
     const before = deleteButton('Golf');
     signIn({ ...servers.a.session }); // same session re-read: reloads and re-renders the list
     await settle();
     assert.notEqual(deleteButton('Golf'), before, 'the row was rebuilt');
+    assert.equal(isOpen('Golf'), false);
+    assert.equal(row('Golf').style.transform ?? '', '');
+    assert.equal(document.activeElement, row('Golf').querySelector('.todo-open'));
+    // Open again; Escape closes it and focus goes back to the row.
+    press(row('Golf').querySelector('.todo-open'), 'ArrowLeft');
     assert.equal(isOpen('Golf'), true);
-    assert.equal(row('Golf').style.transform, OPEN);
-    assert.equal(document.activeElement, deleteButton('Golf'));
-    // Escape closes it and focus goes back to the row.
     keydown(document.activeElement, 'Escape');
     assert.equal(isOpen('Golf'), false);
     assert.equal(document.activeElement, row('Golf').querySelector('.todo-open'));
@@ -1293,6 +1296,66 @@ test('swipe left to delete, with Undo', async (t) => {
     await settle();
     assert.deepEqual(openRows(), []);
     assert.deepEqual(sent(), []);
+  });
+
+
+  await t.test('fix 5: a rebuild closes the open row; its card controls leave the tab order while open', async () => {
+    await freshReveal();
+    const golf = row('Golf');
+    const card = () => Array.from(row('Golf').querySelectorAll('.todo-checkbox, .todo-open, .todo-handle'));
+    assert.equal(card().every((control) => control.getAttribute('tabindex') === null), true);
+    reveal('Golf');
+    await released();
+    assert.equal(card().length >= 2, true);
+    assert.equal(card().every((control) => control.getAttribute('tabindex') === '-1'), true);
+    assert.equal(deleteButton('Golf').getAttribute('tabindex'), null, 'Delete stays reachable');
+    // Close: back in the tab order.
+    keydown(golf.querySelector('.todo-delete'), 'Escape');
+    assert.equal(card().every((control) => control.getAttribute('tabindex') === null), true);
+    // A routine rebuild (a sync refresh) closes an open row.
+    reveal('Golf');
+    await released();
+    signIn({ ...servers.a.session });
+    await settle();
+    assert.deepEqual(openRows(), []);
+    assert.equal(row('Golf').style.transform ?? '', '');
+    assert.equal(Array.from(row('Golf').querySelectorAll('.todo-checkbox, .todo-open, .todo-handle')).every((c) => c.getAttribute('tabindex') === null), true);
+  });
+
+  await t.test('fix 5: a right drag from the Delete pill closes the row and its click does not delete', async () => {
+    await freshReveal();
+    reveal('Golf');
+    await released();
+    const button = deleteButton('Golf');
+    drag(button, [[12, 0, 16], [40, 0, 300]]);
+    assert.equal(isOpen('Golf'), false);
+    assert.equal(row('Golf').style.transform ?? '', '');
+    button.click(); // the click a browser may still deliver after the drag
+    await released();
+    await settle();
+    assert.equal(toast.hidden, true);
+    assert.deepEqual(sent(), []);
+    // A plain tap on the pill still deletes.
+    reveal('Golf');
+    await released();
+    tap(deleteButton('Golf'));
+    assert.equal(toast.hidden, false);
+    await slid();
+    undo.click();
+    await settle();
+  });
+
+  await t.test('fix 5: a small quick left slip on an open row keeps it open', async () => {
+    await freshReveal();
+    await released(); // renders held by the previous subtest's Undo run first
+    reveal('Golf');
+    await released();
+    drag(row('Golf').querySelector('.todo-open'), [[-14, 0, 0]]); // 14px, fast: a flick by speed
+    await released();
+    assert.equal(isOpen('Golf'), true);
+    assert.equal(toast.hidden, true);
+    assert.deepEqual(sent(), []);
+    keydown(deleteButton('Golf'), 'Escape');
   });
 
   await t.test('reduced motion: the reveal and the Delete button act at once, with no slide', async () => {
