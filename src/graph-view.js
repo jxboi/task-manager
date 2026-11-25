@@ -136,14 +136,19 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
 
   // Fits the camera to the current viewport: the first time from the best starting angle, after
   // that (a resize, a moved node off screen, the static tier) keeping the user's angle.
-  const refit = () => {
+  const refit = (spreadFlat = false) => {
     if (!camera || !positions || !(size.width > 0) || !(size.height > 0)) return;
     const viewport = { width: size.width, height: size.height };
     const flat = tier === 'static';
     spin = null;
     ease = null;
-    if (framed) camera = fitCamera(camera, positions, nodes, viewport, undefined, { flat });
-    else {
+    if (framed && !spreadFlat) camera = fitCamera(camera, positions, nodes, viewport, undefined, { flat });
+    else if (framed) {
+      // Into the static tier: its top view stacks circles the perspective view had apart.
+      camera = fitCamera(camera, positions, nodes, viewport, undefined, { flat });
+      positions = spreadOnScreen(positions, nodes, camera, viewport, { flat });
+      camera = fitCamera(camera, positions, nodes, viewport, undefined, { flat });
+    } else {
       // The first view: the best angle, overlapping circles pushed apart on screen, then refit.
       camera = frameCamera(positions, nodes, viewport, undefined, { flat });
       positions = spreadOnScreen(positions, nodes, camera, viewport, { flat });
@@ -179,7 +184,7 @@ export function mountGraph(root, { onOpenTask, reducedMotion = null, clock = () 
     spin = null;
     measure();
     // The static tier's top view has other bounds than the perspective one.
-    if (flatChanged) refit();
+    if (flatChanged) refit(tier === 'static');
   }
 
   function render() {

@@ -16,6 +16,7 @@ export function drawnRadius(radius, scale) {
 // Layout collision radius = node radius + COLLISION_PAD, so two circles keep 2 × pad between them.
 export const COLLISION_PAD = 6;
 export const FIT_PADDING = 24; // CSS px between the fitted circles and the canvas edges
+export const MAX_FIT_SCALE = 2.5; // CSS px per world unit: the closest a fit will come
 export const EDGE_MARGIN = 8; // CSS px: a fitted node's centre stays at least radius + this inside
 
 const ASPECT_RANGE = [0.5, 2.2]; // the viewport aspects layout() stretches for
@@ -229,7 +230,9 @@ function cameraSpace(camera, positions, nodes, flat) {
 // spare around its drawn edge (drawn radius clamps to MIN_SCREEN_RADIUS), the target in the
 // middle. Perspective: screen offset = s * focal / (distance + sz), solved for distance.
 function fitDistance(points, focal, halfW, halfH, padding) {
-  let distance = DISTANCE.min;
+  // Never closer than MAX_FIT_SCALE px per world unit at the target: a small graph (or the static
+  // tier's top view of a tall layout) shouldn't balloon into huge circles.
+  let distance = Math.max(DISTANCE.min, focal / MAX_FIT_SCALE);
   for (const { sx, sy, sz, r } of points) {
     for (const [extentPx, half] of [[Math.abs(sx), halfW], [Math.abs(sy), halfH]]) {
       const room = half - padding;

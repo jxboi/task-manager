@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { toGraph } from '../src/graph-data.js';
 import {
   COLLISION_PAD, createCamera, depthOrder, DISTANCE, drawnRadius, EDGE_MARGIN, extent, FIT_PADDING, fitCamera, focalLength,
-  frameCamera, layout, LAYOUT_ITERATIONS, spreadOnScreen, lookAt, MIN_SCREEN_RADIUS, orbit, pick, pickNearest, PITCH_LIMIT, project, relax, zoom,
+  frameCamera, layout, LAYOUT_ITERATIONS, MAX_FIT_SCALE, spreadOnScreen, lookAt, MIN_SCREEN_RADIUS, orbit, pick, pickNearest, PITCH_LIMIT, project, relax, zoom,
 } from '../src/graph-space.js';
 import { projectFlat } from '../src/graph-view.js';
 
@@ -230,7 +230,8 @@ test('fit padding: on load the circles fill the viewport to about FIT_PADDING px
       const gapX = [bounds.left, vp.width - bounds.right];
       const gapY = [bounds.top, vp.height - bounds.bottom];
       const fills = (gaps) => gaps.every((g) => g < FIT_PADDING + 3);
-      assert.ok(fills(gapX) || fills(gapY), `${where}: fills an axis (x gaps ${gapX}, y gaps ${gapY})`);
+      const capped = Math.abs(camera.distance - focalLength(vp) / MAX_FIT_SCALE) < 1e-6;
+      assert.ok(fills(gapX) || fills(gapY) || capped, `${where}: fills an axis (x gaps ${gapX}, y gaps ${gapY})`);
       // Centred: the two gaps of each axis match.
       assert.ok(Math.abs(gapX[0] - gapX[1]) < 3 && Math.abs(gapY[0] - gapY[1]) < 3, `${where}: centred (${gapX} / ${gapY})`);
     }
@@ -343,6 +344,35 @@ test('spreadOnScreen pushes two stacked tasks apart by their radii + 2 × COLLIS
   assert.deepEqual(spread.get('h'), positions.get('h'));
   assert.ok([...spread.values()].every(finite));
   assert.deepEqual(positions.get('a'), { x: 50, y: 0, z: 0 }, 'the input is untouched');
+});
+
+test('a fit never comes closer than MAX_FIT_SCALE px per world unit, so a tiny graph does not balloon', () => {
+  const graph = toGraph(todos(2), [categories[0]], NOW);
+  const positions = layout(graph);
+  for (const flat of [false, true]) {
+    const vp = { width: 1280, height: 632 };
+    const camera = fitCamera(createCamera(), positions, graph.nodes, vp, FIT_PADDING, { flat });
+    assert.ok(focalLength(vp) / camera.distance <= MAX_FIT_SCALE + 1e-9, `flat ${flat}`);
+  }
+});
+
+test('spreadOnScreen in the flat (static) view leaves no overlapping circles either', () => {
+  const vp = { width: 390, height: 768 };
+  const graph = toGraph(todos(14), categories, NOW);
+  const positions = layout(graph, null, { aspect: vp.height / vp.width }); // tall: the top view stacks it
+  const first = fitCamera(createCamera(), positions, graph.nodes, vp, FIT_PADDING, { flat: true });
+  const spread = spreadOnScreen(positions, graph.nodes, first, vp, { flat: true });
+  const camera = fitCamera(first, spread, graph.nodes, vp, FIT_PADDING, { flat: true });
+  const projected = projectFlat(spread, graph.nodes, camera, vp);
+  for (let i = 0; i < graph.nodes.length; i += 1) {
+    for (let j = i + 1; j < graph.nodes.length; j += 1) {
+      const d = Math.hypot(projected[i * 4] - projected[j * 4], projected[i * 4 + 1] - projected[j * 4 + 1]);
+      const want = drawnRadius(graph.nodes[i].radius, projected[i * 4 + 2]) + drawnRadius(graph.nodes[j].radius, projected[j * 4 + 2]);
+      if (graph.nodes[i].kind === 'hub' && graph.nodes[j].kind === 'hub') continue;
+      assert.ok(d >= want, `${graph.nodes[i].id}/${graph.nodes[j].id}: ${d} < ${want}`);
+    }
+  }
+  assert.ok(screenFit(spread, graph.nodes, camera, vp, projectFlat).minRoom >= FIT_PADDING - 0.5);
 });
 
 test('fitCamera: small task nodes stay tappable at the default zoom', () => {
