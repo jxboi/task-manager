@@ -13,7 +13,7 @@ const changedElsewhere = 'This task changed in another tab or device. The list i
 const couldNotSave = "Couldn't save your change.";
 
 test('edit form', async (t) => {
-  const { byId, list } = installDom(t, { fetch: (...args) => server.fetch(...args) });
+  const { byId, list, matchMedia } = installDom(t, { fetch: (...args) => server.fetch(...args) });
   const ids = {
     rent: '00000000-0000-4000-8000-0000000000a1',
     plants: '00000000-0000-4000-8000-0000000000a2',
@@ -111,6 +111,28 @@ test('edit form', async (t) => {
     assert.equal(editButton('plants').getAttribute('aria-expanded'), 'true');
     assert.equal(save.getAttribute('aria-disabled'), 'false');
     assert.equal(shownMessage(), null);
+    byId('reminder-cancel').click();
+  });
+
+  await t.test('on touch, opening the prefilled sheet focuses the dialog until the title is tapped', (t) => {
+    const touch = matchMedia('(hover: none)');
+    touch.matches = true;
+    text.setSelectionRange = t.mock.fn();
+    t.after(() => {
+      touch.matches = false;
+      delete text.setSelectionRange;
+    });
+
+    open('rent');
+    assert.equal(layer.hidden, false);
+    assert.equal(editor.getAttribute('aria-label'), 'Edit “Pay rent”');
+    assert.equal(text.value, 'Pay rent');
+    assert.equal(category.value, HOME);
+    assert.equal(document.activeElement, editor);
+    assert.equal(text.setSelectionRange.mock.callCount(), 0);
+
+    text.click();
+    assert.equal(document.activeElement, text);
     byId('reminder-cancel').click();
   });
 

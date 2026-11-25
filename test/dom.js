@@ -109,7 +109,8 @@ export function installDom(t, { fetch }) {
   const queries = new Map();
   const matchMedia = (query) => {
     if (!queries.has(query)) {
-      queries.set(query, Object.assign(new EventTarget(), { matches: !query.includes('reduced-motion') }));
+      const matches = query !== '(hover: none)' && !query.includes('reduced-motion');
+      queries.set(query, Object.assign(new EventTarget(), { matches }));
     }
     return queries.get(query);
   };

@@ -108,6 +108,7 @@ withKey(viewGraph, 'view-graph');
 
 const MAX_DELAY = 2 ** 31 - 1; // setTimeout's limit (about 24.8 days); check() re-arms when it fires
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+const touch = window.matchMedia('(hover: none)');
 const PULSE_MS = 2 * 1200; // the fired row's 2 pulses (styles.css reminder-pulse)
 // A claim the server refused while this tab still sees the occurrence as due (its clock is ahead,
 // say) waits this long before it is tried again. So does a claim that failed to reach the server.
@@ -826,13 +827,16 @@ function openEditor(id) {
   repeatSelect.value = todo.repeat;
   setCalendarOpen(false);
   layer.hidden = false;
-  // Before the focus below: the sheet follows the visual viewport, and the focus (which brings up
-  // the iOS keyboard, inside the tap's gesture) is revealed once the keyboard is up.
+  // Track the visual viewport before a field gets focus so it can be revealed when the keyboard opens.
   sheetViewport.start();
   render(); // the opener shows aria-expanded; the page behind goes inert
   syncEditor();
-  textInput.focus({ preventScroll: true });
-  textInput.setSelectionRange?.(textInput.value.length, textInput.value.length);
+  if (touch.matches) {
+    editor.focus({ preventScroll: true });
+  } else {
+    textInput.focus({ preventScroll: true });
+    textInput.setSelectionRange?.(textInput.value.length, textInput.value.length);
+  }
 }
 
 // Hides the sheet without rendering; callers render (or renderSoon) with their focus.

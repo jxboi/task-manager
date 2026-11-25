@@ -134,6 +134,16 @@ test('start mirrors the visual viewport into --vv-top / --vvh and follows resize
   assert.deepEqual(Object.fromEntries(layer.style.props), { '--vv-top': '0px', '--vvh': '844px' });
 });
 
+test('starting with no focused field leaves no pending reveal when the dialog gains focus', () => {
+  const { sync, vv, layer, doc, body, timers } = setup();
+  sync.start();
+  focusIn(layer, doc, { tagName: 'DIV' });
+  vv.set({ height: 451 });
+  assert.equal(layer.style.props.get('--vvh'), '451px');
+  assert.equal(timers.pending(), 0);
+  assert.equal(body.scrollTop, 0);
+});
+
 test('stop removes every listener and the variables; a second start/stop is harmless', () => {
   const { sync, vv, layer, doc, elements, body } = setup();
   sync.start();
@@ -192,7 +202,7 @@ test('a field that is already visible does not move', () => {
 });
 
 test('focus before the keyboard: revealed again on the next viewport resize', () => {
-  // The autofocus path: openEditor focuses the Task input, then the keyboard animates in.
+  // The Task input gains focus before the keyboard animates in.
   const { sync, vv, layer, doc, elements, body } = setup({
     sheet: { bodyTop: 200, bodyHeight: 644, fields: { text: 450 } },
   });
