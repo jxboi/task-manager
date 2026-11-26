@@ -140,10 +140,16 @@
         </div>
 
         <div class="category-row" id="category-row" hidden>
-          <label class="category-key" for="category-filter">Category</label>
-          <select class="category-select" id="category-filter"></select>
-          <button class="text-button category-manage" id="category-manage" type="button" aria-expanded="false"
-            aria-controls="category-panel">Manage</button>
+          <select class="category-select" id="category-filter" aria-label="Category"></select>
+          <button class="icon-button category-manage" id="category-manage" type="button" aria-label="Manage categories"
+            aria-expanded="false" aria-controls="category-panel">
+            <span class="icon-disc">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor"
+                stroke-width="1.75" stroke-linecap="round" aria-hidden="true" focusable="false">
+                <path d="M3 5h14M8 3v4M3 10h14m-5-2v4M3 15h14M6 13v4"/>
+              </svg>
+            </span>
+          </button>
         </div>
 
         <section class="category-panel" id="category-panel" aria-labelledby="category-panel-title" hidden>

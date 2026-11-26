@@ -1892,7 +1892,7 @@ body {
 
 .app-header {
   min-height: 56px;
-  padding-top: 12px;
+  padding-top: 0;
 }
 
 /* New task: a black pill fixed to the bottom right. Open, it shows a × and drops its label. */
@@ -2094,6 +2094,14 @@ body {
 .todo-slot {
   right: 0;
   left: 0;
+  border: 0;
+  background: none;
+}
+
+.todo-slot::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 8px 0;
   border: 2px dashed var(--ink);
   border-radius: 22px;
   background: rgb(17 17 17 / 0.04);
@@ -2398,11 +2406,10 @@ body {
 
 /* --- Categories ------------------------------------------------------------------------------ */
 
-/* The filter row: a native select labelled Category, then Manage. 44px targets. */
 .category-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   margin-top: 16px;
 }
 
@@ -2410,18 +2417,7 @@ body {
   margin-top: 28px;
 }
 
-.category-key {
-  flex: none;
-  color: var(--text);
-  font-size: 13px;
-  line-height: 20px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
 .category-select {
-  flex: 1;
   min-width: 0;
   min-height: 44px;
   padding: 0 36px 0 16px;
@@ -2444,14 +2440,21 @@ body {
 }
 
 .category-manage {
-  flex: none;
-  padding: 0 16px;
-  border: 1.5px solid var(--ink);
-  border-radius: 22px;
-  font-weight: 600;
+  margin-left: auto;
+  color: var(--ink);
 }
 
-.category-manage[aria-expanded="true"] {
+.category-manage:focus-visible {
+  outline-offset: 2px;
+}
+
+.category-manage .icon-disc {
+  width: 40px;
+  height: 40px;
+  border: 1.5px solid var(--ink);
+}
+
+.category-manage[aria-expanded="true"] .icon-disc {
   background: var(--ink);
   color: #fff;
 }
