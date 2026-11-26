@@ -12,9 +12,10 @@ const markup = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 const TASK = '00000000-0000-4000-8000-0000000000d1';
 
 test('the filter row and the panel are plain page controls with the agreed wording', () => {
-  assert.match(markup, /<label class="category-key" for="category-filter">Category<\/label>/);
+  assert.equal(markupAttributes('category-filter')['aria-label'], 'Category');
   assert.match(markup, /<label class="reminder-label" for="edit-category">Category<\/label>/);
   assert.equal(markupAttributes('category-filter').class, 'category-select');
+  assert.equal(markupAttributes('category-manage')['aria-label'], 'Manage categories');
   assert.equal(markupAttributes('category-manage')['aria-controls'], 'category-panel');
   // An in-page section, not a second dialog over the page or the task sheet.
   assert.equal(markupAttributes('category-panel').role, undefined);
